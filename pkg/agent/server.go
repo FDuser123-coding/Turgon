@@ -1,7 +1,9 @@
 // Package agent serves Turgon's MCP tools to AI agents (architecture §7.7).
 // Tools are generated from the compiled runtime spec and named in business
 // terms (get_customer, not BAPI_CUSTOMER_GETDETAIL), so agents stay
-// portable across back ends. This first version serves read-only tools.
+// portable across back ends. Read tools answer directly; write tools start
+// a governed write (architecture §8) that waits, durably, for a person's
+// approval when policy requires one.
 //
 // Every call is authorized per action for the agent and the person it acts
 // for, passes the target's rate governor and circuit breaker, and is
@@ -26,6 +28,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/audit"
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
+	"github.com/fduser123-coding/turgon/pkg/engine"
 	"github.com/fduser123-coding/turgon/pkg/policy"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
 )
@@ -42,14 +45,28 @@ type Options struct {
 	Auth     Authenticator
 	// Policy decides each call; defaults to the built-in default, which
 	// lets integration-reader and integration-operator roles read.
-	Policy  policy.Decider
-	Version string
+	Policy policy.Decider
+	// Writes runs write tools. Without it only read tools are served.
+	Writes WriteSubmitter
+	// ApprovalTimeout rejects a write nobody approved after this long;
+	// zero uses the engine's default.
+	ApprovalTimeout time.Duration
+	Version         string
+}
+
+// WriteSubmitter starts agent writes, or reports on one already started
+// under the same id. engine.AgentWrites implements it on Temporal.
+type WriteSubmitter interface {
+	Submit(ctx context.Context, id string, in engine.AgentWriteInput) (engine.AgentWriteStatus, error)
 }
 
 // Server is an MCP endpoint over a runtime spec's read tools.
 type Server struct {
 	auth      Authenticator
 	guard     *writeguard.Guard
+	writes    WriteSubmitter
+	digest    string
+	timeout   time.Duration
 	tools     []compiler.Tool
 	instances []connector.Instance
 	handler   http.Handler
@@ -63,15 +80,17 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Server
 	if opts.Policy == nil {
 		opts.Policy = policy.WritebackDefault{}
 	}
-	s := &Server{auth: opts.Auth}
+	s := &Server{auth: opts.Auth, writes: opts.Writes, digest: spec.Metadata.Digest, timeout: opts.ApprovalTimeout}
+	needed := map[string]bool{}
 	for _, t := range spec.Spec.Tools {
-		if t.Risk == v1alpha1.RiskRead {
+		switch {
+		case t.Risk == v1alpha1.RiskRead:
+			s.tools = append(s.tools, t)
+			needed[t.Endpoint] = true
+		case opts.Writes != nil:
+			// Writes run on the workers; this server only starts them.
 			s.tools = append(s.tools, t)
 		}
-	}
-	needed := map[string]bool{}
-	for _, t := range s.tools {
-		needed[t.Endpoint] = true
 	}
 	targets := map[string]writeguard.TargetConfig{}
 	for _, c := range spec.Spec.Connectors {
@@ -103,12 +122,18 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Server
 		version = "dev"
 	}
 	m := mcp.NewServer(&mcp.Implementation{Name: "turgon", Title: "Turgon", Version: version}, &mcp.ServerOptions{
-		Instructions: "Tools read business records from the customer's systems through Turgon. " +
-			"Every call is authorized for you and the person you act for, and audited.",
+		Instructions: "Tools read and write business records in the customer's systems through Turgon. " +
+			"Every call is authorized for you and the person you act for, and audited. " +
+			"Writes are checked and previewed first, and may wait for a person to approve them: " +
+			"give each write a new requestId, and call the tool again with the same arguments to see how it stands.",
 	})
 	sort.Slice(s.tools, func(i, j int) bool { return s.tools[i].Name < s.tools[j].Name })
 	for _, t := range s.tools {
-		m.AddTool(toolDef(t), s.call(t))
+		if t.Risk == v1alpha1.RiskRead {
+			m.AddTool(toolDef(t), s.call(t))
+		} else {
+			m.AddTool(writeToolDef(t), s.write(t))
+		}
 	}
 	s.handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return m },
 		&mcp.StreamableHTTPOptions{Stateless: true})
@@ -147,8 +172,8 @@ func humanTitle(t compiler.Tool) string {
 // call returns the handler for one tool.
 func (s *Server) call(t compiler.Tool) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-		var id Identity
-		if req.Extra == nil || json.Unmarshal([]byte(req.Extra.Header.Get(identityHeader)), &id) != nil || id.Agent == "" {
+		id, ok := identity(req)
+		if !ok {
 			return failure("not authenticated"), nil
 		}
 		var args struct {
@@ -182,6 +207,15 @@ func (s *Server) call(t compiler.Tool) mcp.ToolHandler {
 			StructuredContent: record,
 		}, nil
 	}
+}
+
+// identity returns the caller ServeHTTP authenticated.
+func identity(req *mcp.CallToolRequest) (Identity, bool) {
+	var id Identity
+	if req.Extra == nil || json.Unmarshal([]byte(req.Extra.Header.Get(identityHeader)), &id) != nil || id.Agent == "" {
+		return Identity{}, false
+	}
+	return id, true
 }
 
 func orEntity(e string) string {

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/fduser123-coding/turgon/apis/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/catalog"
@@ -153,6 +154,11 @@ type Tool struct {
 	Endpoint    string `json:"endpoint"`
 	Operation   string `json:"operation"`
 	Entity      string `json:"entity,omitempty"`
+	// Fields are the business fields a write tool's record carries, known
+	// from the mapping that feeds the write; empty when not known.
+	Fields []string `json:"fields,omitempty"`
+	// Simulate asks the target for a preview before a write is approved.
+	Simulate bool `json:"simulate,omitempty"`
 }
 
 // PolicyRef is a policy pack compiled into the spec, with its Rego source,
@@ -288,18 +294,28 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 		},
 		SLO: r.Spec.SLO,
 	}
+	// doc tracks the fields of the document as the steps build it, so a
+	// write tool can tell agents which fields its record takes. It is nil
+	// until a mapping fixes the document's shape.
+	var doc map[string]bool
 	for i, s := range r.Spec.Steps {
 		step := WorkflowStep{Name: fmt.Sprintf("%02d-%s", i+1, s.Kind())}
 		switch {
 		case s.Map != nil:
 			m := rep.Resolution.Mappings[s.Map.Mapping]
 			fields := map[string]string{}
+			doc = map[string]bool{}
 			for _, f := range m.Spec.Fields {
 				fields[f.Target] = f.Expression
+				doc[f.Target] = true
 			}
 			step.Map = &MapConfig{Mapping: ref(m.Metadata), From: s.Map.From, To: s.Map.To, Fields: fields}
 		case s.Resolve != nil:
 			step.Resolve = &ResolveConfig{Entity: s.Resolve.Entity, Strategy: s.Resolve.Strategy, AutoMatchAbove: s.Resolve.AutoMatchAbove}
+			if doc != nil {
+				// The resolve activity adds <entity>Id.
+				doc[lowerFirst(strings.TrimPrefix(s.Resolve.Entity, "model."))+"Id"] = true
+			}
 		case s.Write != nil:
 			w := s.Write
 			m := conns[w.Target]
@@ -326,7 +342,10 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 			}
 			step.Write = wc
 			b.connector(w.Target, m, op.Interface)
-			b.tool(b.endpoint(w.Target), op.Name, op.Entity, op.Risk, fmt.Sprintf("%s via %s", humanize(op.Name), w.Target))
+			b.writeTool(b.endpoint(w.Target), op, fmt.Sprintf("%s via %s", humanize(op.Name), w.Target), doc, w.Simulate)
+			if doc != nil && w.Output != "" {
+				doc[w.Output] = true
+			}
 		}
 		wf.Steps = append(wf.Steps, step)
 	}
@@ -412,6 +431,39 @@ func deployment(p *v1alpha1.Plugin, slot string) PluginDeployment {
 // tool registers an agent tool. Names are assigned in finish.
 func (b *builder) tool(endpoint, op, entity, risk, desc string) {
 	b.tools[endpoint+"/"+op] = Tool{Description: desc, Risk: risk, Endpoint: endpoint, Operation: op, Entity: entity}
+}
+
+// writeTool registers a write tool with the record fields a recipe passes
+// it. When several recipes write through the same operation, the tool
+// takes the union of their fields.
+func (b *builder) writeTool(endpoint string, op v1alpha1.Operation, desc string, doc map[string]bool, simulate bool) {
+	key := endpoint + "/" + op.Name
+	prev, seen := b.tools[key]
+	b.tool(endpoint, op.Name, op.Entity, op.Risk, desc)
+	t := b.tools[key]
+	fields := map[string]bool{}
+	for f := range doc {
+		fields[f] = true
+	}
+	if seen {
+		for _, f := range prev.Fields {
+			fields[f] = true
+		}
+		simulate = simulate || prev.Simulate
+	}
+	for f := range fields {
+		t.Fields = append(t.Fields, f)
+	}
+	sort.Strings(t.Fields)
+	t.Simulate = simulate
+	b.tools[key] = t
+}
+
+func lowerFirst(s string) string {
+	for i, r := range s {
+		return string(unicode.ToLower(r)) + s[i+len(string(r)):]
+	}
+	return s
 }
 
 func (b *builder) finish(name, source, level string) *RuntimeSpec {

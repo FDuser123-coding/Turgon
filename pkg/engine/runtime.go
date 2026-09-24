@@ -7,6 +7,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/fduser123-coding/turgon/apis/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/audit"
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
@@ -34,8 +35,9 @@ type Runtime struct {
 	instances  map[string]connector.Instance
 }
 
-// New connects every endpoint the spec's workflows use. Endpoints no
-// workflow uses (for example slots reached only by agents) are skipped.
+// New connects every endpoint the spec's workflows use, and the endpoints
+// of agent write tools this worker has a connector for. Other endpoints
+// (for example slots reached only by read tools) are skipped.
 func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Runtime, error) {
 	if opts.Policy == nil {
 		opts.Policy = policy.WritebackDefault{}
@@ -49,13 +51,22 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Runtim
 			}
 		}
 	}
+	agentOnly := map[string]bool{}
+	for _, t := range spec.Spec.Tools {
+		if t.Risk != v1alpha1.RiskRead && !used[t.Endpoint] {
+			agentOnly[t.Endpoint] = true
+		}
+	}
 	rt := &Runtime{Spec: spec, Sources: map[string]connector.Source{}, instances: map[string]connector.Instance{}}
 	targets := map[string]writeguard.TargetConfig{}
 	for _, c := range spec.Spec.Connectors {
-		if !used[c.Endpoint] {
+		if !used[c.Endpoint] && !agentOnly[c.Endpoint] {
 			continue
 		}
 		factory, ok := opts.Registry[c.Name]
+		if !ok && agentOnly[c.Endpoint] {
+			continue
+		}
 		if !ok {
 			rt.Close()
 			return nil, fmt.Errorf("endpoint %s: no runtime for connector %s (runtime %s) in this worker", c.Endpoint, c.Name, c.Runtime)

@@ -50,6 +50,12 @@ func (l *lockedBuffer) String() string {
 // test HTTP server, backed by Postgres and the fake Salesforce org.
 func setup(t *testing.T, trusted string) (string, *lockedBuffer) {
 	t.Helper()
+	return setupWith(t, trusted, nil)
+}
+
+// setupWith also serves write tools through writes, when it is not nil.
+func setupWith(t *testing.T, trusted string, writes WriteSubmitter) (string, *lockedBuffer) {
+	t.Helper()
 	pool, schema := pgtest.Pool(t)
 	ctx := context.Background()
 	sql, err := os.ReadFile("../../examples/sql/demo.sql")
@@ -92,8 +98,9 @@ func setup(t *testing.T, trusted string) (string, *lockedBuffer) {
 			"openbao://erp-db/dsn":          pgtest.URL(t, schema),
 			"openbao://salesforce/prod-jwt": sf.Credentials(),
 		},
-		Audit: audit.New(&log),
-		Auth:  GatewayAuth{Trusted: []netip.Prefix{netip.MustParsePrefix(trusted)}},
+		Audit:  audit.New(&log),
+		Auth:   GatewayAuth{Trusted: []netip.Prefix{netip.MustParsePrefix(trusted)}},
+		Writes: writes,
 	})
 	if err != nil {
 		t.Fatal(err)

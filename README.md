@@ -113,6 +113,24 @@ breaker, and is audited as "agent for user", without the data returned. Agents n
 credentials. Behind the gateway, identity comes from `X-Agent-Id`, `X-On-Behalf-Of` and
 `X-Agent-Roles`, trusted only from `--trusted-gateway` addresses.
 
+With `--writes`, the recipe's write operations are served too (`create_sales_order`), taking a
+record whose fields come from the mapping that feeds the write. A call starts a governed write
+on Temporal (architecture §8, figure 4), run by the `porter run` workers of the same spec:
+policy, validation and the target's dry-run first; then, for high-risk tools or large amounts, a
+person approves the previewed write in the console; then the commit, audited as the agent for
+its user. Agents need the `integration-operator` role to ask for a write at all.
+
+```sh
+bin/porter run -s runtime-spec.json                                   # workers commit the writes
+bin/porter mcp -s runtime-spec.json --writes --dev-agent claude --dev-user you@example.com --dev-roles integration-operator
+```
+
+Each write carries the agent's own `requestId`. A call waits up to `--wait` (15s) and answers
+`committed`, `pending_approval` (with the preview), or why nothing was written; calling again
+with the same arguments reports how the write stands and never writes twice, and reusing a
+`requestId` for a different record is refused. Unanswered approvals are rejected after
+`--approval-timeout` (72h).
+
 ### Install on Kubernetes
 
 The chart in `deploy/helm/porter` installs one worker per compiled spec and the console into
@@ -191,12 +209,12 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 | `pkg/policy` | §9, App. C | Policy decision interface and the built-in write-back default; `opa/` evaluates and tests Rego packs with Open Policy Agent |
 | `pkg/audit` | §9 | Append-only, hash-chained audit log with tamper detection |
 | `pkg/mapping` | §7.4 | JSONata evaluation of mapping sets |
-| `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher |
+| `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow, and one for agent writes; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher |
 | `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox events, rollback dry-runs, idempotent writes) |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Porter's state in Postgres: idempotency records with leases, source cursors, identity cross-references |
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
-| `pkg/agent` | §7.7 | MCP server: read-only business tools for agents, gateway identity, per-call policy and audit |
+| `pkg/agent` | §7.7, §8 | MCP server: business read tools, and write tools that start approval-gated writes; gateway identity, per-call policy and audit |
 | `pkg/console` | §12 | Console API (runs, approvals, audit, catalog), proxy/dev authentication, embedded web app |
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
 | `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
@@ -243,6 +261,6 @@ In rough roadmap order (§16, §19): Salesforce Pub/Sub API change capture and B
 the Porter operator; an appliance build (§11);
 Debezium change capture in place of outbox polling; probabilistic identity
 resolution (Splink) and the data-steward queue; signed OPA bundles; the metadata
-graph and discovery; approval-gated write tools for agents, and packaging the MCP server with agentgateway; direct OIDC sign-in for the
+graph and discovery; packaging the MCP server with agentgateway, and the A2A endpoint; direct OIDC sign-in for the
 console and approving mapping fields from its review queue; the Wasm plugin host. The native Postgres and Salesforce connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

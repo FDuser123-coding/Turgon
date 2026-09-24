@@ -78,6 +78,12 @@ function ApprovalCard({
           {req.subject.id}
           {req.subject.onBehalfOf ? ` on behalf of ${req.subject.onBehalfOf}` : ""}
         </dd>
+        {req.subject.agent && req.reason ? (
+          <>
+            <dt>Agent's reason</dt>
+            <dd>{req.reason}</dd>
+          </>
+        ) : null}
         <dt>Idempotency key</dt>
         <dd className="mono">{req.idempotencyKey}</dd>
         {req.amount ? (

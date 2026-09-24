@@ -10,7 +10,7 @@ export function Runs() {
     <section>
       <header className="page-head">
         <h1>Runs</h1>
-        <p className="muted">One run per source event. A failed run can be retried.</p>
+        <p className="muted">One run per source event or agent write. A failed recipe run can be retried.</p>
       </header>
       <ErrorBanner error={error} />
       {data && data.length === 0 && <Empty>No runs yet. Runs start when a source emits an event.</Empty>}
@@ -112,16 +112,31 @@ export function RunDetail({ id }: { id: string }) {
           ) : (
             <p className="muted">{run.status === "running" ? "Writes appear when the run completes." : "No writes were committed."}</p>
           )}
-          <h2>Source event</h2>
-          {run.event ? (
+          {run.request ? (
             <>
+              <h2>Agent request</h2>
               <p className="muted small">
-                {run.event.name} · id {run.event.id} · position {run.event.position}
+                {run.request.subject.id}
+                {run.request.subject.onBehalfOf ? ` on behalf of ${run.request.subject.onBehalfOf}` : ""} ·{" "}
+                {run.request.tool} · {run.request.risk} risk
+                {run.request.reason ? ` · ${run.request.reason}` : ""}
               </p>
-              <Json value={run.event.payload} />
+              <Json value={run.request.payload} />
             </>
           ) : (
-            <p className="muted">Unavailable.</p>
+            <>
+              <h2>Source event</h2>
+              {run.event ? (
+                <>
+                  <p className="muted small">
+                    {run.event.name} · id {run.event.id} · position {run.event.position}
+                  </p>
+                  <Json value={run.event.payload} />
+                </>
+              ) : (
+                <p className="muted">Unavailable.</p>
+              )}
+            </>
           )}
         </>
       )}

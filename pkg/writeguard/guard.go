@@ -173,6 +173,12 @@ func New(cfg Config) (*Guard, error) {
 	return g, nil
 }
 
+// Has reports whether name is a target of this guard.
+func (g *Guard) Has(name string) bool {
+	_, ok := g.targets[name]
+	return ok
+}
+
 // Metered returns how many documents each metered target has created, for
 // licensing such as SAP digital access.
 func (g *Guard) Metered() map[string]int {

@@ -17,6 +17,7 @@ import (
 
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/engine"
+	"github.com/fduser123-coding/turgon/pkg/writeguard"
 )
 
 // RunSummary is one integration run as listed in the console.
@@ -33,11 +34,13 @@ type RunSummary struct {
 // RunDetail adds what a run was started with and how it ended.
 type RunDetail struct {
 	RunSummary
-	SpecDigest  string            `json:"specDigest,omitempty"`
-	Event       *connector.Event  `json:"event,omitempty"`
-	Result      *engine.RunResult `json:"result,omitempty"`
-	Failure     string            `json:"failure,omitempty"`
-	FailureType string            `json:"failureType,omitempty"`
+	SpecDigest string           `json:"specDigest,omitempty"`
+	Event      *connector.Event `json:"event,omitempty"`
+	// Request is what an agent asked for, for agent writes.
+	Request     *writeguard.Request `json:"request,omitempty"`
+	Result      *engine.RunResult   `json:"result,omitempty"`
+	Failure     string              `json:"failure,omitempty"`
+	FailureType string              `json:"failureType,omitempty"`
 }
 
 // Runs is what the console needs from the workflow engine.
@@ -72,7 +75,7 @@ func (t TemporalRuns) List(ctx context.Context, limit int) ([]RunSummary, error)
 	resp, err := t.Client.ListWorkflow(ctx, &workflowservice.ListWorkflowExecutionsRequest{
 		Namespace: t.Namespace,
 		PageSize:  int32(limit),
-		Query:     fmt.Sprintf("WorkflowType = '%s'", engine.WorkflowName),
+		Query:     fmt.Sprintf("WorkflowType = '%s' OR WorkflowType = '%s'", engine.WorkflowName, engine.AgentWriteWorkflowName),
 	})
 	if err != nil {
 		return nil, err
@@ -139,7 +142,11 @@ func (t TemporalRuns) Get(ctx context.Context, id string) (RunDetail, error) {
 		c := ct.AsTime()
 		d.Closed = &c
 	}
-	if in, err := (engine.TemporalStarter{Client: t.Client}).Input(ctx, id); err == nil {
+	if info.GetType().GetName() == engine.AgentWriteWorkflowName {
+		if in, err := (engine.AgentWrites{Client: t.Client}).Input(ctx, id); err == nil {
+			d.SpecDigest, d.Request = in.SpecDigest, &in.Request
+		}
+	} else if in, err := (engine.TemporalStarter{Client: t.Client}).Input(ctx, id); err == nil {
 		d.SpecDigest, d.Event = in.SpecDigest, &in.Event
 	}
 	dc := converter.GetDefaultDataConverter()

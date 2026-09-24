@@ -9,6 +9,7 @@ func TestWritebackDefault(t *testing.T) {
 	op := Subject{ID: "u", Roles: []string{RoleOperator}}
 	reader := Subject{ID: "r", Roles: []string{RoleReader}}
 	nobody := Subject{ID: "n"}
+	agent := Subject{ID: "claude", Agent: true, OnBehalfOf: "ada", Roles: []string{RoleReader}}
 	cases := []struct {
 		name            string
 		in              Input
@@ -22,6 +23,8 @@ func TestWritebackDefault(t *testing.T) {
 		{"high unapproved", Input{Tool: Tool{Risk: "high"}, Subject: op}, false, true},
 		{"high approved", Input{Tool: Tool{Risk: "high"}, Subject: nobody, Approval: Approval{Status: ApprovalApproved}}, true, true},
 		{"high rejected", Input{Tool: Tool{Risk: "high"}, Subject: op, Approval: Approval{Status: ApprovalRejected}}, false, true},
+		{"read by agent", Input{Tool: Tool{Risk: "read"}, Subject: agent}, true, false},
+		{"agent without operator role", Input{Tool: Tool{Risk: "high"}, Subject: agent, Approval: Approval{Status: ApprovalApproved}}, false, true},
 		{"unknown risk", Input{Tool: Tool{Risk: "yolo"}, Subject: op}, false, false},
 	}
 	for _, c := range cases {

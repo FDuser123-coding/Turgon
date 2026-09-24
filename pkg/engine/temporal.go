@@ -25,6 +25,7 @@ func TaskQueueFor(spec *compiler.RuntimeSpec) string {
 // Register adds the workflow and activities to a Temporal worker.
 func Register(w worker.Registry, acts *Activities) {
 	w.RegisterWorkflowWithOptions(IntegrationWorkflow, workflow.RegisterOptions{Name: WorkflowName})
+	w.RegisterWorkflowWithOptions(AgentWriteWorkflow, workflow.RegisterOptions{Name: AgentWriteWorkflowName})
 	w.RegisterActivity(acts)
 }
 

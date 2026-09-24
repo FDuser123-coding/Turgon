@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
@@ -13,6 +14,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/agent"
 	"github.com/fduser123-coding/turgon/pkg/audit"
 	"github.com/fduser123-coding/turgon/pkg/connector"
+	"github.com/fduser123-coding/turgon/pkg/engine"
 	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
 )
 
@@ -20,13 +22,19 @@ func mcpCmd() *cobra.Command {
 	var specPath, listen, authMode, dbURL, auditPath string
 	var devAgent, devUser, devRoles string
 	var trusted []string
+	var writes bool
+	var wait, approvalTimeout time.Duration
+	var tf temporalFlags
 	cmd := &cobra.Command{
 		Use:   "mcp",
-		Short: "Serve a spec's read-only tools to AI agents over MCP",
-		Long: "Serve the read-only tools of a compiled runtime spec over MCP (streamable HTTP).\n" +
+		Short: "Serve a spec's tools to AI agents over MCP",
+		Long: "Serve the tools of a compiled runtime spec over MCP (streamable HTTP).\n" +
 			"With --auth gateway, run it behind the agent gateway, which authenticates agents and sets\n" +
 			"X-Agent-Id, X-On-Behalf-Of and X-Agent-Roles; those are trusted only from --trusted-gateway\n" +
-			"addresses. Reads need the integration-reader or integration-operator role and are audited.",
+			"addresses. Reads need the integration-reader or integration-operator role and are audited.\n\n" +
+			"With --writes, write tools start governed writes on Temporal, run by `porter run` workers\n" +
+			"for the same spec. Agents need the integration-operator role to write, and high-risk\n" +
+			"writes wait for a person to approve them in the console.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			spec, err := loadSpec(specPath)
 			if err != nil {
@@ -79,9 +87,23 @@ func mcpCmd() *cobra.Command {
 				defer f.Close()
 				rec = l
 			}
-			s, err := agent.New(ctx, spec, agent.Options{
+			opts := agent.Options{
 				Registry: connectorRegistry(), Secrets: connector.EnvSecrets{}, Audit: rec, Auth: auth, Version: version,
-			})
+				ApprovalTimeout: approvalTimeout,
+			}
+			if writes {
+				c, err := tf.dial()
+				if err != nil {
+					return fmt.Errorf("temporal: %w", err)
+				}
+				defer c.Close()
+				queue := tf.taskQueue
+				if queue == "" {
+					queue = engine.TaskQueueFor(spec)
+				}
+				opts.Writes = engine.AgentWrites{Client: c, TaskQueue: queue, Wait: wait}
+			}
+			s, err := agent.New(ctx, spec, opts)
 			if err != nil {
 				return err
 			}
@@ -103,5 +125,9 @@ func mcpCmd() *cobra.Command {
 	cmd.Flags().StringVar(&devRoles, "dev-roles", "integration-reader", "roles for --auth dev, comma-separated")
 	cmd.Flags().StringVar(&dbURL, "database-url", os.Getenv("PORTER_DATABASE_URL"), "Postgres URL for the audit log")
 	cmd.Flags().StringVar(&auditPath, "audit-log", "postgres", `audit log: "postgres" or a file path`)
+	cmd.Flags().BoolVar(&writes, "writes", false, "serve write tools, run as governed writes on Temporal")
+	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "how long a write tool call waits for the write to finish")
+	cmd.Flags().DurationVar(&approvalTimeout, "approval-timeout", engine.DefaultApprovalTimeout, "reject agent writes nobody approves within this time")
+	tf.register(cmd)
 	return cmd
 }
