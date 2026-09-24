@@ -23,6 +23,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/connector/postgres"
+	"github.com/fduser123-coding/turgon/pkg/connector/rest"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce"
 	"github.com/fduser123-coding/turgon/pkg/engine"
 	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
@@ -48,7 +49,7 @@ func (f *temporalFlags) dial() (client.Client, error) {
 
 // connectorRegistry lists the connectors built into this worker.
 func connectorRegistry() connector.Registry {
-	return connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory}
+	return connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory, rest.Name: rest.Factory}
 }
 
 func envOr(key, def string) string {

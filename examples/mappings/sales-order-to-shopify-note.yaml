@@ -1,0 +1,12 @@
+# After the ERP accepts an order, note its number on the Shopify order.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: sales-order-to-shopify-note
+  version: 1.0.0
+spec:
+  from: model.SalesOrder
+  to: model.Order
+  fields:
+    - { target: orderId, expression: "shopifyId",                         origin: human, confidence: 1.0 }
+    - { target: note,    expression: "'ERP order ' & $string(erpOrder.id)", origin: human, confidence: 1.0 }

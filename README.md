@@ -70,6 +70,45 @@ echo "001000000000001AAA 7800" >> sf.cmds                      # a deal is won
 bin/turgon approve salesforce-won-deals-to-erp/006000000000001AAA --by you@example.com
 ```
 
+### Any HTTP API: Shopify to ERP
+
+The `rest` connector integrates HTTP JSON APIs (Shopify, Stripe, HubSpot, in-house services) with
+configuration only: each Connection declares its events, reads and writes as HTTP requests
+(`examples/connections/shopify-store.yaml`).
+
+- **Events** are list requests polled with a cursor the API understands (`since_id`,
+  `created[gt]`, `updated_at_min`); timestamp cursors never split a group of equal timestamps.
+- **Reads** fetch one record by ID and return business field names; they become agent tools.
+- **Writes** are one request each: a method, a path templated from the payload (values escaped as
+  path segments), and a body built from mapped fields, optionally wrapped (`{"order": {...}}`).
+  Where the API takes one, the idempotency key is sent as a header (`Idempotency-Key`).
+- **Updates can capture** the fields they change first. That previews the change for the approver
+  (current and proposed values), confirms it by reading it back, and lets a `restore` operation
+  undo it exactly in a saga. A create is undone by a request templated from its own result
+  (`DELETE /invoices/{{id}}`).
+- **Auth**: a bearer token, an API-key header, basic, or OAuth 2.0 client credentials (refreshed
+  before expiry and after a 401), always from the connection's secret.
+- Client errors fail the step at once; rate limits and server errors are retried.
+
+`shopify-store-orders-to-erp` is a saga: each new Shopify order becomes an ERP sales order (a
+person approves it), then the ERP order number is written into the Shopify order's note. If
+Shopify rejects the note, the ERP order is cancelled. Without a store, run the test fake:
+
+```sh
+go build -o bin/fakeshop ./internal/tools/fakeshop
+touch shop.cmds && (tail -f shop.cmds | bin/fakeshop &)        # http://127.0.0.1:9300, token shpat_demo
+cp -r examples my-catalog && sed -i 's|https://turgon-demo.myshopify.com|http://127.0.0.1:9300|' \
+  my-catalog/connections/shopify-store.yaml
+bin/turgon compile -c my-catalog shopify-store-orders-to-erp -o shopify.json
+export TURGON_SECRET_SHOPIFY_STORE_TOKEN=shpat_demo
+bin/turgon check -s shopify.json                                # credential, events, ERP tables
+bin/turgon xref set --entity Customer --system shopify-store --source ada@example.com --master C-100
+bin/turgon run -s shopify.json &
+echo "ada@example.com 310.00" >> shop.cmds                      # an order is placed
+```
+
+Approve it in the console (or with `turgon approve`); the fake prints the order's new note.
+
 Each spec runs on its own Temporal task queue (`turgon-<spec name>`), so workers for different
 specs can share a cluster.
 
@@ -256,6 +295,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/mapping` | §7.4 | JSONata evaluation of mapping sets |
 | `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow, and one for agent writes; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher |
 | `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox events, rollback dry-runs, idempotent writes) |
+| `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled events, reads, templated writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/` is a fake Shopify Admin API |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references |
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
@@ -307,5 +347,5 @@ the Turgon operator; an appliance build (§11);
 Debezium change capture in place of outbox polling; probabilistic identity
 resolution (Splink) and the data-steward queue; signed OPA bundles; the metadata
 graph and discovery; A2A streaming and push notifications; direct OIDC sign-in for the
-console and approving mapping fields from its review queue; the Wasm plugin host. The native Postgres and Salesforce connectors run inside the Go
+console and approving mapping fields from its review queue; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.
