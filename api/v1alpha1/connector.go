@@ -215,11 +215,15 @@ func (c *ConnectorManifest) Validate() FieldErrors {
 	checkList(DirectionWrite, s.Interfaces.Write)
 	checkList("events", s.Interfaces.Events)
 
+	events := map[string]bool{}
 	for i, ev := range s.Events {
 		path := fmt.Sprintf("spec.events[%d]", i)
 		if ev.Name == "" {
 			es.add(path+".name", "is required")
+		} else if events[ev.Name] {
+			es.add(path+".name", "duplicate event %q", ev.Name)
 		}
+		events[ev.Name] = true
 		if _, err := c.Permitted("events", ev.Interface); err != nil {
 			es.add(path+".interface", "%v", err)
 		}

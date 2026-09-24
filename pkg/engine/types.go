@@ -43,6 +43,8 @@ type RunInput struct {
 	Event      connector.Event   `json:"event"`
 	// ApprovalTimeout rejects a pending approval after this long. Default 72h.
 	ApprovalTimeout time.Duration `json:"approvalTimeout,omitempty"`
+	// TaskQueue is the queue of the workers that run this spec.
+	TaskQueue string `json:"taskQueue,omitempty"`
 }
 
 // RunResult reports what a run wrote.

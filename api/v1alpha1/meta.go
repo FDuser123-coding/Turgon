@@ -104,6 +104,7 @@ var (
 	semverRE    = regexp.MustCompile(`^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z.-]+)?$`)
 	secretRefRE = regexp.MustCompile(`^[a-z][a-z0-9+.-]*://\S+$`)
 	handleRE    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
+	fieldRE     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
 func validateTypeMeta(t TypeMeta, kind string, es *FieldErrors) {

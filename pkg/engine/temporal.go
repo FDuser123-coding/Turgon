@@ -15,8 +15,12 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 )
 
-// DefaultTaskQueue is the Temporal task queue Porter workers poll.
-const DefaultTaskQueue = "porter"
+// TaskQueueFor returns the default task queue for a spec. Each spec has
+// its own queue: a worker only has the connectors of the spec it runs, so
+// tasks for another spec must never reach it.
+func TaskQueueFor(spec *compiler.RuntimeSpec) string {
+	return "porter-" + spec.Metadata.Name
+}
 
 // Register adds the workflow and activities to a Temporal worker.
 func Register(w worker.Registry, acts *Activities) {
@@ -34,6 +38,7 @@ type TemporalStarter struct {
 // A failed run may be started again (see Retry); idempotency keys make the
 // second attempt safe.
 func (s TemporalStarter) Start(ctx context.Context, id string, in RunInput) error {
+	in.TaskQueue = s.TaskQueue
 	_, err := s.Client.ExecuteWorkflow(ctx, s.options(id), WorkflowName, in)
 	var already *serviceerror.WorkflowExecutionAlreadyStarted
 	if errors.As(err, &already) {
@@ -43,13 +48,9 @@ func (s TemporalStarter) Start(ctx context.Context, id string, in RunInput) erro
 }
 
 func (s TemporalStarter) options(id string) client.StartWorkflowOptions {
-	q := s.TaskQueue
-	if q == "" {
-		q = DefaultTaskQueue
-	}
 	return client.StartWorkflowOptions{
 		ID:                       id,
-		TaskQueue:                q,
+		TaskQueue:                s.TaskQueue,
 		WorkflowIDReusePolicy:    enums.WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE_FAILED_ONLY,
 		WorkflowIDConflictPolicy: enums.WORKFLOW_ID_CONFLICT_POLICY_FAIL,
 	}
@@ -95,6 +96,13 @@ func (s TemporalStarter) Retry(ctx context.Context, id string, spec *compiler.Ru
 			return in, fmt.Errorf("spec %s has no workflow %s", spec.Metadata.Name, in.Workflow.Name)
 		}
 	}
+	if s.TaskQueue == "" {
+		s.TaskQueue = in.TaskQueue
+	}
+	if s.TaskQueue == "" {
+		return in, fmt.Errorf("run %s does not record its task queue; pass --task-queue", id)
+	}
+	in.TaskQueue = s.TaskQueue
 	opts := s.options(id)
 	// Without this the SDK returns the existing run instead of an error.
 	opts.WorkflowExecutionErrorWhenAlreadyStarted = true

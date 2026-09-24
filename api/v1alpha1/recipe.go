@@ -81,6 +81,9 @@ type WriteStep struct {
 	Simulate       bool   `json:"simulate,omitempty"`
 	Approval       string `json:"approval,omitempty"`
 	Compensation   string `json:"compensation,omitempty"`
+	// Output names a document field that receives the write's result, so
+	// later steps can use it (for example, a document number to link back).
+	Output string `json:"output,omitempty"`
 }
 
 type Capacity struct {
@@ -153,6 +156,9 @@ func (r *Recipe) Validate() FieldErrors {
 			}
 			if strings.TrimSpace(w.IdempotencyKey) == "" {
 				es.add(path+".write.idempotencyKey", "is required so retries never create duplicates")
+			}
+			if w.Output != "" && !fieldRE.MatchString(w.Output) {
+				es.add(path+".write.output", "must be a field name, got %q", w.Output)
 			}
 			if w.Approval != "" && !oneOf(w.Approval, ApprovalPolicy, ApprovalRequired, ApprovalNone) {
 				es.add(path+".write.approval", "must be policy, required or none, got %q", w.Approval)

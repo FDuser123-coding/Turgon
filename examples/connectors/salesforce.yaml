@@ -2,12 +2,13 @@ apiVersion: porter.dev/v1alpha1
 kind: ConnectorManifest
 metadata:
   name: salesforce
-  version: 3.1.0
+  version: 3.2.0
 spec:
   system: "Salesforce Sales Cloud, API v60+"
-  runtime: camel-java
+  # Native in the prototype worker; production runs on the Camel worker (§7.1).
+  runtime: native
   auth:
-    methods: [oauth2-jwt]
+    methods: [oauth2-jwt, oauth2-client-credentials]
     secretRef: openbao://salesforce/prod
   discovery:
     - kind: openapi
@@ -16,15 +17,21 @@ spec:
       - kind: rest-api
       - kind: bulk-api
     write:
+      # No server-side dry run exists for REST writes; the preview shows the
+      # record's current values next to the proposed ones.
       - kind: rest-api
+        simulation: preview
     events:
       - kind: change-data-capture
       - kind: platform-events
+      # SOQL on SystemModstamp through the REST API; replaced by a Pub/Sub
+      # API change-data-capture subscriber later.
+      - kind: soql-poll
   entities: [Customer, Opportunity]
   events:
     - name: Opportunity.ClosedWon
       entity: Opportunity
-      interface: change-data-capture
+      interface: soql-poll
   operations:
     - name: get-customer
       entity: Customer
@@ -36,7 +43,12 @@ spec:
       direction: write
       interface: rest-api
       risk: low
-      compensation: update-opportunity
+      compensation: restore-opportunity
+    - name: restore-opportunity
+      entity: Opportunity
+      direction: write
+      interface: rest-api
+      risk: low
   limits:
     maxConcurrentCalls: 10
     requestsPerSecond: 20

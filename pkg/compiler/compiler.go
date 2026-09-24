@@ -124,6 +124,7 @@ type WriteConfig struct {
 	Approval     string `json:"approval"`
 	Compensation string `json:"compensation"`
 	Metered      bool   `json:"metered,omitempty"`
+	Output       string `json:"output,omitempty"`
 }
 
 // PluginDeployment is a plugin with the capabilities granted to it.
@@ -313,7 +314,7 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 			wc := &WriteConfig{
 				Endpoint: b.endpoint(w.Target), Connector: m.Metadata.Name, Operation: op.Name,
 				Interface: op.Interface, Risk: op.Risk, Entity: op.Entity, IdempotencyKey: w.IdempotencyKey,
-				Approval: approval, Compensation: comp, Metered: m.Spec.Metering.SAPDigitalAccess,
+				Approval: approval, Compensation: comp, Metered: m.Spec.Metering.SAPDigitalAccess, Output: w.Output,
 			}
 			if w.Simulate {
 				wc.Simulation = iface.Simulation

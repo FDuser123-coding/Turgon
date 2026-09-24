@@ -1,0 +1,31 @@
+# The sales org, reached as a dedicated integration user with the OAuth 2.0
+# JWT bearer flow. The secret holds loginUrl, clientId, username and the
+# user's private key (see pkg/connector/salesforce.Credentials).
+apiVersion: porter.dev/v1alpha1
+kind: Connection
+metadata: { name: salesforce-prod }
+spec:
+  connector: salesforce@^3
+  secretRef: openbao://salesforce/prod-jwt
+  config:
+    apiVersion: "61.0"
+    events:
+      Opportunity.ClosedWon:
+        sobject: Opportunity
+        where: "StageName = 'Closed Won'"
+        fields:
+          - Id
+          - AccountId
+          - Amount
+          - CloseDate
+          - CurrencyIsoCode
+          - "(SELECT Product2.ProductCode, Quantity FROM OpportunityLineItems)"
+    operations:
+      update-opportunity:
+        sobject: Opportunity
+        action: update
+        idField: opportunityId
+        fields: { ERP_Order_Number__c: erpOrderNumber }
+      restore-opportunity:
+        sobject: Opportunity
+        action: restore

@@ -1,0 +1,41 @@
+# A saga across two systems: a won deal becomes an ERP sales order, and the
+# ERP order number is written back to the opportunity. If the write-back
+# fails, the ERP order is cancelled.
+apiVersion: porter.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: salesforce-won-deals-to-erp
+  version: 1.0.0
+spec:
+  trigger:
+    source: salesforce-prod
+    event: Opportunity.ClosedWon
+  steps:
+    - map:
+        from: salesforce.Opportunity
+        to: model.SalesOrder
+        mapping: sf-opportunity-to-order@3
+    - resolve:
+        entity: model.Customer
+        strategy: exact
+        autoMatchAbove: 1.0
+    - write:
+        target: erp-db
+        operation: create-sales-order
+        idempotencyKey: "{{ source.Id }}"
+        simulate: true
+        output: erpOrder
+    - map:
+        from: model.SalesOrder
+        to: model.Opportunity
+        mapping: sales-order-to-opportunity-link@1
+    - write:
+        target: salesforce-prod
+        operation: update-opportunity
+        idempotencyKey: "{{ source.Id }}"
+        simulate: true
+  policies: [writeback-default]
+  capacity:
+    peakPerSecond: 5
+  slo:
+    p95Latency: 5s

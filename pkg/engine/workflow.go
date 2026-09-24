@@ -108,6 +108,7 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 				rec.Status, rec.Result = d.Status, d.Result
 				// Written before this run: not ours to compensate.
 				result.Writes = append(result.Writes, rec)
+				doc = withOutput(doc, step.Write.Output, d.Result)
 				continue
 			}
 
@@ -129,9 +130,26 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			rec.Status, rec.Result = out.Status, out.Result
 			result.Writes = append(result.Writes, rec)
 			done = append(done, committedWrite{step: step.Name, request: prep.Request, result: out.Result})
+			doc = withOutput(doc, step.Write.Output, out.Result)
 		}
 	}
 	return result, nil
+}
+
+// withOutput returns a copy of doc with a write's result stored under field.
+func withOutput(doc map[string]any, field string, result json.RawMessage) map[string]any {
+	if field == "" {
+		return doc
+	}
+	next := make(map[string]any, len(doc)+1)
+	for k, v := range doc {
+		next[k] = v
+	}
+	var v any
+	if json.Unmarshal(result, &v) == nil {
+		next[field] = v
+	}
+	return next
 }
 
 // awaitApproval blocks until an approval signal for step arrives or the

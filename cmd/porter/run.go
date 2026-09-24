@@ -20,6 +20,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/connector/postgres"
+	"github.com/fduser123-coding/turgon/pkg/connector/salesforce"
 	"github.com/fduser123-coding/turgon/pkg/engine"
 	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
 )
@@ -31,7 +32,7 @@ type temporalFlags struct {
 func (f *temporalFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.address, "temporal", envOr("PORTER_TEMPORAL_ADDRESS", "localhost:7233"), "Temporal frontend address")
 	cmd.Flags().StringVar(&f.namespace, "namespace", envOr("PORTER_TEMPORAL_NAMESPACE", "default"), "Temporal namespace")
-	cmd.Flags().StringVar(&f.taskQueue, "task-queue", engine.DefaultTaskQueue, "Temporal task queue")
+	cmd.Flags().StringVar(&f.taskQueue, "task-queue", "", "Temporal task queue (default: porter-<spec name>)")
 }
 
 func (f *temporalFlags) dial() (client.Client, error) {
@@ -106,7 +107,7 @@ func runCmd() *cobra.Command {
 			defer file.Close()
 
 			rt, err := engine.New(ctx, spec, engine.Options{
-				Registry: connector.Registry{postgres.Name: postgres.Factory},
+				Registry: connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory},
 				Secrets:  connector.EnvSecrets{},
 				Store:    store, Resolver: store, Audit: log,
 			})
@@ -120,6 +121,9 @@ func runCmd() *cobra.Command {
 				return fmt.Errorf("temporal: %w", err)
 			}
 			defer c.Close()
+			if tf.taskQueue == "" {
+				tf.taskQueue = engine.TaskQueueFor(spec)
+			}
 			w := worker.New(c, tf.taskQueue, worker.Options{})
 			engine.Register(w, rt.Activities)
 			if err := w.Start(); err != nil {
@@ -129,8 +133,8 @@ func runCmd() *cobra.Command {
 
 			d := &engine.Dispatcher{Runtime: rt, Cursors: store, Starter: engine.TemporalStarter{Client: c, TaskQueue: tf.taskQueue}, ApprovalTimeout: approvalTimeout}
 			out := cmd.ErrOrStderr()
-			fmt.Fprintf(out, "porter: running %s (%s, level %s), %d workflow(s), polling every %s\n",
-				spec.Metadata.Name, spec.Metadata.Digest[:19], spec.Metadata.Level, len(spec.Spec.Workflows), poll)
+			fmt.Fprintf(out, "porter: running %s (%s, level %s), %d workflow(s) on task queue %s, polling every %s\n",
+				spec.Metadata.Name, spec.Metadata.Digest[:19], spec.Metadata.Level, len(spec.Spec.Workflows), tf.taskQueue, poll)
 			ticker := time.NewTicker(poll)
 			defer ticker.Stop()
 			for {

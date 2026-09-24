@@ -42,3 +42,4 @@ jobs:
           go run ./cmd/porter verify -c examples shop-orders-to-erp
           go run ./cmd/porter compile -c examples eu-distributor-core -o /dev/null
           go run ./cmd/porter compile -c examples shop-orders-to-erp -o /dev/null
+          go run ./cmd/porter compile -c examples salesforce-won-deals-to-erp -o /dev/null

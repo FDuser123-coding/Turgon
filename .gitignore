@@ -2,4 +2,7 @@ bin/
 *.test
 *.out
 /runtime-spec*.json
-/porter-audit.jsonl
+/*audit*.jsonl
+/sf.cmds
+/sf.creds
+/sf.json

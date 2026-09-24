@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"sort"
 	"strings"
@@ -22,6 +23,8 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/connector/postgres"
+	"github.com/fduser123-coding/turgon/pkg/connector/salesforce"
+	"github.com/fduser123-coding/turgon/pkg/connector/salesforce/sftest"
 	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
 	"github.com/fduser123-coding/turgon/pkg/verifier"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
@@ -47,6 +50,13 @@ func localize(s, schema string) string {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
+	return newFixtureFor(t, "shop-orders-to-erp", nil)
+}
+
+// newFixtureFor compiles the named example recipe and connects it: Postgres
+// endpoints to the test database, others through extra secrets.
+func newFixtureFor(t *testing.T, recipe string, extra connector.StaticSecrets) *fixture {
+	t.Helper()
 	pool, schema := pgtest.Pool(t)
 	ctx := context.Background()
 	sql, err := os.ReadFile("../../examples/sql/demo.sql")
@@ -71,7 +81,7 @@ func newFixture(t *testing.T) *fixture {
 	if err != nil {
 		t.Fatal(err)
 	}
-	obj, _ := cat.Find("shop-orders-to-erp")
+	obj, _ := cat.Find(recipe)
 	spec, rep, err := compiler.Compile(cat, obj, verifier.Options{})
 	if err != nil {
 		t.Fatalf("%v: %+v", err, rep.Errors())
@@ -83,9 +93,13 @@ func newFixture(t *testing.T) *fixture {
 
 	url := pgtest.URL(t, schema)
 	var buf bytes.Buffer
+	secrets := connector.StaticSecrets{"openbao://shop-db/dsn": url, "openbao://erp-db/dsn": url}
+	for k, v := range extra {
+		secrets[k] = v
+	}
 	rt, err := New(ctx, spec, Options{
-		Registry: connector.Registry{postgres.Name: postgres.Factory},
-		Secrets:  connector.StaticSecrets{"openbao://shop-db/dsn": url, "openbao://erp-db/dsn": url},
+		Registry: connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory},
+		Secrets:  secrets,
 		Store:    store,
 		Resolver: store,
 		Audit:    audit.New(&syncWriter{w: &buf}),
@@ -354,4 +368,73 @@ func sortedKeys(m map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+const (
+	wonDeal = "006000000000001AAA"
+	account = "001000000000001AAA"
+)
+
+func newSalesforceFixture(t *testing.T) (*fixture, *sftest.Server) {
+	t.Helper()
+	sf := sftest.New()
+	t.Cleanup(sf.Close)
+	f := newFixtureFor(t, "salesforce-won-deals-to-erp", connector.StaticSecrets{"openbao://salesforce/prod-jwt": sf.Credentials()})
+	if err := f.store.PutXref(context.Background(), "Customer", "salesforce-prod", account, "C-100"); err != nil {
+		t.Fatal(err)
+	}
+	sf.Put("Opportunity", wonDeal, map[string]any{
+		"StageName": "Closed Won", "AccountId": account, "Amount": 1200.5, "CloseDate": "2026-09-24",
+		"CurrencyIsoCode": "EUR", "ERP_Order_Number__c": nil,
+		"OpportunityLineItems": map[string]any{"totalSize": 1, "done": true, "records": []any{
+			map[string]any{"attributes": map[string]any{"type": "OpportunityLineItem"}, "Quantity": 2,
+				"Product2": map[string]any{"attributes": map[string]any{"type": "Product2"}, "ProductCode": "M-1"}},
+		}},
+	}, time.Now().Add(-time.Minute))
+	return f, sf
+}
+
+func TestSalesforceWonDealBecomesERPOrderAndIsLinkedBack(t *testing.T) {
+	f, sf := newSalesforceFixture(t)
+	runs := f.dispatch()
+	if len(runs) != 1 || runs[0].Event.ID != wonDeal {
+		t.Fatalf("runs = %+v", runs)
+	}
+	res, err, pending := f.run(runs[0], approve("03-write"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Writes) != 2 || res.Writes[0].Status != writeguard.StatusCommitted || res.Writes[1].Status != writeguard.StatusCommitted {
+		t.Fatalf("writes = %+v", res.Writes)
+	}
+	// Only the high-risk ERP write needed a person; the low-risk write-back did not.
+	if len(pending) != 1 || pending[0].Step != "03-write" {
+		t.Fatalf("pending = %+v", pending)
+	}
+	if f.orders(`external_id = '`+wonDeal+`' AND customer_id = 'C-100' AND net_value = 1200.50
+		AND lines = '[{"material":"M-1","quantity":2}]'`) != 1 {
+		t.Fatal("ERP order missing or mis-mapped")
+	}
+	var erpID int64
+	_ = f.pool.QueryRow(context.Background(), "SELECT id FROM "+f.schema+"_erp.sales_orders").Scan(&erpID)
+	if got := sf.Get("Opportunity", wonDeal)["ERP_Order_Number__c"]; got != fmt.Sprint(erpID) {
+		t.Fatalf("opportunity links to %v, want %d", got, erpID)
+	}
+}
+
+func TestFailedWriteBackCancelsERPOrder(t *testing.T) {
+	f, sf := newSalesforceFixture(t)
+	sf.FailPatch = func(string, string, map[string]any) (int, string, string) {
+		return 400, "FIELD_CUSTOM_VALIDATION_EXCEPTION", "Opportunity is locked for finance review"
+	}
+	_, err, _ := f.run(f.dispatch()[0], approve("03-write"))
+	if errType(err) != ErrTypeInvalid || !strings.Contains(err.Error(), "locked for finance review") {
+		t.Fatalf("err = %v (%s)", err, errType(err))
+	}
+	if f.orders(`external_id = '`+wonDeal+`' AND status = 'cancelled'`) != 1 {
+		t.Fatal("ERP order was not cancelled after the write-back failed")
+	}
+	if v := sf.Get("Opportunity", wonDeal)["ERP_Order_Number__c"]; v != nil {
+		t.Fatalf("opportunity changed: %v", v)
+	}
 }

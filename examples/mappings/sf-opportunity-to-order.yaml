@@ -13,6 +13,6 @@ spec:
     - { target: netValue,     expression: "Amount",                      origin: certified, confidence: 0.98 }
     - { target: currency,     expression: "CurrencyIsoCode",             origin: certified, confidence: 0.99 }
     - target: lines
-      expression: "OpportunityLineItems.records.{ 'material': Product2.ProductCode, 'quantity': Quantity }"
+      expression: "OpportunityLineItems.records.{ 'material': Product2.ProductCode, 'quantity': Quantity }[]"
       origin: certified
       confidence: 0.97
