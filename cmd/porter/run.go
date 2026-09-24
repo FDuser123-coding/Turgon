@@ -184,11 +184,23 @@ func approveCmd() *cobra.Command {
 			if reject {
 				status = "rejected"
 			}
-			sig := engine.ApprovalSignal{Step: step, Status: status, By: by, Note: note}
+			// Decide on exactly what the run is waiting for: the signal
+			// carries the pending request's digest.
+			p, err := engine.Pending(cmd.Context(), c, args[0])
+			if err != nil {
+				return err
+			}
+			if p == nil {
+				return fmt.Errorf("%s is not waiting for an approval", args[0])
+			}
+			if step != "" && step != p.Step {
+				return fmt.Errorf("%s is waiting on step %s, not %s", args[0], p.Step, step)
+			}
+			sig := engine.ApprovalSignal{Step: p.Step, Digest: p.Digest, Status: status, By: by, Note: note}
 			if err := c.SignalWorkflow(cmd.Context(), args[0], "", engine.SignalApproval, sig); err != nil {
 				return err
 			}
-			fmt.Fprintf(cmd.OutOrStdout(), "%s %s\n", status, args[0])
+			fmt.Fprintf(cmd.OutOrStdout(), "%s %s step %s (request %s)\n", status, args[0], p.Step, p.Digest[:12])
 			return nil
 		},
 	}
@@ -212,12 +224,8 @@ func pendingCmd() *cobra.Command {
 				return err
 			}
 			defer c.Close()
-			v, err := c.QueryWorkflow(cmd.Context(), args[0], "", engine.QueryPending)
+			p, err := engine.Pending(cmd.Context(), c, args[0])
 			if err != nil {
-				return err
-			}
-			var p *engine.PendingApproval
-			if err := v.Get(&p); err != nil {
 				return err
 			}
 			if p == nil {

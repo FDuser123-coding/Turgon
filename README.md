@@ -73,6 +73,27 @@ bin/porter approve salesforce-won-deals-to-erp/006000000000001AAA --by you@examp
 Each spec runs on its own Temporal task queue (`porter-<spec name>`), so workers for different
 specs can share a cluster.
 
+### Console
+
+`porter console` serves the web console: the approval queue (each pending write with its
+dry-run preview, the reasons policy asked for a person, and approve/reject with a note that
+goes into the audit log), runs with their writes and failures, the audit logs with live chain
+verification, and verifier reports for the catalog including the mapping review queue.
+
+```sh
+make console build                  # builds the React app and embeds it in bin/porter
+bin/porter console -c examples --audit-log porter-audit.jsonl --dev-user you@example.com
+# open http://127.0.0.1:8080
+```
+
+`--auth dev` treats every request as `--dev-user` and only listens on loopback. In production
+use `--auth proxy` behind an authenticating reverse proxy such as oauth2-proxy with the
+customer's identity provider: it trusts `X-Auth-Request-Email` and `X-Auth-Request-Groups`
+only from `--trusted-proxy` addresses, and only members of `--approver-group` may decide.
+A decision always refers to the exact request shown (by its SHA-256 digest), nobody can
+approve a write made on their own behalf, and cross-site requests are refused.
+For UI development, `cd console && npm run dev` proxies `/api` to a running console.
+
 Run IDs are `<workflow>/<event id>`, so an event starts at most one successful run. A failed
 run can be retried; writes it already committed are recognized by their idempotency keys.
 Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
@@ -96,7 +117,9 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Porter's state in Postgres: idempotency records with leases, source cursors, identity cross-references |
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
-| `cmd/porter` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets` |
+| `pkg/console` | §12 | Console API (runs, approvals, audit, catalog), proxy/dev authentication, embedded web app |
+| `console/` | §12 | The web console: React + TypeScript, built with Vite |
+| `cmd/porter` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console` |
 | `wit/porter-stack.wit` | §18.4 | Host interface for Wasm plugins |
 | `examples/` | App. A–C, §18.5 | SAP ECC, Salesforce, Shopify, Stripe, Power BI connectors; slot contracts; the `eu-distributor-core` blueprint |
 
@@ -115,6 +138,9 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 - **Connections.** A `Connection` binds a connector to one system (pipeline stage 1). Generic
   connectors like Postgres get their entities, events and operations from it, but only
   through interfaces the connector's manifest permits.
+- **Approvals bind to content.** A pending approval carries the SHA-256 of the write request;
+  a decision must echo it and name the waiting step, so an early, stale or misdirected
+  decision can never approve a write nobody looked at.
 - **Two-phase writes.** The write guard's `Prepare` (policy, validation, dry-run) and
   `Commit` phases let a workflow wait durably for a person between them.
 - **Write outputs.** A write step's `output` puts its result into the document, so later steps
@@ -130,6 +156,7 @@ In rough roadmap order (§16, §19): Salesforce Pub/Sub API change capture and B
 Debezium change capture in place of outbox polling; probabilistic identity
 resolution (Splink) and the data-steward queue; OPA evaluation of `PolicyPack`s; a shared
 audit store instead of a per-worker file; the metadata graph and discovery; MCP server
-generation behind agentgateway; the console and review queue; packaging (Helm, operator,
+generation behind agentgateway; direct OIDC sign-in for the console and approving mapping
+fields from its review queue; packaging (Helm, operator,
 Flux); the Wasm plugin host. The native Postgres and Salesforce connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

@@ -1,9 +1,13 @@
-.PHONY: all build test test-integration vet fmt demo spec
+.PHONY: all build console test test-integration vet fmt demo spec
 
-all: fmt vet test build
+all: fmt vet test console build
 
 build:
 	go build -o bin/porter ./cmd/porter
+
+# Build the web console into pkg/console/dist, which `build` embeds.
+console:
+	cd console && npm ci && npm test && npm run build
 
 # Unit tests; Postgres integration tests skip without PORTER_TEST_DATABASE_URL.
 test:

@@ -6,3 +6,7 @@ bin/
 /sf.cmds
 /sf.creds
 /sf.json
+node_modules/
+/pkg/console/dist/*
+!/pkg/console/dist/robots.txt
+*.tsbuildinfo

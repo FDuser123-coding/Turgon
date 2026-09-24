@@ -191,6 +191,9 @@ func (f *fixture) run(in RunInput, signals ...ApprovalSignal) (RunResult, error,
 				var p *PendingApproval
 				if v.Get(&p) == nil && p != nil {
 					seen = append(seen, *p)
+					if sig.Digest == "" {
+						sig.Digest = p.Digest // the approver saw this request
+					}
 				}
 			}
 			env.SignalWorkflow(SignalApproval, sig)
@@ -209,7 +212,7 @@ func (f *fixture) run(in RunInput, signals ...ApprovalSignal) (RunResult, error,
 }
 
 func approve(step string) ApprovalSignal {
-	return ApprovalSignal{Step: step, Status: "approved", By: "controller@customer"}
+	return ApprovalSignal{Step: step, Status: "approved", By: "controller@customer", Note: "matches the PO"}
 }
 
 func errType(err error) string {
@@ -265,6 +268,9 @@ func TestEndToEndShopOrderToERP(t *testing.T) {
 
 	if _, err := audit.Verify(bytes.NewReader(f.auditLog.Bytes())); err != nil {
 		t.Fatalf("audit chain: %v", err)
+	}
+	if !strings.Contains(f.auditLog.String(), `"note":"matches the PO"`) {
+		t.Error("the approver's note is not in the audit log")
 	}
 	for _, action := range []string{"writeback.simulated", "writeback.approval", "writeback.committed", "writeback.duplicate"} {
 		if !strings.Contains(f.auditLog.String(), `"action":"`+action+`"`) {
@@ -436,5 +442,24 @@ func TestFailedWriteBackCancelsERPOrder(t *testing.T) {
 	}
 	if v := sf.Get("Opportunity", wonDeal)["ERP_Order_Number__c"]; v != nil {
 		t.Fatalf("opportunity changed: %v", v)
+	}
+}
+
+func TestApprovalMustMatchThePendingRequest(t *testing.T) {
+	f := newFixture(t)
+	f.publish(1006, "ada@example.com", "10.00")
+	in := f.dispatch()[0]
+	in.ApprovalTimeout = 4 * time.Hour
+	// A stale decision (wrong digest) and one for another step are both
+	// ignored; with no valid decision the approval times out as a rejection.
+	_, err, pending := f.run(in,
+		ApprovalSignal{Step: "03-write", Digest: "0000", Status: "approved", By: "mallory"},
+		ApprovalSignal{Step: "05-write", Digest: "x", Status: "approved", By: "mallory"},
+	)
+	if len(pending) != 2 || errType(err) != ErrTypeRejected || f.orders("true") != 0 {
+		t.Fatalf("err = %v (%s), %d pending seen, %d orders", err, errType(err), len(pending), f.orders("true"))
+	}
+	if !strings.Contains(f.auditLog.String(), `"by":"porter/approval-timeout"`) && !strings.Contains(f.auditLog.String(), `"actor":"porter/approval-timeout"`) {
+		t.Error("timeout rejection not audited")
 	}
 }

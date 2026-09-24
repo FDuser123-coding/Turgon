@@ -113,3 +113,16 @@ func (s TemporalStarter) Retry(ctx context.Context, id string, spec *compiler.Ru
 	}
 	return in, err
 }
+
+// Pending returns what a run is waiting to have approved, or nil.
+func Pending(ctx context.Context, c client.Client, id string) (*PendingApproval, error) {
+	v, err := c.QueryWorkflow(ctx, id, "", QueryPending)
+	if err != nil {
+		return nil, err
+	}
+	var p *PendingApproval
+	if err := v.Get(&p); err != nil {
+		return nil, err
+	}
+	return p, nil
+}

@@ -55,6 +55,8 @@ type Action struct {
 type Approval struct {
 	Status string `json:"status"`
 	By     string `json:"by,omitempty"`
+	// Note is the approver's reason, kept in the audit log.
+	Note string `json:"note,omitempty"`
 }
 
 // Decision is a policy result.

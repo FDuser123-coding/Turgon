@@ -43,3 +43,27 @@ jobs:
           go run ./cmd/porter compile -c examples eu-distributor-core -o /dev/null
           go run ./cmd/porter compile -c examples shop-orders-to-erp -o /dev/null
           go run ./cmd/porter compile -c examples salesforce-won-deals-to-erp -o /dev/null
+
+  console:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - run: npm ci
+      - run: npm audit --omit=dev
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build porter with the console embedded
+        working-directory: .
+        run: go build -o /tmp/porter ./cmd/porter

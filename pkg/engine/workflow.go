@@ -1,6 +1,8 @@
 package engine
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -115,10 +117,10 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			var approval *policy.Approval
 			if prep.Prepared.NeedsApproval {
 				pending = &PendingApproval{
-					Step: step.Name, Request: prep.Request, Preview: prep.Prepared.Preview,
-					Reasons: prep.Prepared.Decision.Reasons, Since: workflow.Now(ctx),
+					Step: step.Name, Digest: RequestDigest(prep.Request), Request: prep.Request,
+					Preview: prep.Prepared.Preview, Reasons: prep.Prepared.Decision.Reasons, Since: workflow.Now(ctx),
 				}
-				approval = awaitApproval(ctx, approvals, step.Name, timeout)
+				approval = awaitApproval(ctx, approvals, *pending, timeout)
 				pending = nil
 			}
 
@@ -152,9 +154,18 @@ func withOutput(doc map[string]any, field string, result json.RawMessage) map[st
 	return next
 }
 
-// awaitApproval blocks until an approval signal for step arrives or the
-// timeout passes; a timeout is recorded as a rejection.
-func awaitApproval(ctx workflow.Context, ch workflow.ReceiveChannel, step string, timeout time.Duration) *policy.Approval {
+// RequestDigest identifies a write request's exact content.
+func RequestDigest(req writeguard.Request) string {
+	b, _ := json.Marshal(req)
+	sum := sha256.Sum256(b)
+	return hex.EncodeToString(sum[:])
+}
+
+// awaitApproval blocks until a decision for the pending request arrives or
+// the timeout passes; a timeout is recorded as a rejection. Signals for
+// another step or another version of the request are ignored, so a decision
+// sent early, or about a different request, can never approve this one.
+func awaitApproval(ctx workflow.Context, ch workflow.ReceiveChannel, p PendingApproval, timeout time.Duration) *policy.Approval {
 	tctx, cancel := workflow.WithCancel(ctx)
 	defer cancel()
 	timer := workflow.NewTimer(tctx, timeout)
@@ -164,15 +175,16 @@ func awaitApproval(ctx workflow.Context, ch workflow.ReceiveChannel, step string
 		sel.AddReceive(ch, func(c workflow.ReceiveChannel, _ bool) {
 			var sig ApprovalSignal
 			c.Receive(ctx, &sig)
-			if sig.Step != step && sig.Step != "" {
-				workflow.GetLogger(ctx).Warn("ignoring approval for another step", "step", sig.Step, "waiting", step)
+			if sig.Step != p.Step || sig.Digest != p.Digest {
+				workflow.GetLogger(ctx).Warn("ignoring approval that does not match the pending request",
+					"step", sig.Step, "waiting", p.Step, "by", sig.By)
 				return
 			}
 			status := sig.Status
 			if status != policy.ApprovalApproved {
 				status = policy.ApprovalRejected
 			}
-			got = &policy.Approval{Status: status, By: sig.By}
+			got = &policy.Approval{Status: status, By: sig.By, Note: sig.Note}
 		})
 		sel.AddFuture(timer, func(workflow.Future) {
 			got = &policy.Approval{Status: policy.ApprovalRejected, By: "porter/approval-timeout"}

@@ -61,8 +61,11 @@ type WriteRecord struct {
 }
 
 // ApprovalSignal is sent by the console, CLI or a chat integration.
+// It must name the waiting step and echo the pending approval's Digest, so
+// a decision always refers to the exact request the approver was shown.
 type ApprovalSignal struct {
 	Step   string `json:"step"`
+	Digest string `json:"digest"`
 	Status string `json:"status"` // approved or rejected
 	By     string `json:"by"`
 	Note   string `json:"note,omitempty"`
@@ -70,7 +73,9 @@ type ApprovalSignal struct {
 
 // PendingApproval is returned by the pending query while a run waits.
 type PendingApproval struct {
-	Step    string             `json:"step"`
+	Step string `json:"step"`
+	// Digest is the SHA-256 of the request; approvals must echo it.
+	Digest  string             `json:"digest"`
 	Request writeguard.Request `json:"request"`
 	Preview json.RawMessage    `json:"preview,omitempty"`
 	Reasons []string           `json:"reasons,omitempty"`

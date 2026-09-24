@@ -317,7 +317,7 @@ func (g *Guard) Commit(ctx context.Context, req Request, approval *policy.Approv
 
 	in := input(req)
 	if approval != nil {
-		if _, err := g.cfg.Audit.Record(approval.By, "writeback.approval", map[string]any{"target": req.Target, "operation": req.Operation, "key": req.IdempotencyKey, "status": approval.Status}); err != nil {
+		if _, err := g.cfg.Audit.Record(approval.By, "writeback.approval", map[string]any{"target": req.Target, "operation": req.Operation, "key": req.IdempotencyKey, "status": approval.Status, "note": approval.Note}); err != nil {
 			return Outcome{Status: StatusFailed}, err
 		}
 		if approval.Status != policy.ApprovalApproved {
