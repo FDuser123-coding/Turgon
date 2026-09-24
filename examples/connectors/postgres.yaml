@@ -1,0 +1,27 @@
+# A generic connector: its entities, events and operations come from each
+# Connection, but only through the interfaces declared here.
+apiVersion: porter.dev/v1alpha1
+kind: ConnectorManifest
+metadata:
+  name: postgres
+  version: 1.0.0
+spec:
+  system: "PostgreSQL 13-17"
+  runtime: native
+  auth:
+    methods: [password, iam]
+    secretRef: openbao://postgres/default
+  discovery:
+    - kind: jdbc-catalog
+  interfaces:
+    read:
+      - kind: jdbc
+    write:
+      - kind: jdbc
+        simulation: rollback
+    events:
+      - kind: outbox
+      - kind: logical-replication
+  limits:
+    maxConcurrentCalls: 8
+    requestsPerSecond: 200

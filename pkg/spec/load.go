@@ -42,6 +42,8 @@ func Decode(data []byte) (v1alpha1.Object, error) {
 	switch tm.Kind {
 	case v1alpha1.KindConnectorManifest:
 		obj = &v1alpha1.ConnectorManifest{}
+	case v1alpha1.KindConnection:
+		obj = &v1alpha1.Connection{}
 	case v1alpha1.KindRecipe:
 		obj = &v1alpha1.Recipe{}
 	case v1alpha1.KindMapping:

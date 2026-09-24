@@ -2,3 +2,11 @@ bin/
 *.test
 *.out
 /runtime-spec*.json
+/*audit*.jsonl
+/sf.cmds
+/sf.creds
+/sf.json
+node_modules/
+/pkg/console/dist/*
+!/pkg/console/dist/robots.txt
+*.tsbuildinfo

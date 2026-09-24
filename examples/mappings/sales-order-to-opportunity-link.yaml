@@ -1,0 +1,12 @@
+# After the ERP accepts an order, link its number back to the opportunity.
+apiVersion: porter.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: sales-order-to-opportunity-link
+  version: 1.0.0
+spec:
+  from: model.SalesOrder
+  to: model.Opportunity
+  fields:
+    - { target: opportunityId,  expression: "externalId",            origin: human, confidence: 1.0 }
+    - { target: erpOrderNumber, expression: "$string(erpOrder.id)",  origin: human, confidence: 1.0 }

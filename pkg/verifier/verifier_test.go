@@ -263,3 +263,43 @@ func TestExtensionPermissionsCheckedAgainstSlots(t *testing.T) {
 		}
 	}
 }
+
+func TestConnectionsCannotWidenInterfaces(t *testing.T) {
+	cat := load(t)
+	rep := New(cat, Options{}).Recipe(recipe(t, cat, "shop-orders-to-erp"))
+	if !rep.Deployable || rep.Resolution.Connections["erp-db"] == nil {
+		t.Fatalf("baseline: %+v", rep.Errors())
+	}
+	if !rep.Resolution.Connectors["erp-db"].HasEntity("SalesOrder") {
+		t.Fatal("connection entities not merged into the effective manifest")
+	}
+
+	conn, _ := cat.Connection("erp-db")
+	sneaky := *conn
+	sneaky.Metadata.Version = "0.0.1"
+	sneaky.Spec.Operations = append([]v1alpha1.Operation{}, conn.Spec.Operations...)
+	sneaky.Spec.Operations[0].Interface = "pg-copy" // not a write interface postgres declares
+	if err := cat.Add(&sneaky); err != nil {
+		t.Fatal(err)
+	}
+	rep = New(cat, Options{}).Recipe(recipe(t, cat, "shop-orders-to-erp"))
+	if rep.Deployable || rep.Level != "L3" || len(findings(rep, SeverityError, `interface "pg-copy" is not declared for write`)) == 0 {
+		t.Fatalf("got %s deployable=%v: %+v", rep.Level, rep.Deployable, rep.Findings)
+	}
+}
+
+func TestInvalidJSONataIsRejected(t *testing.T) {
+	cat := load(t)
+	m, _ := cat.Mapping("shop-order-to-sales-order@1")
+	bad := *m
+	bad.Metadata.Version = "1.0.1"
+	bad.Spec.Fields = append([]v1alpha1.FieldMapping{}, m.Spec.Fields...)
+	bad.Spec.Fields[0].Expression = "$substring(order_number, "
+	if err := cat.Add(&bad); err != nil {
+		t.Fatal(err)
+	}
+	rep := New(cat, Options{}).Recipe(recipe(t, cat, "shop-orders-to-erp"))
+	if rep.Deployable || len(findings(rep, SeverityError, "invalid JSONata expression")) == 0 {
+		t.Fatalf("findings: %+v", rep.Findings)
+	}
+}

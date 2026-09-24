@@ -38,6 +38,10 @@ const (
 	RuntimeScreen    = "screen"
 	RuntimeWasm      = "wasm"
 	RuntimeContainer = "container"
+	// RuntimeNative connectors are built into the Porter worker. The
+	// prototype's Postgres connector is native; production connectors run
+	// on the worker types above.
+	RuntimeNative = "native"
 )
 
 type ConnectorAuth struct {
@@ -173,7 +177,7 @@ func (c *ConnectorManifest) Validate() FieldErrors {
 	if s.System == "" {
 		es.add("spec.system", "is required")
 	}
-	if !oneOf(s.Runtime, RuntimeCamelJava, RuntimeDebezium, RuntimeFilesEDI, RuntimeScreen, RuntimeWasm, RuntimeContainer) {
+	if !oneOf(s.Runtime, RuntimeCamelJava, RuntimeDebezium, RuntimeFilesEDI, RuntimeScreen, RuntimeWasm, RuntimeContainer, RuntimeNative) {
 		es.add("spec.runtime", "unknown runtime %q", s.Runtime)
 	}
 	if len(s.Auth.Methods) == 0 {
@@ -211,11 +215,15 @@ func (c *ConnectorManifest) Validate() FieldErrors {
 	checkList(DirectionWrite, s.Interfaces.Write)
 	checkList("events", s.Interfaces.Events)
 
+	events := map[string]bool{}
 	for i, ev := range s.Events {
 		path := fmt.Sprintf("spec.events[%d]", i)
 		if ev.Name == "" {
 			es.add(path+".name", "is required")
+		} else if events[ev.Name] {
+			es.add(path+".name", "duplicate event %q", ev.Name)
 		}
+		events[ev.Name] = true
 		if _, err := c.Permitted("events", ev.Interface); err != nil {
 			es.add(path+".interface", "%v", err)
 		}

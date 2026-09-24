@@ -11,6 +11,19 @@ permissions:
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: porter
+          POSTGRES_PASSWORD: porter
+          POSTGRES_DB: porter_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U porter"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      PORTER_TEST_DATABASE_URL: postgres://porter:porter@localhost:5432/porter_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -20,10 +33,37 @@ jobs:
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - name: Vet
         run: go vet ./...
-      - name: Test
+      - name: Test (unit, Postgres integration, Temporal workflow)
         run: go test -race ./...
       - name: Validate, verify and compile the example catalog
         run: |
           go run ./cmd/porter validate examples
           go run ./cmd/porter verify -c examples eu-distributor-core
+          go run ./cmd/porter verify -c examples shop-orders-to-erp
           go run ./cmd/porter compile -c examples eu-distributor-core -o /dev/null
+          go run ./cmd/porter compile -c examples shop-orders-to-erp -o /dev/null
+          go run ./cmd/porter compile -c examples salesforce-won-deals-to-erp -o /dev/null
+
+  console:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - run: npm ci
+      - run: npm audit --omit=dev
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build porter with the console embedded
+        working-directory: .
+        run: go build -o /tmp/porter ./cmd/porter

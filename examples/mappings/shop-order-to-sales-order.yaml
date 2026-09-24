@@ -1,0 +1,19 @@
+apiVersion: porter.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: shop-order-to-sales-order
+  version: 1.0.0
+spec:
+  from: shop-db.Order
+  to: model.SalesOrder
+  fields:
+    - { target: externalId,  expression: "'SHOP-' & $string(order_number)", origin: human,     confidence: 1.0 }
+    - { target: customerRef, expression: "$lowercase(customer.email)",      origin: human,     confidence: 0.99 }
+    - { target: orderDate,   expression: "$substring(created_at, 0, 10)",   origin: certified, confidence: 0.99 }
+    - { target: netValue,    expression: "$number(total)",                  origin: certified, confidence: 0.99 }
+    - { target: currency,    expression: "$uppercase(currency)",            origin: certified, confidence: 0.99 }
+    - target: lines
+      expression: "items.{ 'material': sku, 'quantity': qty }[]"
+      origin: ai
+      confidence: 0.97
+      rationale: "Shop line items carry sku and qty; ERP lines use material and quantity."

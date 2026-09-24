@@ -62,6 +62,10 @@ type ConnectorConfig struct {
 	Prohibited []string        `json:"prohibited,omitempty"`
 	Limits     v1alpha1.Limits `json:"limits"`
 	Metered    bool            `json:"metered,omitempty"`
+	// Connection names the Connection this endpoint was bound through.
+	Connection string `json:"connection,omitempty"`
+	// Config is the connection's connector-specific configuration.
+	Config json.RawMessage `json:"config,omitempty"`
 }
 
 // Topic is an event-backbone topic (rendered as a Strimzi KafkaTopic).
@@ -113,12 +117,14 @@ type WriteConfig struct {
 	Operation      string `json:"operation"`
 	Interface      string `json:"interface"`
 	Risk           string `json:"risk"`
+	Entity         string `json:"entity,omitempty"`
 	IdempotencyKey string `json:"idempotencyKey"`
 	// Simulation is the dry-run mode to use first, or empty for none.
 	Simulation   string `json:"simulation,omitempty"`
 	Approval     string `json:"approval"`
 	Compensation string `json:"compensation"`
 	Metered      bool   `json:"metered,omitempty"`
+	Output       string `json:"output,omitempty"`
 }
 
 // PluginDeployment is a plugin with the capabilities granted to it.
@@ -265,7 +271,7 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 	conns := rep.Resolution.Connectors
 	src := conns[r.Spec.Trigger.Source]
 	ev, _ := src.Event(r.Spec.Trigger.Event)
-	topic := topicName(src.Metadata.Name, ev.Name)
+	topic := topicName(b.endpoint(r.Spec.Trigger.Source), ev.Name)
 	b.connector(r.Spec.Trigger.Source, src, ev.Interface)
 	b.topics[topic] = Topic{Name: topic, Partitions: 3, Entity: ev.Entity}
 
@@ -307,8 +313,8 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 			}
 			wc := &WriteConfig{
 				Endpoint: b.endpoint(w.Target), Connector: m.Metadata.Name, Operation: op.Name,
-				Interface: op.Interface, Risk: op.Risk, IdempotencyKey: w.IdempotencyKey,
-				Approval: approval, Compensation: comp, Metered: m.Spec.Metering.SAPDigitalAccess,
+				Interface: op.Interface, Risk: op.Risk, Entity: op.Entity, IdempotencyKey: w.IdempotencyKey,
+				Approval: approval, Compensation: comp, Metered: m.Spec.Metering.SAPDigitalAccess, Output: w.Output,
 			}
 			if w.Simulate {
 				wc.Simulation = iface.Simulation
@@ -318,6 +324,11 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 			b.tool(b.endpoint(w.Target), op.Name, op.Entity, op.Risk, fmt.Sprintf("%s via %s", humanize(op.Name), w.Target))
 		}
 		wf.Steps = append(wf.Steps, step)
+	}
+	for ep, conn := range rep.Resolution.Connections {
+		if c := b.connectors[b.endpoint(ep)]; c != nil {
+			c.Connection, c.Config = conn.Metadata.Name, conn.Spec.Config
+		}
 	}
 	b.body.Workflows = append(b.body.Workflows, wf)
 	if r.Spec.SLO != nil && r.Spec.SLO.P95Latency != "" {

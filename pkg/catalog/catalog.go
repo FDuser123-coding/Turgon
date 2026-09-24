@@ -113,6 +113,15 @@ func (c *Catalog) Connector(name, constraint string) (*v1alpha1.ConnectorManifes
 	return o.(*v1alpha1.ConnectorManifest), nil
 }
 
+// Connection resolves a connection by name.
+func (c *Catalog) Connection(name string) (*v1alpha1.Connection, error) {
+	o, err := c.Resolve(v1alpha1.KindConnection, name, "")
+	if err != nil {
+		return nil, err
+	}
+	return o.(*v1alpha1.Connection), nil
+}
+
 // Mapping resolves a mapping reference.
 func (c *Catalog) Mapping(ref string) (*v1alpha1.Mapping, error) {
 	o, err := c.ResolveRef(v1alpha1.KindMapping, ref)
