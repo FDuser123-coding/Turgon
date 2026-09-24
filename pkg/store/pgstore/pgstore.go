@@ -1,4 +1,4 @@
-// Package pgstore keeps Porter's operational state in Postgres (architecture
+// Package pgstore keeps Turgon's operational state in Postgres (architecture
 // §7.6, "Metadata Postgres"): the write guard's idempotency records, event
 // source cursors and the identity cross-reference that links a master
 // record to its IDs in every system.
@@ -18,11 +18,24 @@ import (
 )
 
 // schema is applied idempotently by Migrate into the connection's
-// search_path (production sets search_path=porter). Migrations follow
+// search_path (production sets search_path=turgon). Migrations follow
 // expand-then-contract (architecture §11): only additive statements here.
 const schema = `
+-- Turgon was called Porter while it was prototyped: rename a state
+-- database created under the old table names, keeping its contents.
+DO $$
+DECLARE t text;
+BEGIN
+	FOREACH t IN ARRAY ARRAY['writes', 'cursors', 'xref', 'audit'] LOOP
+		IF to_regclass('porter_' || t) IS NOT NULL AND to_regclass('turgon_' || t) IS NULL THEN
+			EXECUTE format('ALTER TABLE %I RENAME TO %I', 'porter_' || t, 'turgon_' || t);
+		END IF;
+	END LOOP;
+END $$;
+-- The old audit triggers go with their function; auditSchema adds the new ones.
+DROP FUNCTION IF EXISTS porter_audit_append_only() CASCADE;
 
-CREATE TABLE IF NOT EXISTS porter_writes (
+CREATE TABLE IF NOT EXISTS turgon_writes (
 	key        text PRIMARY KEY,
 	status     text NOT NULL CHECK (status IN ('inflight', 'done')),
 	outcome    jsonb,
@@ -30,13 +43,13 @@ CREATE TABLE IF NOT EXISTS porter_writes (
 	done_at    timestamptz
 );
 
-CREATE TABLE IF NOT EXISTS porter_cursors (
+CREATE TABLE IF NOT EXISTS turgon_cursors (
 	name       text PRIMARY KEY,
 	position   bigint NOT NULL,
 	updated_at timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE TABLE IF NOT EXISTS porter_xref (
+CREATE TABLE IF NOT EXISTS turgon_xref (
 	entity    text NOT NULL,
 	system    text NOT NULL,
 	source_id text NOT NULL,
@@ -45,7 +58,7 @@ CREATE TABLE IF NOT EXISTS porter_xref (
 );
 `
 
-// Migrate creates or upgrades Porter's schema.
+// Migrate creates or upgrades Turgon's schema.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 	// Serialize concurrent migrations from replicas starting together.
 	return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
@@ -87,10 +100,10 @@ func (s *Store) Begin(key string) (*writeguard.Outcome, error) {
 	defer cancel()
 	var claimed bool
 	err := s.pool.QueryRow(ctx, `
-		INSERT INTO porter_writes (key, status, claimed_at) VALUES ($1, 'inflight', now())
+		INSERT INTO turgon_writes (key, status, claimed_at) VALUES ($1, 'inflight', now())
 		ON CONFLICT (key) DO UPDATE SET claimed_at = now()
-			WHERE porter_writes.status = 'inflight'
-			  AND porter_writes.claimed_at < now() - make_interval(secs => $2)
+			WHERE turgon_writes.status = 'inflight'
+			  AND turgon_writes.claimed_at < now() - make_interval(secs => $2)
 		RETURNING true`, key, s.Lease.Seconds()).Scan(&claimed)
 	if err == nil {
 		return nil, nil
@@ -117,7 +130,7 @@ func (s *Store) Lookup(key string) (*writeguard.Outcome, error) {
 
 func (s *Store) lookup(ctx context.Context, key string) (*writeguard.Outcome, error) {
 	var raw []byte
-	err := s.pool.QueryRow(ctx, `SELECT outcome FROM porter_writes WHERE key = $1 AND status = 'done'`, key).Scan(&raw)
+	err := s.pool.QueryRow(ctx, `SELECT outcome FROM turgon_writes WHERE key = $1 AND status = 'done'`, key).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -140,7 +153,7 @@ func (s *Store) Complete(key string, out writeguard.Outcome) error {
 	ctx, cancel := s.ctx()
 	defer cancel()
 	_, err = s.pool.Exec(ctx, `
-		INSERT INTO porter_writes (key, status, outcome, done_at) VALUES ($1, 'done', $2, now())
+		INSERT INTO turgon_writes (key, status, outcome, done_at) VALUES ($1, 'done', $2, now())
 		ON CONFLICT (key) DO UPDATE SET status = 'done', outcome = $2, done_at = now()`, key, raw)
 	return err
 }
@@ -149,14 +162,14 @@ func (s *Store) Complete(key string, out writeguard.Outcome) error {
 func (s *Store) Abort(key string) error {
 	ctx, cancel := s.ctx()
 	defer cancel()
-	_, err := s.pool.Exec(ctx, `DELETE FROM porter_writes WHERE key = $1 AND status = 'inflight'`, key)
+	_, err := s.pool.Exec(ctx, `DELETE FROM turgon_writes WHERE key = $1 AND status = 'inflight'`, key)
 	return err
 }
 
 // Cursor returns a named source position, or 0 if none is stored.
 func (s *Store) Cursor(ctx context.Context, name string) (int64, error) {
 	var pos int64
-	err := s.pool.QueryRow(ctx, `SELECT position FROM porter_cursors WHERE name = $1`, name).Scan(&pos)
+	err := s.pool.QueryRow(ctx, `SELECT position FROM turgon_cursors WHERE name = $1`, name).Scan(&pos)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil
 	}
@@ -166,15 +179,15 @@ func (s *Store) Cursor(ctx context.Context, name string) (int64, error) {
 // SetCursor stores a source position. Positions only move forward.
 func (s *Store) SetCursor(ctx context.Context, name string, pos int64) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO porter_cursors (name, position) VALUES ($1, $2)
-		ON CONFLICT (name) DO UPDATE SET position = GREATEST(porter_cursors.position, $2), updated_at = now()`, name, pos)
+		INSERT INTO turgon_cursors (name, position) VALUES ($1, $2)
+		ON CONFLICT (name) DO UPDATE SET position = GREATEST(turgon_cursors.position, $2), updated_at = now()`, name, pos)
 	return err
 }
 
 // Xref looks up the master ID for a record in a source system.
 func (s *Store) Xref(ctx context.Context, entity, system, sourceID string) (string, bool, error) {
 	var master string
-	err := s.pool.QueryRow(ctx, `SELECT master_id FROM porter_xref WHERE entity = $1 AND system = $2 AND source_id = $3`,
+	err := s.pool.QueryRow(ctx, `SELECT master_id FROM turgon_xref WHERE entity = $1 AND system = $2 AND source_id = $3`,
 		entity, system, sourceID).Scan(&master)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
@@ -185,7 +198,7 @@ func (s *Store) Xref(ctx context.Context, entity, system, sourceID string) (stri
 // PutXref links a source record to a master ID.
 func (s *Store) PutXref(ctx context.Context, entity, system, sourceID, masterID string) error {
 	_, err := s.pool.Exec(ctx, `
-		INSERT INTO porter_xref (entity, system, source_id, master_id) VALUES ($1, $2, $3, $4)
+		INSERT INTO turgon_xref (entity, system, source_id, master_id) VALUES ($1, $2, $3, $4)
 		ON CONFLICT (entity, system, source_id) DO UPDATE SET master_id = $4`, entity, system, sourceID, masterID)
 	return err
 }

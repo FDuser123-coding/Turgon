@@ -6,26 +6,26 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "porter.fullname" . }}-console
+  name: {{ include "turgon.fullname" . }}-console
   labels:
-    {{- include "porter.labels" . | nindent 4 }}
+    {{- include "turgon.labels" . | nindent 4 }}
     app.kubernetes.io/component: console
 spec:
   replicas: {{ .Values.console.replicas }}
   selector:
     matchLabels:
-      {{- include "porter.selector" . | nindent 6 }}
+      {{- include "turgon.selector" . | nindent 6 }}
       app.kubernetes.io/component: console
   template:
     metadata:
       labels:
-        {{- include "porter.selector" . | nindent 8 }}
+        {{- include "turgon.selector" . | nindent 8 }}
         app.kubernetes.io/component: console
     spec:
-      {{- include "porter.podSettings" . | nindent 6 }}
+      {{- include "turgon.podSettings" . | nindent 6 }}
       containers:
         - name: console
-          image: {{ include "porter.image" . }}
+          image: {{ include "turgon.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
             - console
@@ -41,7 +41,7 @@ spec:
             - --catalog=/catalog
             {{- end }}
           env:
-            {{- include "porter.commonEnv" . | nindent 12 }}
+            {{- include "turgon.commonEnv" . | nindent 12 }}
           ports:
             - name: http
               containerPort: 8080
@@ -72,14 +72,14 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "porter.fullname" . }}-console
+  name: {{ include "turgon.fullname" . }}-console
   labels:
-    {{- include "porter.labels" . | nindent 4 }}
+    {{- include "turgon.labels" . | nindent 4 }}
     app.kubernetes.io/component: console
 spec:
   type: {{ .Values.console.service.type }}
   selector:
-    {{- include "porter.selector" . | nindent 4 }}
+    {{- include "turgon.selector" . | nindent 4 }}
     app.kubernetes.io/component: console
   ports:
     - name: http
@@ -90,9 +90,9 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "porter.fullname" . }}-console
+  name: {{ include "turgon.fullname" . }}-console
   labels:
-    {{- include "porter.labels" . | nindent 4 }}
+    {{- include "turgon.labels" . | nindent 4 }}
   {{- with .Values.console.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -113,7 +113,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "porter.fullname" . }}-console
+                name: {{ include "turgon.fullname" . }}-console
                 port: { name: http }
 {{- end }}
 {{- end }}

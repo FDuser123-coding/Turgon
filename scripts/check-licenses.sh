@@ -22,7 +22,7 @@ check() { # source name license
   fail=1
 }
 
-# Go modules compiled into porter (our own module is excluded).
+# Go modules compiled into turgon (our own module is excluded).
 command -v go-licenses >/dev/null || { echo "install: go install github.com/google/go-licenses/v2@latest"; exit 2; }
 while IFS=, read -r module _ license; do
   check go "$module" "$license"

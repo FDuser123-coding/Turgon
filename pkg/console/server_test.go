@@ -63,7 +63,7 @@ func newRuns() *fakeRuns {
 }
 
 func proxyAuth() ProxyAuth {
-	return ProxyAuth{Trusted: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, ApproverGroup: "porter-approvers"}
+	return ProxyAuth{Trusted: []netip.Prefix{netip.MustParsePrefix("10.0.0.0/8")}, ApproverGroup: "turgon-approvers"}
 }
 
 func do(t *testing.T, s *Server, method, path, body string, hdr map[string]string) *httptest.ResponseRecorder {
@@ -96,7 +96,7 @@ func TestAuthentication(t *testing.T) {
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("spoofed header accepted: %d", rec.Code)
 	}
-	rec = do(t, s, "GET", "/api/me", "", as("bob@example.com", "sales, porter-approvers"))
+	rec = do(t, s, "GET", "/api/me", "", as("bob@example.com", "sales, turgon-approvers"))
 	var u User
 	_ = json.Unmarshal(rec.Body.Bytes(), &u)
 	if rec.Code != 200 || u.ID != "bob@example.com" || !u.Has(RoleApprover) {
@@ -119,11 +119,11 @@ func TestDecisions(t *testing.T) {
 		code int
 	}{
 		{"viewer cannot approve", approve, as("vera@example.com", "sales"), http.StatusForbidden},
-		{"form posts are refused", approve, map[string]string{"X-Auth-Request-Email": "bob@example.com", "X-Auth-Request-Groups": "porter-approvers", "Content-Type": "application/x-www-form-urlencoded"}, http.StatusForbidden},
-		{"cross-origin is refused", approve, map[string]string{"X-Auth-Request-Email": "bob@example.com", "X-Auth-Request-Groups": "porter-approvers", "Content-Type": "application/json", "Origin": "https://evil.example"}, http.StatusForbidden},
-		{"stale digest conflicts", strings.Replace(approve, "abc123", "old", 1), as("bob@example.com", "porter-approvers"), http.StatusConflict},
-		{"unknown fields rejected", strings.Replace(approve, `"note"`, `"by":"ceo","note"`, 1), as("bob@example.com", "porter-approvers"), http.StatusBadRequest},
-		{"no self-approval", `{"runId":"agent-orders/1","step":"01-write","digest":"def456","decision":"approve"}`, as("alice@example.com", "porter-approvers"), http.StatusForbidden},
+		{"form posts are refused", approve, map[string]string{"X-Auth-Request-Email": "bob@example.com", "X-Auth-Request-Groups": "turgon-approvers", "Content-Type": "application/x-www-form-urlencoded"}, http.StatusForbidden},
+		{"cross-origin is refused", approve, map[string]string{"X-Auth-Request-Email": "bob@example.com", "X-Auth-Request-Groups": "turgon-approvers", "Content-Type": "application/json", "Origin": "https://evil.example"}, http.StatusForbidden},
+		{"stale digest conflicts", strings.Replace(approve, "abc123", "old", 1), as("bob@example.com", "turgon-approvers"), http.StatusConflict},
+		{"unknown fields rejected", strings.Replace(approve, `"note"`, `"by":"ceo","note"`, 1), as("bob@example.com", "turgon-approvers"), http.StatusBadRequest},
+		{"no self-approval", `{"runId":"agent-orders/1","step":"01-write","digest":"def456","decision":"approve"}`, as("alice@example.com", "turgon-approvers"), http.StatusForbidden},
 	}
 	for _, c := range cases {
 		if rec := do(t, s, "POST", "/api/decisions", c.body, c.hdr); rec.Code != c.code {
@@ -134,7 +134,7 @@ func TestDecisions(t *testing.T) {
 		t.Fatalf("signals sent by refused requests: %+v", runs.signals)
 	}
 
-	rec := do(t, s, "POST", "/api/decisions", approve, as("bob@example.com", "porter-approvers"))
+	rec := do(t, s, "POST", "/api/decisions", approve, as("bob@example.com", "turgon-approvers"))
 	if rec.Code != 200 || len(runs.signals) != 1 {
 		t.Fatalf("approve: %d %s", rec.Code, rec.Body)
 	}
@@ -142,7 +142,7 @@ func TestDecisions(t *testing.T) {
 	if sig := runs.signals[0]; sig.By != "bob@example.com" || sig.Status != "approved" || sig.Digest != "abc123" || sig.Note != "ok" {
 		t.Fatalf("signal = %+v", sig)
 	}
-	if rec := do(t, s, "POST", "/api/decisions", approve, as("bob@example.com", "porter-approvers")); rec.Code != http.StatusConflict {
+	if rec := do(t, s, "POST", "/api/decisions", approve, as("bob@example.com", "turgon-approvers")); rec.Code != http.StatusConflict {
 		t.Fatalf("double decision: %d", rec.Code)
 	}
 }
@@ -170,7 +170,7 @@ func TestAuditEndpointReportsTampering(t *testing.T) {
 		var buf bytes.Buffer
 		l := audit.New(&buf)
 		for i := 0; i < 3; i++ {
-			_, _ = l.Record("porter", "writeback.committed", map[string]int{"n": i})
+			_, _ = l.Record("turgon", "writeback.committed", map[string]int{"n": i})
 		}
 		data := buf.Bytes()
 		if p == bad {

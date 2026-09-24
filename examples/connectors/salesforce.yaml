@@ -1,4 +1,4 @@
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: ConnectorManifest
 metadata:
   name: salesforce
@@ -53,4 +53,4 @@ spec:
     maxConcurrentCalls: 10
     requestsPerSecond: 20
   semanticBindings:
-    - template: ossie://porter/distribution/customer@1
+    - template: ossie://turgon/distribution/customer@1

@@ -1,5 +1,5 @@
 # A custom ERP that keeps sales orders in Postgres.
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: Connection
 metadata: { name: erp-db }
 spec:

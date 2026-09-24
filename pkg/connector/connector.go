@@ -53,7 +53,7 @@ type Factory func(ctx context.Context, cfg compiler.ConnectorConfig, secrets Sec
 type Registry map[string]Factory
 
 // EnvSecrets resolves references from environment variables, for
-// development and CI: "openbao://shop-db/dsn" reads PORTER_SECRET_SHOP_DB_DSN.
+// development and CI: "openbao://shop-db/dsn" reads TURGON_SECRET_SHOP_DB_DSN.
 // Production resolves references against OpenBao or a cloud secret manager.
 type EnvSecrets struct{}
 
@@ -63,7 +63,7 @@ func EnvName(ref string) string {
 		ref = ref[i+3:]
 	}
 	var b strings.Builder
-	b.WriteString("PORTER_SECRET_")
+	b.WriteString("TURGON_SECRET_")
 	for _, r := range ref {
 		if unicode.IsLetter(r) || unicode.IsDigit(r) {
 			b.WriteRune(unicode.ToUpper(r))

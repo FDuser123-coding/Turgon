@@ -18,7 +18,7 @@ import (
 // make the table append-only; the hash chain still detects tampering by
 // anyone able to disable them.
 const auditSchema = `
-CREATE TABLE IF NOT EXISTS porter_audit (
+CREATE TABLE IF NOT EXISTS turgon_audit (
 	seq    bigint PRIMARY KEY,
 	time   timestamptz NOT NULL,
 	actor  text NOT NULL,
@@ -26,17 +26,17 @@ CREATE TABLE IF NOT EXISTS porter_audit (
 	line   text NOT NULL
 );
 
-CREATE OR REPLACE FUNCTION porter_audit_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
+CREATE OR REPLACE FUNCTION turgon_audit_append_only() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
-	RAISE EXCEPTION 'porter_audit is append-only';
+	RAISE EXCEPTION 'turgon_audit is append-only';
 END $$;
 
-DROP TRIGGER IF EXISTS porter_audit_no_change ON porter_audit;
-CREATE TRIGGER porter_audit_no_change BEFORE UPDATE OR DELETE ON porter_audit
-	FOR EACH ROW EXECUTE FUNCTION porter_audit_append_only();
-DROP TRIGGER IF EXISTS porter_audit_no_truncate ON porter_audit;
-CREATE TRIGGER porter_audit_no_truncate BEFORE TRUNCATE ON porter_audit
-	FOR EACH STATEMENT EXECUTE FUNCTION porter_audit_append_only();
+DROP TRIGGER IF EXISTS turgon_audit_no_change ON turgon_audit;
+CREATE TRIGGER turgon_audit_no_change BEFORE UPDATE OR DELETE ON turgon_audit
+	FOR EACH ROW EXECUTE FUNCTION turgon_audit_append_only();
+DROP TRIGGER IF EXISTS turgon_audit_no_truncate ON turgon_audit;
+CREATE TRIGGER turgon_audit_no_truncate BEFORE TRUNCATE ON turgon_audit
+	FOR EACH STATEMENT EXECUTE FUNCTION turgon_audit_append_only();
 `
 
 // AuditLog is a hash-chained audit log in Postgres, shared by every worker
@@ -55,7 +55,7 @@ func NewAuditLog(pool *pgxpool.Pool) *AuditLog {
 var _ audit.Recorder = (*AuditLog)(nil)
 
 // auditLockKey is an arbitrary constant naming the advisory lock.
-const auditLockKey = 0x706f72746572 // "porter"
+const auditLockKey = 0x706f72746572 // "porter" in ASCII, kept so old and new binaries share the lock
 
 // Record appends an entry.
 func (a *AuditLog) Record(actor, action string, data any) (audit.Entry, error) {
@@ -72,7 +72,7 @@ func (a *AuditLog) Record(actor, action string, data any) (audit.Entry, error) {
 		}
 		seq, prev := uint64(0), audit.Genesis
 		var line string
-		err := tx.QueryRow(ctx, `SELECT line FROM porter_audit ORDER BY seq DESC LIMIT 1`).Scan(&line)
+		err := tx.QueryRow(ctx, `SELECT line FROM turgon_audit ORDER BY seq DESC LIMIT 1`).Scan(&line)
 		switch {
 		case errors.Is(err, pgx.ErrNoRows):
 		case err != nil:
@@ -89,7 +89,7 @@ func (a *AuditLog) Record(actor, action string, data any) (audit.Entry, error) {
 		if err != nil {
 			return err
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO porter_audit (seq, time, actor, action, line) VALUES ($1, $2, $3, $4, $5)`,
+		_, err = tx.Exec(ctx, `INSERT INTO turgon_audit (seq, time, actor, action, line) VALUES ($1, $2, $3, $4, $5)`,
 			int64(e.Seq), e.Time, e.Actor, e.Action, string(b))
 		return err
 	})
@@ -101,7 +101,7 @@ func (a *AuditLog) Record(actor, action string, data any) (audit.Entry, error) {
 
 // Verify checks the whole chain and returns the last entry, or nil if empty.
 func (a *AuditLog) Verify(ctx context.Context) (*audit.Entry, error) {
-	rows, err := a.pool.Query(ctx, `SELECT seq, line FROM porter_audit ORDER BY seq`)
+	rows, err := a.pool.Query(ctx, `SELECT seq, line FROM turgon_audit ORDER BY seq`)
 	if err != nil {
 		return nil, err
 	}
@@ -132,7 +132,7 @@ func (a *AuditLog) Verify(ctx context.Context) (*audit.Entry, error) {
 
 // Tail returns the newest entries, newest first.
 func (a *AuditLog) Tail(ctx context.Context, limit int) ([]audit.Entry, error) {
-	rows, err := a.pool.Query(ctx, `SELECT line FROM porter_audit ORDER BY seq DESC LIMIT $1`, limit)
+	rows, err := a.pool.Query(ctx, `SELECT line FROM turgon_audit ORDER BY seq DESC LIMIT $1`, limit)
 	if err != nil {
 		return nil, err
 	}

@@ -84,7 +84,7 @@ const (
 type PluginSpec struct {
 	Type    string `json:"type"`
 	Runtime string `json:"runtime"`
-	// World is the WIT world a Wasm component targets, e.g. porter:stack/logic-plugin@0.1.0.
+	// World is the WIT world a Wasm component targets, e.g. turgon:stack/logic-plugin@0.1.0.
 	World string `json:"world,omitempty"`
 	// Implements lists slot contracts a connector plugin satisfies, e.g. ["erp@1"].
 	Implements []string `json:"implements,omitempty"`

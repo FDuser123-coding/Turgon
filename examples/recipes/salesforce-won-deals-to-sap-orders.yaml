@@ -1,5 +1,5 @@
 # Appendix B.
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: Recipe
 metadata:
   name: salesforce-won-deals-to-sap-orders

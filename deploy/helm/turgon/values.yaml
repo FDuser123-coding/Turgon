@@ -1,8 +1,8 @@
-# Porter data plane. Everything runs namespace-scoped: no cluster roles, no
+# Turgon data plane. Everything runs namespace-scoped: no cluster roles, no
 # service-account tokens, the Kubernetes "restricted" pod security profile.
 
 image:
-  repository: ghcr.io/fduser123-coding/porter
+  repository: ghcr.io/fduser123-coding/turgon
   tag: ""            # defaults to the chart's appVersion
   pullPolicy: IfNotPresent
 imagePullSecrets: []
@@ -12,7 +12,7 @@ temporal:
   address: temporal-frontend:7233
   namespace: default
 
-# Porter's own state: idempotency records, cursors, cross-references and the
+# Turgon's own state: idempotency records, cursors, cross-references and the
 # shared audit log. Use an existing database, or let the chart create a
 # CloudNativePG cluster (the operator must be installed).
 database:
@@ -35,7 +35,7 @@ workers:
   pollInterval: 2s
   approvalTimeout: 72h
   # Secrets whose keys become environment variables. Connection secrets are
-  # read from PORTER_SECRET_* variables (see `porter secrets <spec>`).
+  # read from TURGON_SECRET_* variables (see `turgon secrets <spec>`).
   secretEnvFrom: []
   resources:
     requests: { cpu: 100m, memory: 128Mi }
@@ -69,7 +69,7 @@ console:
 # Tools for AI agents over MCP, behind agentgateway (architecture §7.7).
 # Agents present a JWT from your identity provider; the gateway passes the
 # agent, the user it acts for and its roles to Turgon, and lists and allows
-# only the tools those roles may use. Each spec's `porter mcp` runs in the
+# only the tools those roles may use. Each spec's `turgon mcp` runs in the
 # gateway's pod on loopback.
 agents:
   enabled: false
@@ -79,7 +79,7 @@ agents:
   gateway:
     image:
       repository: ghcr.io/agentgateway/agentgateway
-      tag: v1.5.0          # the version `porter gateway-config` targets
+      tag: v1.5.0          # the version `turgon gateway-config` targets
       pullPolicy: IfNotPresent
     replicas: 1
     issuer: ""             # required: issuer of agents' access tokens

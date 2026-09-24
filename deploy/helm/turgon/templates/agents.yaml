@@ -1,43 +1,43 @@
 {{- if .Values.agents.enabled }}
 {{- $g := .Values.agents.gateway }}
-{{- $names := include "porter.agentSpecs" . | fromJsonArray }}
+{{- $names := include "turgon.agentSpecs" . | fromJsonArray }}
 {{- if not $names }}
 {{- fail "agents.enabled needs at least one spec in specs (and agents.specs, if set)" }}
 {{- end }}
 ---
 # The agent gateway: agentgateway authenticates agents with JWTs from your
-# identity provider and fronts one `porter mcp` per spec. The MCP servers
+# identity provider and fronts one `turgon mcp` per spec. The MCP servers
 # run in the same pod and listen on loopback only, so nothing but the
 # gateway can reach them or set the identity headers they trust.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: {{ include "porter.fullname" . }}-agents
+  name: {{ include "turgon.fullname" . }}-agents
   labels:
-    {{- include "porter.labels" . | nindent 4 }}
+    {{- include "turgon.labels" . | nindent 4 }}
     app.kubernetes.io/component: agents
 spec:
   replicas: {{ $g.replicas }}
   selector:
     matchLabels:
-      {{- include "porter.selector" . | nindent 6 }}
+      {{- include "turgon.selector" . | nindent 6 }}
       app.kubernetes.io/component: agents
   template:
     metadata:
       labels:
-        {{- include "porter.selector" . | nindent 8 }}
+        {{- include "turgon.selector" . | nindent 8 }}
         app.kubernetes.io/component: agents
       annotations:
-        porter.dev/specs-checksum: {{ .Values.specs | toJson | sha256sum }}
-        porter.dev/agents-checksum: {{ .Values.agents | toJson | sha256sum }}
+        turgon.dev/specs-checksum: {{ .Values.specs | toJson | sha256sum }}
+        turgon.dev/agents-checksum: {{ .Values.agents | toJson | sha256sum }}
     spec:
-      {{- include "porter.podSettings" . | nindent 6 }}
+      {{- include "turgon.podSettings" . | nindent 6 }}
       initContainers:
         - name: gateway-config
-          image: {{ include "porter.image" . }}
+          image: {{ include "turgon.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           args:
-            {{- include "porter.gatewayConfigArgs" . | nindent 12 }}
+            {{- include "turgon.gatewayConfigArgs" . | nindent 12 }}
             - --output=/config/config.yaml
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
@@ -64,7 +64,7 @@ spec:
             - { name: tmp, mountPath: /tmp }
         {{- range $i, $name := $names }}
         - name: mcp-{{ $name }}
-          image: {{ include "porter.image" $ }}
+          image: {{ include "turgon.image" $ }}
           imagePullPolicy: {{ $.Values.image.pullPolicy }}
           args:
             - mcp
@@ -79,7 +79,7 @@ spec:
             - --approval-timeout={{ $.Values.workers.approvalTimeout }}
             {{- end }}
           env:
-            {{- include "porter.commonEnv" $ | nindent 12 }}
+            {{- include "turgon.commonEnv" $ | nindent 12 }}
           {{- with $.Values.workers.secretEnvFrom }}
           envFrom:
             {{- range . }}
@@ -98,7 +98,7 @@ spec:
       volumes:
         - name: specs
           configMap:
-            name: {{ include "porter.fullname" . }}-specs
+            name: {{ include "turgon.fullname" . }}-specs
         - name: config
           emptyDir: { sizeLimit: 1Mi }
         - name: tmp
@@ -107,14 +107,14 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: {{ include "porter.fullname" . }}-agents
+  name: {{ include "turgon.fullname" . }}-agents
   labels:
-    {{- include "porter.labels" . | nindent 4 }}
+    {{- include "turgon.labels" . | nindent 4 }}
     app.kubernetes.io/component: agents
 spec:
   type: {{ $g.service.type }}
   selector:
-    {{- include "porter.selector" . | nindent 4 }}
+    {{- include "turgon.selector" . | nindent 4 }}
     app.kubernetes.io/component: agents
   ports:
     - { name: mcp, port: {{ $g.service.port }}, targetPort: mcp }
@@ -123,9 +123,9 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
-  name: {{ include "porter.fullname" . }}-agents
+  name: {{ include "turgon.fullname" . }}-agents
   labels:
-    {{- include "porter.labels" . | nindent 4 }}
+    {{- include "turgon.labels" . | nindent 4 }}
   {{- with $g.ingress.annotations }}
   annotations:
     {{- toYaml . | nindent 4 }}
@@ -146,7 +146,7 @@ spec:
             pathType: Prefix
             backend:
               service:
-                name: {{ include "porter.fullname" . }}-agents
+                name: {{ include "turgon.fullname" . }}-agents
                 port: { name: mcp }
 {{- end }}
 {{- end }}

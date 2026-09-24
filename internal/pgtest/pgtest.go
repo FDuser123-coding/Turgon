@@ -1,5 +1,5 @@
 // Package pgtest gives integration tests an isolated Postgres schema.
-// Tests are skipped unless PORTER_TEST_DATABASE_URL is set.
+// Tests are skipped unless TURGON_TEST_DATABASE_URL is set.
 package pgtest
 
 import (
@@ -19,9 +19,9 @@ var counter atomic.Int64
 // end of the test, plus that schema's name.
 func Pool(t *testing.T) (*pgxpool.Pool, string) {
 	t.Helper()
-	url := os.Getenv("PORTER_TEST_DATABASE_URL")
+	url := os.Getenv("TURGON_TEST_DATABASE_URL")
 	if url == "" {
-		t.Skip("PORTER_TEST_DATABASE_URL not set; skipping Postgres integration test")
+		t.Skip("TURGON_TEST_DATABASE_URL not set; skipping Postgres integration test")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -53,7 +53,7 @@ func Pool(t *testing.T) (*pgxpool.Pool, string) {
 // URL returns the test database URL with search_path set to schema.
 func URL(t *testing.T, schema string) string {
 	t.Helper()
-	url := os.Getenv("PORTER_TEST_DATABASE_URL")
+	url := os.Getenv("TURGON_TEST_DATABASE_URL")
 	sep := "?"
 	for _, c := range url {
 		if c == '?' {

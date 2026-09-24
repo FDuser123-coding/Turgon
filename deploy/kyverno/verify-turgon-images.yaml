@@ -1,24 +1,24 @@
-# Admission-time verification (architecture §9): Kyverno admits Porter pods
+# Admission-time verification (architecture §9): Kyverno admits Turgon pods
 # only if their image was signed by this repository's release workflow and
 # carries a signed SBOM. Namespaced, like the rest of the install.
 apiVersion: kyverno.io/v1
 kind: Policy
 metadata:
-  name: porter-signed-images
+  name: turgon-signed-images
   namespace: integrations
 spec:
   validationFailureAction: Enforce
   background: false
   webhookTimeoutSeconds: 30
   rules:
-    - name: porter-images-are-signed
+    - name: turgon-images-are-signed
       match:
         any:
           - resources:
               kinds: [Pod]
       verifyImages:
         - imageReferences:
-            - "ghcr.io/fduser123-coding/porter*"
+            - "ghcr.io/fduser123-coding/turgon*"
           mutateDigest: true      # pin the verified digest
           verifyDigest: true
           required: true

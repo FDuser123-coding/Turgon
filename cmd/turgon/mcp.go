@@ -33,7 +33,7 @@ func mcpCmd() *cobra.Command {
 			"With --auth gateway, run it behind the agent gateway, which authenticates agents and sets\n" +
 			"X-Agent-Id, X-On-Behalf-Of and X-Agent-Roles; those are trusted only from --trusted-gateway\n" +
 			"addresses. Reads need the integration-reader or integration-operator role and are audited.\n\n" +
-			"With --writes, write tools start governed writes on Temporal, run by `porter run` workers\n" +
+			"With --writes, write tools start governed writes on Temporal, run by `turgon run` workers\n" +
 			"for the same spec. Agents need the integration-operator role to write, and high-risk\n" +
 			"writes wait for a person to approve them in the console.\n\n" +
 			"The same server is an A2A agent at /a2a (agent card at /a2a/.well-known/agent-card.json):\n" +
@@ -71,7 +71,7 @@ func mcpCmd() *cobra.Command {
 			var rec audit.Recorder
 			if auditPath == "postgres" {
 				if dbURL == "" {
-					return errors.New(`--audit-log postgres needs --database-url (or PORTER_DATABASE_URL)`)
+					return errors.New(`--audit-log postgres needs --database-url (or TURGON_DATABASE_URL)`)
 				}
 				pool, err := pgxpool.New(ctx, dbURL)
 				if err != nil {
@@ -126,7 +126,7 @@ func mcpCmd() *cobra.Command {
 	cmd.Flags().StringVar(&devAgent, "dev-agent", "", "agent identity for --auth dev")
 	cmd.Flags().StringVar(&devUser, "dev-user", os.Getenv("USER"), "user the dev agent acts for")
 	cmd.Flags().StringVar(&devRoles, "dev-roles", "integration-reader", "roles for --auth dev, comma-separated")
-	cmd.Flags().StringVar(&dbURL, "database-url", os.Getenv("PORTER_DATABASE_URL"), "Postgres URL for the audit log")
+	cmd.Flags().StringVar(&dbURL, "database-url", os.Getenv("TURGON_DATABASE_URL"), "Postgres URL for the audit log")
 	cmd.Flags().StringVar(&auditPath, "audit-log", "postgres", `audit log: "postgres" or a file path`)
 	cmd.Flags().StringVar(&a2aURL, "a2a-url", "", "public URL of the A2A endpoint, for the agent card (default: from the request)")
 	cmd.Flags().BoolVar(&writes, "writes", false, "serve write tools, run as governed writes on Temporal")

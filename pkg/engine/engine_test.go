@@ -470,7 +470,7 @@ func TestPolicyDenialStopsBeforeAnyoneIsAsked(t *testing.T) {
 	// Rebuild the runtime with a freeze pack added to the recipe's policies.
 	spec := *f.rt.Spec
 	spec.Spec.Policies = append(append([]compiler.PolicyRef{}, spec.Spec.Policies...), compiler.PolicyRef{
-		Name: "erp-freeze", Rego: "package porter.writeback\ndeny contains \"ERP writes are frozen for the year-end close\" if input.recipe == \"shop-orders-to-erp\"",
+		Name: "erp-freeze", Rego: "package turgon.writeback\ndeny contains \"ERP writes are frozen for the year-end close\" if input.recipe == \"shop-orders-to-erp\"",
 	})
 	spec.Spec.Workflows = append([]compiler.Workflow{}, spec.Spec.Workflows...)
 	spec.Spec.Workflows[0].Policies = append(append([]string{}, spec.Spec.Workflows[0].Policies...), "erp-freeze")

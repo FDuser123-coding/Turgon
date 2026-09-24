@@ -333,8 +333,8 @@ func (v *Verifier) Plugin(p *v1alpha1.Plugin) *Report {
 	if !schema(r, p) {
 		return r
 	}
-	if p.Spec.Runtime == v1alpha1.PluginRuntimeWasm && !strings.HasPrefix(p.Spec.World, "porter:stack/") {
-		r.add(StageContract, SeverityError, "spec.world", "wasm plugins must target a porter:stack world, got %q", p.Spec.World)
+	if p.Spec.Runtime == v1alpha1.PluginRuntimeWasm && !strings.HasPrefix(p.Spec.World, "turgon:stack/") {
+		r.add(StageContract, SeverityError, "spec.world", "wasm plugins must target a turgon:stack world, got %q", p.Spec.World)
 	}
 	if p.Spec.Type == v1alpha1.PluginConnector {
 		m, err := v.cat.Connector(v1alpha1.ParseRef(p.Spec.Connector))

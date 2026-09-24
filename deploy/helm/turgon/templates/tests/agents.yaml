@@ -2,24 +2,24 @@
 {{- $g := .Values.agents.gateway }}
 ---
 # `helm test` has the agent gateway itself validate the configuration
-# `porter gateway-config` generates for this release.
+# `turgon gateway-config` generates for this release.
 apiVersion: v1
 kind: Pod
 metadata:
-  name: {{ include "porter.fullname" . }}-check-agents
+  name: {{ include "turgon.fullname" . }}-check-agents
   labels:
-    {{- include "porter.labels" . | nindent 4 }}
+    {{- include "turgon.labels" . | nindent 4 }}
   annotations:
     helm.sh/hook: test
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
   restartPolicy: Never
-  {{- include "porter.podSettings" . | nindent 2 }}
+  {{- include "turgon.podSettings" . | nindent 2 }}
   initContainers:
     - name: gateway-config
-      image: {{ include "porter.image" . }}
+      image: {{ include "turgon.image" . }}
       args:
-        {{- include "porter.gatewayConfigArgs" . | nindent 8 }}
+        {{- include "turgon.gatewayConfigArgs" . | nindent 8 }}
         - --output=/config/config.yaml
       securityContext:
         {{- toYaml .Values.securityContext | nindent 8 }}
@@ -38,7 +38,7 @@ spec:
   volumes:
     - name: specs
       configMap:
-        name: {{ include "porter.fullname" . }}-specs
+        name: {{ include "turgon.fullname" . }}-specs
     - name: config
       emptyDir: { sizeLimit: 1Mi }
     - name: tmp

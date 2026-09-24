@@ -23,7 +23,7 @@ import (
 // (architecture §8, figure 4): policy, validation, simulation, a person's
 // approval when policy requires it, then the commit. It is durable, so a
 // write can wait days for its approver.
-const AgentWriteWorkflowName = "porter.agent-write"
+const AgentWriteWorkflowName = "turgon.agent-write"
 
 // AgentStep is the step name agent writes wait under for approval.
 const AgentStep = "agent-write"

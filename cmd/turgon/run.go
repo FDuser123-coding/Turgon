@@ -33,9 +33,9 @@ type temporalFlags struct {
 }
 
 func (f *temporalFlags) register(cmd *cobra.Command) {
-	cmd.Flags().StringVar(&f.address, "temporal", envOr("PORTER_TEMPORAL_ADDRESS", "localhost:7233"), "Temporal frontend address")
-	cmd.Flags().StringVar(&f.namespace, "namespace", envOr("PORTER_TEMPORAL_NAMESPACE", "default"), "Temporal namespace")
-	cmd.Flags().StringVar(&f.taskQueue, "task-queue", "", "Temporal task queue (default: porter-<spec name>)")
+	cmd.Flags().StringVar(&f.address, "temporal", envOr("TURGON_TEMPORAL_ADDRESS", "localhost:7233"), "Temporal frontend address")
+	cmd.Flags().StringVar(&f.namespace, "namespace", envOr("TURGON_TEMPORAL_NAMESPACE", "default"), "Temporal namespace")
+	cmd.Flags().StringVar(&f.taskQueue, "task-queue", "", "Temporal task queue (default: turgon-<spec name>)")
 }
 
 func (f *temporalFlags) dial() (client.Client, error) {
@@ -70,7 +70,7 @@ func loadSpec(path string) (*compiler.RuntimeSpec, error) {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
 	if spec.Kind != compiler.KindRuntimeSpec {
-		return nil, fmt.Errorf("%s is a %q, not a RuntimeSpec; run porter compile first", path, spec.Kind)
+		return nil, fmt.Errorf("%s is a %q, not a RuntimeSpec; run turgon compile first", path, spec.Kind)
 	}
 	if got := compiler.Digest(spec.Spec); got != spec.Metadata.Digest {
 		return nil, fmt.Errorf("%s: digest mismatch (spec says %s, body hashes to %s); refusing to run a modified spec", path, spec.Metadata.Digest, got)
@@ -88,10 +88,10 @@ func runCmd() *cobra.Command {
 		Short: "Run a compiled runtime spec: Temporal worker plus event dispatcher",
 		Long: "Run connects the spec's endpoints, registers the integration workflow with Temporal\n" +
 			"and polls event sources, starting one workflow run per event. Secrets are read from\n" +
-			"PORTER_SECRET_* environment variables (see `porter secrets`).",
+			"TURGON_SECRET_* environment variables (see `turgon secrets`).",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if dbURL == "" {
-				return errors.New("--database-url (or PORTER_DATABASE_URL) is required for Porter's state")
+				return errors.New("--database-url (or TURGON_DATABASE_URL) is required for Turgon's state")
 			}
 			spec, err := loadSpec(specPath)
 			if err != nil {
@@ -151,21 +151,21 @@ func runCmd() *cobra.Command {
 
 			d := &engine.Dispatcher{Runtime: rt, Cursors: store, Starter: engine.TemporalStarter{Client: c, TaskQueue: tf.taskQueue}, ApprovalTimeout: approvalTimeout}
 			out := cmd.ErrOrStderr()
-			fmt.Fprintf(out, "porter: running %s (%s, level %s), %d workflow(s) on task queue %s, polling every %s\n",
+			fmt.Fprintf(out, "turgon: running %s (%s, level %s), %d workflow(s) on task queue %s, polling every %s\n",
 				spec.Metadata.Name, spec.Metadata.Digest[:19], spec.Metadata.Level, len(spec.Spec.Workflows), tf.taskQueue, poll)
 			ticker := time.NewTicker(poll)
 			defer ticker.Stop()
 			for {
 				n, err := d.Poll(ctx)
 				if n > 0 {
-					fmt.Fprintf(out, "porter: started %d run(s)\n", n)
+					fmt.Fprintf(out, "turgon: started %d run(s)\n", n)
 				}
 				if err != nil && ctx.Err() == nil {
-					fmt.Fprintf(out, "porter: poll: %v\n", err)
+					fmt.Fprintf(out, "turgon: poll: %v\n", err)
 				}
 				select {
 				case <-ctx.Done():
-					fmt.Fprintln(out, "porter: shutting down")
+					fmt.Fprintln(out, "turgon: shutting down")
 					return nil
 				case <-ticker.C:
 				}
@@ -174,7 +174,7 @@ func runCmd() *cobra.Command {
 	}
 	tf.register(cmd)
 	cmd.Flags().StringVarP(&specPath, "spec", "s", "runtime-spec.json", "compiled runtime spec")
-	cmd.Flags().StringVar(&dbURL, "database-url", os.Getenv("PORTER_DATABASE_URL"), "Postgres URL for Porter's state")
+	cmd.Flags().StringVar(&dbURL, "database-url", os.Getenv("TURGON_DATABASE_URL"), "Postgres URL for Turgon's state")
 	cmd.Flags().StringVar(&auditPath, "audit-log", "postgres", `audit log: "postgres" (shared by all workers) or a file path`)
 	cmd.Flags().DurationVar(&poll, "poll", 2*time.Second, "event source poll interval")
 	cmd.Flags().StringVar(&healthAddr, "health-listen", "", "serve /healthz and /readyz on this address, e.g. :8081")
@@ -314,7 +314,7 @@ func xrefCmd() *cobra.Command {
 			return pgstore.New(pool).PutXref(ctx, entity, system, source, master)
 		},
 	}
-	set.Flags().StringVar(&dbURL, "database-url", os.Getenv("PORTER_DATABASE_URL"), "Postgres URL for Porter's state")
+	set.Flags().StringVar(&dbURL, "database-url", os.Getenv("TURGON_DATABASE_URL"), "Postgres URL for Turgon's state")
 	set.Flags().StringVar(&entity, "entity", "", "semantic entity, e.g. Customer")
 	set.Flags().StringVar(&system, "system", "", "source endpoint, e.g. shop-db")
 	set.Flags().StringVar(&source, "source", "", "record ID in the source system")
@@ -329,7 +329,7 @@ func xrefCmd() *cobra.Command {
 func secretsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "secrets SPEC",
-		Short: "List the environment variables `porter run` reads secrets from",
+		Short: "List the environment variables `turgon run` reads secrets from",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spec, err := loadSpec(args[0])
@@ -345,7 +345,7 @@ func secretsCmd() *cobra.Command {
 }
 
 // serveHealth answers Kubernetes probes: /healthz while the process runs,
-// /readyz while Porter's database answers.
+// /readyz while Turgon's database answers.
 func serveHealth(ctx context.Context, addr string, pool *pgxpool.Pool, logw io.Writer) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintln(w, "ok") })
@@ -364,6 +364,6 @@ func serveHealth(ctx context.Context, addr string, pool *pgxpool.Pool, logw io.W
 		_ = srv.Close()
 	}()
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		fmt.Fprintf(logw, "porter: health endpoint: %v\n", err)
+		fmt.Fprintf(logw, "turgon: health endpoint: %v\n", err)
 	}
 }

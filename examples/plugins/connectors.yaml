@@ -1,8 +1,8 @@
 # Connector plugins: each packages a connector manifest and declares the slot
 # contracts it satisfies.
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: Plugin
-metadata: { name: salesforce, publisher: porter, version: 3.1.0, certification: L0 }
+metadata: { name: salesforce, publisher: turgon, version: 3.1.0, certification: L0 }
 spec:
   type: connector
   runtime: container
@@ -10,9 +10,9 @@ spec:
   implements: [crm@1]
   limits: { memoryMB: 512, timeoutMs: 30000 }
 ---
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: Plugin
-metadata: { name: sap-ecc, publisher: porter, version: 0.4.0, certification: L0 }
+metadata: { name: sap-ecc, publisher: turgon, version: 0.4.0, certification: L0 }
 spec:
   type: connector
   runtime: container
@@ -20,9 +20,9 @@ spec:
   implements: [erp@1]
   limits: { memoryMB: 1024, timeoutMs: 60000 }
 ---
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: Plugin
-metadata: { name: shopify, publisher: porter, version: 2.0.3 }
+metadata: { name: shopify, publisher: turgon, version: 2.0.3 }
 spec:
   type: connector
   runtime: container
@@ -30,9 +30,9 @@ spec:
   implements: [commerce@1]
   limits: { memoryMB: 256, timeoutMs: 30000 }
 ---
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: Plugin
-metadata: { name: stripe, publisher: porter, version: 1.4.0 }
+metadata: { name: stripe, publisher: turgon, version: 1.4.0 }
 spec:
   type: connector
   runtime: container
@@ -40,9 +40,9 @@ spec:
   implements: [billing@1]
   limits: { memoryMB: 256, timeoutMs: 30000 }
 ---
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: Plugin
-metadata: { name: powerbi-export, publisher: porter, version: 1.0.0 }
+metadata: { name: powerbi-export, publisher: turgon, version: 1.0.0 }
 spec:
   type: connector
   runtime: container

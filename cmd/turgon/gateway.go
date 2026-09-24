@@ -21,14 +21,14 @@ func gatewayConfigCmd() *cobra.Command {
 	var o agent.GatewayOptions
 	cmd := &cobra.Command{
 		Use:   "gateway-config",
-		Short: "Write the agentgateway configuration that fronts `porter mcp`",
+		Short: "Write the agentgateway configuration that fronts `turgon mcp`",
 		Long: "Write an agentgateway " + agent.GatewayVersion + " configuration exposing each spec's MCP server at\n" +
 			"/<name>/mcp. The gateway requires a JWT from your identity provider, passes the agent, the\n" +
 			"user it acts for and its roles to Turgon from the token's claims, lists and allows only the\n" +
 			"tools the caller's roles may use, and rate-limits tool traffic.\n\n" +
 			"By default spec number i (in name order) is reached at http://127.0.0.1:<8090+i>/, which is\n" +
-			"how the Helm chart runs `porter mcp` next to the gateway.",
-		Example: "  porter gateway-config --spec shop=shop.json --writes shop \\\n" +
+			"how the Helm chart runs `turgon mcp` next to the gateway.",
+		Example: "  turgon gateway-config --spec shop=shop.json --writes shop \\\n" +
 			"    --issuer https://login.example.com --audience turgon --jwks https://login.example.com/jwks.json",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if len(specs) == 0 {
@@ -78,7 +78,7 @@ func gatewayConfigCmd() *cobra.Command {
 	}
 	f := cmd.Flags()
 	f.StringToStringVar(&specs, "spec", nil, "name=runtime-spec.json, repeatable; name is the route (/<name>/mcp)")
-	f.StringToStringVar(&upstreams, "upstream", nil, "name=URL of that spec's `porter mcp`")
+	f.StringToStringVar(&upstreams, "upstream", nil, "name=URL of that spec's `turgon mcp`")
 	f.StringSliceVar(&writes, "writes", nil, "specs whose MCP server runs with --writes")
 	f.StringVar(&o.Issuer, "issuer", "", "issuer of agents' access tokens")
 	f.StringSliceVar(&o.Audiences, "audience", nil, "accepted token audiences")

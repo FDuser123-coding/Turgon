@@ -1,9 +1,9 @@
 # Architecture §18.5.
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: StackBlueprint
 metadata: { name: eu-distributor-core }
 spec:
-  model: ossie://porter/distribution@1
+  model: ossie://turgon/distribution@1
   slots:
     crm:       { plugin: salesforce,     version: "^3" }
     erp:       { plugin: sap-ecc,        version: "^0.4" }

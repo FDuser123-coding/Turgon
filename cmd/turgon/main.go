@@ -1,4 +1,4 @@
-// Command porter is the Porter CLI: validate specs, verify recipes and stack
+// Command turgon is the Turgon CLI: validate specs, verify recipes and stack
 // blueprints, compile them to runtime specs, and check audit logs.
 package main
 
@@ -37,8 +37,8 @@ func main() {
 
 func newRoot(stdout, stderr io.Writer) *cobra.Command {
 	root := &cobra.Command{
-		Use:           "porter",
-		Short:         "Porter: the neutral, customer-side integrator",
+		Use:           "turgon",
+		Short:         "Turgon: the neutral, customer-side integrator",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 	}
@@ -54,7 +54,7 @@ func versionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print the CLI version",
 		Run: func(cmd *cobra.Command, _ []string) {
-			fmt.Fprintf(cmd.OutOrStdout(), "porter %s (api %s)\n", version, v1alpha1.APIVersion)
+			fmt.Fprintf(cmd.OutOrStdout(), "turgon %s (api %s)\n", version, v1alpha1.APIVersion)
 		},
 	}
 }

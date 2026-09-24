@@ -1,5 +1,5 @@
 # After the ERP accepts an order, link its number back to the opportunity.
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: Mapping
 metadata:
   name: sales-order-to-opportunity-link

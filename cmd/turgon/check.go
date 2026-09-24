@@ -21,7 +21,7 @@ func checkCmd() *cobra.Command {
 		Use:   "check",
 		Short: "Check that every connection in a spec works, and say how to fix what doesn't",
 		Long: "Check connects to each system a runtime spec uses, verifies the tables, objects, fields\n" +
-			"and permissions its configuration relies on, and checks Porter's own database and the\n" +
+			"and permissions its configuration relies on, and checks Turgon's own database and the\n" +
 			"Temporal cluster. Failures come with a plain-language fix. Exits non-zero on any failure.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			spec, err := loadSpec(specPath)
@@ -57,9 +57,9 @@ func checkCmd() *cobra.Command {
 					err = pgstore.Migrate(ctx, pool)
 				}
 				if err != nil {
-					report("porter", connector.Fail("state database", err.Error(), connector.NetworkFix(err, "the state database")))
+					report("turgon", connector.Fail("state database", err.Error(), connector.NetworkFix(err, "the state database")))
 				} else {
-					report("porter", connector.Pass("state database", "reachable, schema up to date"))
+					report("turgon", connector.Pass("state database", "reachable, schema up to date"))
 				}
 				if pool != nil {
 					pool.Close()
@@ -72,9 +72,9 @@ func checkCmd() *cobra.Command {
 					c.Close()
 				}
 				if err != nil {
-					report("porter", connector.Fail("temporal", err.Error(), connector.NetworkFix(err, tf.address)))
+					report("turgon", connector.Fail("temporal", err.Error(), connector.NetworkFix(err, tf.address)))
 				} else {
-					report("porter", connector.Pass("temporal", tf.address+" namespace "+tf.namespace))
+					report("turgon", connector.Pass("temporal", tf.address+" namespace "+tf.namespace))
 				}
 			}
 
@@ -111,7 +111,7 @@ func checkCmd() *cobra.Command {
 	}
 	tf.register(cmd)
 	cmd.Flags().StringVarP(&specPath, "spec", "s", "runtime-spec.json", "compiled runtime spec")
-	cmd.Flags().StringVar(&dbURL, "database-url", envOr("PORTER_DATABASE_URL", ""), "also check Porter's state database")
+	cmd.Flags().StringVar(&dbURL, "database-url", envOr("TURGON_DATABASE_URL", ""), "also check Turgon's state database")
 	cmd.Flags().BoolVar(&skipTemporal, "skip-temporal", false, "do not check the Temporal cluster")
 	return cmd
 }

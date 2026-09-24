@@ -317,8 +317,8 @@ func TestPolicyPacksMustCompileAndPassTheirTests(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	add("broken-syntax", "package porter.writeback\nallow if {")
-	add("wrong-test", "package porter.writeback\nrequire_approval if input.action.amount > 10\ntest_small_amounts_skip_approval if { not require_approval with input as {\"action\": {\"amount\": 20}} }")
+	add("broken-syntax", "package turgon.writeback\nallow if {")
+	add("wrong-test", "package turgon.writeback\nrequire_approval if input.action.amount > 10\ntest_small_amounts_skip_approval if { not require_approval with input as {\"action\": {\"amount\": 20}} }")
 
 	r := recipe(t, cat, "shop-orders-to-erp")
 	r.Spec.Policies = []string{"writeback-default", "broken-syntax"}

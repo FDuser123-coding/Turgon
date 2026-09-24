@@ -1,12 +1,12 @@
 # Appendix C. pkg/policy.WritebackDefault is the built-in Go equivalent, and
-# a test proves they decide identically. `porter verify` runs the test_
+# a test proves they decide identically. `turgon verify` runs the test_
 # rules below; a failing test blocks deployment.
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: PolicyPack
 metadata: { name: writeback-default, version: 1.2.0 }
 spec:
   rego: |
-    package porter.writeback
+    package turgon.writeback
 
     default allow := false
 

@@ -1,9 +1,9 @@
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: PolicyPack
 metadata: { name: mask-personal-data, version: 1.0.0 }
 spec:
   rego: |
-    package porter.data.masking
+    package turgon.data.masking
 
     # Fields classified as personal data are masked in logs, previews shown
     # to approvers outside the owning team, and anything sent to AI models.

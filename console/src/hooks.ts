@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 
-const REFRESH = "porter:refresh";
+const REFRESH = "turgon:refresh";
 
 // refreshAll makes every polling view reload now, e.g. after a decision.
 export function refreshAll() {

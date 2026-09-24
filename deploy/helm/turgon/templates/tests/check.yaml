@@ -4,21 +4,21 @@
 apiVersion: v1
 kind: Pod
 metadata:
-  name: {{ include "porter.fullname" $ }}-check-{{ $name }}
+  name: {{ include "turgon.fullname" $ }}-check-{{ $name }}
   labels:
-    {{- include "porter.labels" $ | nindent 4 }}
+    {{- include "turgon.labels" $ | nindent 4 }}
   annotations:
     helm.sh/hook: test
     helm.sh/hook-delete-policy: before-hook-creation
 spec:
   restartPolicy: Never
-  {{- include "porter.podSettings" $ | nindent 2 }}
+  {{- include "turgon.podSettings" $ | nindent 2 }}
   containers:
     - name: check
-      image: {{ include "porter.image" $ }}
+      image: {{ include "turgon.image" $ }}
       args: [check, --spec=/specs/{{ $name }}.json]
       env:
-        {{- include "porter.commonEnv" $ | nindent 8 }}
+        {{- include "turgon.commonEnv" $ | nindent 8 }}
       {{- with $.Values.workers.secretEnvFrom }}
       envFrom:
         {{- range . }}
@@ -33,5 +33,5 @@ spec:
   volumes:
     - name: specs
       configMap:
-        name: {{ include "porter.fullname" $ }}-specs
+        name: {{ include "turgon.fullname" $ }}-specs
 {{- end }}

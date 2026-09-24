@@ -1,4 +1,4 @@
-// Package console serves Porter's web console (architecture §12): runs,
+// Package console serves Turgon's web console (architecture §12): runs,
 // the approval queue with dry-run previews, the audit log with chain
 // verification, and verifier reports for the catalog, including fields
 // waiting in the mapping review queue.

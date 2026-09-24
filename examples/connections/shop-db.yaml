@@ -1,6 +1,6 @@
 # The web shop's database. Orders are announced through a transactional
 # outbox written in the same transaction as the order.
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: Connection
 metadata: { name: shop-db }
 spec:

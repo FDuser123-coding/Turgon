@@ -60,7 +60,7 @@ func consoleCmd() *cobra.Command {
 					continue
 				}
 				if dbURL == "" {
-					return errors.New(`--audit-log postgres needs --database-url (or PORTER_DATABASE_URL)`)
+					return errors.New(`--audit-log postgres needs --database-url (or TURGON_DATABASE_URL)`)
 				}
 				pool, err := pgxpool.New(cmd.Context(), dbURL)
 				if err != nil {
@@ -75,7 +75,7 @@ func consoleCmd() *cobra.Command {
 				Catalogs: catalogs,
 				Audit:    sources,
 			})
-			fmt.Fprintf(cmd.ErrOrStderr(), "porter console on http://%s (auth: %s)\n", listen, authMode)
+			fmt.Fprintf(cmd.ErrOrStderr(), "turgon console on http://%s (auth: %s)\n", listen, authMode)
 			return s.Serve(listen)
 		},
 	}
@@ -83,7 +83,7 @@ func consoleCmd() *cobra.Command {
 	cmd.Flags().StringVar(&listen, "listen", "127.0.0.1:8080", "address to listen on")
 	cmd.Flags().StringSliceVarP(&catalogs, "catalog", "c", nil, "catalog directories to show verifier reports for")
 	cmd.Flags().StringSliceVar(&auditLogs, "audit-log", nil, `audit logs to show and verify: "postgres" or file paths`)
-	cmd.Flags().StringVar(&dbURL, "database-url", os.Getenv("PORTER_DATABASE_URL"), "Postgres URL for Porter's state (for --audit-log postgres)")
+	cmd.Flags().StringVar(&dbURL, "database-url", os.Getenv("TURGON_DATABASE_URL"), "Postgres URL for Turgon's state (for --audit-log postgres)")
 	cmd.Flags().StringVar(&authMode, "auth", "dev", "authentication: dev or proxy")
 	cmd.Flags().StringVar(&devUser, "dev-user", os.Getenv("USER"), "identity for --auth dev")
 	cmd.Flags().StringSliceVar(&trusted, "trusted-proxy", nil, "CIDRs the authenticating proxy connects from")

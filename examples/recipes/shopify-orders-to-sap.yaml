@@ -1,6 +1,6 @@
 # A slot-based recipe: it names the commerce and erp slots rather than tools,
 # so it keeps working when either tool is swapped. Verify it within a blueprint.
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: Recipe
 metadata:
   name: shopify-orders-to-sap

@@ -1,4 +1,4 @@
-// Package audit implements Porter's append-only, hash-chained audit log
+// Package audit implements Turgon's append-only, hash-chained audit log
 // (architecture §9). Every write, approval and policy decision is recorded;
 // each entry commits to the one before it, so deleting or editing any entry
 // breaks the chain and is detected by Verify.

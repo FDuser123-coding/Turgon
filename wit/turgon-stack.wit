@@ -1,6 +1,6 @@
 // The stack host interface (architecture §18.4). Plugins may only propose
 // changes; writes still pass the write guard, approvals and audit.
-package porter:stack@0.1.0;
+package turgon:stack@0.1.0;
 
 interface types {
   variant error-code { denied, not-found, invalid(string) }

@@ -1,6 +1,6 @@
 # The prototype's end-to-end flow (architecture §19.1): new web-shop orders
 # become ERP sales orders, simulated first and approved before commit.
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: Recipe
 metadata:
   name: shop-orders-to-erp

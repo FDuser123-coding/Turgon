@@ -64,7 +64,7 @@ func TestOpenFileContinuesChain(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, err := l.Record("porter", "test", round); err != nil {
+		if _, err := l.Record("turgon", "test", round); err != nil {
 			t.Fatal(err)
 		}
 		f.Close()
