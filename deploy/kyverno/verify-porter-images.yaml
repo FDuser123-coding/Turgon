@@ -1,0 +1,40 @@
+# Admission-time verification (architecture §9): Kyverno admits Porter pods
+# only if their image was signed by this repository's release workflow and
+# carries a signed SBOM. Namespaced, like the rest of the install.
+apiVersion: kyverno.io/v1
+kind: Policy
+metadata:
+  name: porter-signed-images
+  namespace: integrations
+spec:
+  validationFailureAction: Enforce
+  background: false
+  webhookTimeoutSeconds: 30
+  rules:
+    - name: porter-images-are-signed
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      verifyImages:
+        - imageReferences:
+            - "ghcr.io/fduser123-coding/porter*"
+          mutateDigest: true      # pin the verified digest
+          verifyDigest: true
+          required: true
+          attestors:
+            - entries:
+                - keyless:
+                    issuer: "https://token.actions.githubusercontent.com"
+                    subject: "https://github.com/FDuser123-coding/Turgon/.github/workflows/release.yml@refs/tags/v*"
+                    rekor:
+                      url: https://rekor.sigstore.dev
+          attestations:
+            - type: https://spdx.dev/Document
+              attestors:
+                - entries:
+                    - keyless:
+                        issuer: "https://token.actions.githubusercontent.com"
+                        subject: "https://github.com/FDuser123-coding/Turgon/.github/workflows/release.yml@refs/tags/v*"
+                        rekor:
+                          url: https://rekor.sigstore.dev

@@ -121,6 +121,32 @@ plain-language fix for each failure. `deploy/flux/porter.yaml` shows pull-based 
 cosign verification and automatic rollback. The image is built by the `Dockerfile` (distroless,
 non-root, static binary).
 
+### Releases and verifying them
+
+Pushing a tag such as `v0.2.0` runs `.github/workflows/release.yml`. It tests, builds a multi-arch
+image with build provenance, blocks on critical vulnerabilities (Trivy), and publishes:
+
+- `ghcr.io/fduser123-coding/porter:<version>`, signed with cosign and carrying a signed SPDX SBOM;
+- the Helm chart at `oci://ghcr.io/fduser123-coding/charts/porter`, signed;
+- a GitHub release with static binaries, `SHA256SUMS` and its Sigstore bundle, and a source SBOM.
+
+Signing is keyless (Sigstore with GitHub's OIDC token), so there is no signing key to protect;
+the signature names the workflow that made it. To verify:
+
+```sh
+ID='^https://github\.com/FDuser123-coding/Turgon/\.github/workflows/release\.yml@refs/tags/v'
+ISSUER=https://token.actions.githubusercontent.com
+cosign verify ghcr.io/fduser123-coding/porter:0.2.0 --certificate-identity-regexp "$ID" --certificate-oidc-issuer $ISSUER
+cosign verify-attestation --type spdxjson ghcr.io/fduser123-coding/porter:0.2.0 --certificate-identity-regexp "$ID" --certificate-oidc-issuer $ISSUER
+cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-identity-regexp "$ID" --certificate-oidc-issuer $ISSUER SHA256SUMS
+```
+
+In the cluster, `deploy/kyverno/verify-porter-images.yaml` admits Porter pods only with an image
+signed by that workflow and a signed SBOM, and pins the verified digest; the Flux example
+checks the chart's signature against the same identity. CI checks every shipped Go and npm
+dependency against the license policy (`scripts/check-licenses.sh`: Apache-2.0, MIT, BSD, ISC
+and MPL-2.0 pass; anything else needs a recorded review).
+
 ### Console demo on Vercel
 
 Vercel builds only the console, in demo mode with sample data (`vercel.json`, `.vercelignore`):
@@ -153,7 +179,7 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
 | `pkg/console` | §12 | Console API (runs, approvals, audit, catalog), proxy/dev authentication, embedded web app |
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
-| `deploy/` | §11 | Helm chart, Flux example, Troubleshoot preflight spec |
+| `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
 | `cmd/porter` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check` |
 | `wit/porter-stack.wit` | §18.4 | Host interface for Wasm plugins |
 | `examples/` | App. A–C, §18.5 | SAP ECC, Salesforce, Shopify, Stripe, Power BI connectors; slot contracts; the `eu-distributor-core` blueprint |
@@ -194,7 +220,7 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 ## Not built yet
 
 In rough roadmap order (§16, §19): Salesforce Pub/Sub API change capture and Bulk API reads;
-the Porter operator and signed releases (cosign, SBOMs); an appliance build (§11);
+the Porter operator; an appliance build (§11);
 Debezium change capture in place of outbox polling; probabilistic identity
 resolution (Splink) and the data-steward queue; signed OPA bundles; the metadata
 graph and discovery; MCP server generation behind agentgateway; direct OIDC sign-in for the

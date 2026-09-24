@@ -100,6 +100,25 @@ jobs:
           ~/go/bin/kubeconform -strict -summary -kubernetes-version 1.31.0 \
             -schema-location default \
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-            /tmp/rendered.yaml deploy/flux/porter.yaml
+            /tmp/rendered.yaml deploy/flux/porter.yaml deploy/kyverno/verify-porter-images.yaml
       - name: Lint the Dockerfile
         run: hadolint Dockerfile
+
+  licenses:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: go install github.com/google/go-licenses/v2@v2.0.1
+      - run: cd console && npm ci
+      - name: Check every shipped dependency against the license policy
+        run: PATH="$HOME/go/bin:$PATH" scripts/check-licenses.sh
+      - name: Lint workflows
+        run: |
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          "$HOME/go/bin/actionlint"

@@ -1,4 +1,4 @@
-.PHONY: all build console test test-integration vet fmt demo spec chart image
+.PHONY: all build console test test-integration vet fmt demo spec chart image licenses
 
 all: fmt vet test console build
 
@@ -43,3 +43,7 @@ chart: build
 # Build the container image (needs a container builder).
 image:
 	docker build -t ghcr.io/fduser123-coding/porter:dev .
+
+# Check shipped dependencies against the license policy (needs go-licenses).
+licenses:
+	scripts/check-licenses.sh
