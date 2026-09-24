@@ -68,6 +68,10 @@ nav.top {
   border-radius: 9px; background: var(--bad); color: #fff; font-size: 11px; text-align: center;
 }
 .spacer { flex: 1; }
+.demo-banner {
+  background: var(--info-bg); color: var(--info); text-align: center;
+  padding: 8px 16px; font-size: 13px; border-bottom: 1px solid var(--border);
+}
 main { max-width: 1080px; margin: 0 auto; padding: 24px 20px 64px; }
 .page-head { margin-bottom: 18px; }
 .page-head p { margin: 4px 0 0; max-width: 720px; }

@@ -1,0 +1,160 @@
+// Sample data for the demo build (Vercel). It mirrors what the real API
+// returns for the example recipes, and keeps decisions in memory only.
+import type { AuditEntry, AuditLog, CatalogReport, PendingApproval, RunDetail, RunSummary, User } from "./types";
+
+// createDemoApi builds the sample state. Only the demo build calls it, so
+// production bundles drop it entirely.
+export function createDemoApi() {
+  const now = Date.now();
+  const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+
+  const recipe = (name: string) => ({ id: `porter/recipe/${name}`, roles: ["integration-operator"] });
+
+  const erpOrder: PendingApproval = {
+    step: "03-write",
+    digest: "2c5dbdc3480711a3a9f0c1d2e3f40516273849a0b1c2d3e4f5061728394a5b6c",
+    since: at(4),
+    reasons: ["high-risk tool", "amount above approval threshold"],
+    request: {
+      target: "erp-db",
+      operation: "create-sales-order",
+      tool: "create_sales_order",
+      risk: "high",
+      subject: recipe("shop-orders-to-erp"),
+      idempotencyKey: "SHOP-3002",
+      entity: "SalesOrder",
+      amount: 64000,
+      simulate: true,
+      compensation: "cancel-sales-order",
+      payload: {
+        externalId: "SHOP-3002", customerRef: "ada@example.com", customerId: "C-100", orderDate: "2026-09-24",
+        netValue: 64000, currency: "EUR", lines: [{ material: "M-3", quantity: 40 }],
+      },
+    },
+    preview: {
+      mode: "rollback",
+      row: {
+        id: 8, external_id: "SHOP-3002", customer_id: "C-100", order_date: "2026-09-24", net_value: 64000.0,
+        currency: "EUR", lines: [{ material: "M-3", quantity: 40 }], status: "open",
+      },
+    },
+  };
+
+  const sfLink: PendingApproval = {
+    step: "05-write",
+    digest: "9e1f7a3b5c7d9e1f2a4b6c8d0e2f4a6b8c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f",
+    since: at(11),
+    reasons: ["required by the recipe"],
+    request: {
+      target: "salesforce-prod",
+      operation: "update-opportunity",
+      tool: "update_opportunity",
+      risk: "low",
+      subject: { id: "agent-7", roles: ["integration-operator"], agent: true, onBehalfOf: "sam@example.com" },
+      idempotencyKey: "006000000000002AAA",
+      entity: "Opportunity",
+      simulate: true,
+      compensation: "restore-opportunity",
+      payload: { opportunityId: "006000000000002AAA", erpOrderNumber: "7" },
+    },
+    preview: {
+      mode: "preview", sobject: "Opportunity", id: "006000000000002AAA",
+      current: { ERP_Order_Number__c: null },
+      proposed: { ERP_Order_Number__c: "7" },
+    },
+  };
+
+  let runs: RunDetail[] = [
+    { id: "shop-orders-to-erp/6", runId: "r6", workflow: "shop-orders-to-erp", status: "running", started: at(4), pending: erpOrder,
+      event: { id: "6", position: 6, name: "Order.Created", payload: { order_number: 3002, total: "64000.00", currency: "eur", customer: { email: "ada@example.com" } } } },
+    { id: "salesforce-won-deals-to-erp/006000000000002AAA", runId: "r5", workflow: "salesforce-won-deals-to-erp", status: "running", started: at(11), pending: sfLink,
+      event: { id: "006000000000002AAA", position: 1790261000000, name: "Opportunity.ClosedWon", payload: { Id: "006000000000002AAA", AccountId: "001000000000001AAA", Amount: 4200 } } },
+    { id: "shop-orders-to-erp/5", runId: "r4", workflow: "shop-orders-to-erp", status: "completed", started: at(26), closed: at(25.6),
+      result: { writes: [{ step: "03-write", endpoint: "erp-db", operation: "create-sales-order", status: "committed", result: { id: 7, external_id: "SHOP-3001", net_value: 1480.0, status: "open" } }] },
+      event: { id: "5", position: 5, name: "Order.Created", payload: { order_number: 3001, total: "1480.00", currency: "eur" } } },
+    { id: "salesforce-won-deals-to-erp/006000000000001AAA", runId: "r3", workflow: "salesforce-won-deals-to-erp", status: "completed", started: at(58), closed: at(57.8),
+      result: { writes: [
+        { step: "03-write", endpoint: "erp-db", operation: "create-sales-order", status: "committed", result: { id: 6, external_id: "006000000000001AAA", net_value: 7800.0 } },
+        { step: "05-write", endpoint: "salesforce-prod", operation: "update-opportunity", status: "committed", result: { sobject: "Opportunity", id: "006000000000001AAA", previous: { ERP_Order_Number__c: null }, applied: { ERP_Order_Number__c: "6" } } },
+      ] },
+      event: { id: "006000000000001AAA", position: 1790259000000, name: "Opportunity.ClosedWon", payload: { Id: "006000000000001AAA", Amount: 7800 } } },
+    { id: "shop-orders-to-erp/2", runId: "r2", workflow: "shop-orders-to-erp", status: "failed", started: at(95), closed: at(94.9),
+      failure: "writeguard: simulation: write payload invalid: null value in column \"lines\" violates not-null constraint", failureType: "PorterInvalid",
+      result: undefined, event: { id: "2", position: 2, name: "Order.Created", payload: { order_number: 2002, total: "99000", items: [] } } },
+  ];
+
+  const entries: AuditEntry[] = [];
+  function audit(actor: string, action: string, data: Record<string, unknown>, minutesAgo: number) {
+    const seq = entries.length + 1;
+    entries.push({ seq, time: at(minutesAgo), actor, action, data, prev: seq === 1 ? "0".repeat(64) : `demo${seq - 1}`, hash: `demo${seq}` });
+  }
+  audit("porter/recipe/salesforce-won-deals-to-erp", "writeback.simulated", { target: "erp-db", operation: "create-sales-order" }, 58);
+  audit("controller@example.com", "writeback.approval", { target: "erp-db", operation: "create-sales-order", status: "approved", note: "Matches PO 4471", key: "006000000000001AAA" }, 57.9);
+  audit("porter/recipe/salesforce-won-deals-to-erp", "writeback.committed", { target: "erp-db", operation: "create-sales-order", key: "006000000000001AAA" }, 57.9);
+  audit("porter/recipe/salesforce-won-deals-to-erp", "writeback.committed", { target: "salesforce-prod", operation: "update-opportunity", key: "006000000000001AAA" }, 57.8);
+  audit("porter/recipe/shop-orders-to-erp", "writeback.simulated", { target: "erp-db", operation: "create-sales-order" }, 26);
+  audit("controller@example.com", "writeback.approval", { target: "erp-db", operation: "create-sales-order", status: "approved", key: "SHOP-3001" }, 25.7);
+  audit("porter/recipe/shop-orders-to-erp", "writeback.committed", { target: "erp-db", operation: "create-sales-order", key: "SHOP-3001" }, 25.6);
+
+  const catalog: CatalogReport = {
+    reports: [
+      { subject: "Recipe/salesforce-won-deals-to-erp@1.0.0", level: "L1", deployable: true },
+      { subject: "Recipe/salesforce-won-deals-to-sap-orders@1.0.0", level: "L0", deployable: true },
+      { subject: "Recipe/shop-orders-to-erp@1.0.0", level: "L1", deployable: true },
+      {
+        subject: "Recipe/shopify-orders-to-sap@1.0.0", level: "L1", deployable: false,
+        findings: [
+          { stage: "resolve", severity: "error", message: "\"commerce\" is a stack slot, not a connector; verify this recipe within a StackBlueprint that fills the slot" },
+        ],
+        reviewQueue: [
+          { mapping: "shopify-order-to-order@1.1.0", target: "incoterms", expression: "shipping_lines[0].code = 'pickup' ? 'EXW' : 'DAP'", origin: "ai", confidence: 0.81,
+            rationale: "Pickup orders leave from our warehouse (EXW); everything else is delivered (DAP)." },
+        ],
+      },
+      {
+        subject: "StackBlueprint/eu-distributor-core", level: "L1", deployable: true,
+        findings: [{ stage: "contract", severity: "warning", message: "recipe salesforce-won-deals-to-sap-orders names tool \"sap-ecc\" directly; naming slot \"erp\" would survive a swap" }],
+        children: [
+          { subject: "Plugin/sap-ecc@0.4.0", level: "L0", deployable: true },
+          { subject: "Plugin/salesforce@3.1.0", level: "L0", deployable: true },
+          { subject: "Plugin/credit-check@1.2.0", level: "L0", deployable: true },
+        ],
+      },
+    ],
+  };
+
+  const user: User = { id: "you@example.com (demo)", roles: ["viewer", "approver"] };
+  const delay = <T,>(v: T) => new Promise<T>((r) => setTimeout(() => r(structuredClone(v)), 120));
+  const summary = ({ id, runId, workflow, status, started, closed, pending }: RunDetail): RunSummary => ({ id, runId, workflow, status, started, closed, pending });
+
+  return {
+    me: () => delay(user),
+    runs: () => delay(runs.map(summary)),
+    run: (id: string) => {
+      const r = runs.find((x) => x.id === id);
+      return r ? delay(r) : Promise.reject(new Error("run not found"));
+    },
+    audit: (): Promise<AuditLog[]> =>
+      delay([{ file: "postgres: porter_audit (demo)", ok: true, count: entries.length, head: `demo${entries.length}`, entries: [...entries].reverse() }]),
+    catalog: () => delay(catalog),
+    decide: (d: { runId: string; step: string; digest: string; decision: "approve" | "reject"; note?: string }) => {
+      const r = runs.find((x) => x.id === d.runId);
+      if (!r?.pending || r.pending.digest !== d.digest) return Promise.reject(new Error("this run is no longer waiting for that decision; reload"));
+      const p = r.pending;
+      const approved = d.decision === "approve";
+      audit(user.id, "writeback.approval", { target: p.request.target, operation: p.request.operation, status: approved ? "approved" : "rejected", note: d.note, key: p.request.idempotencyKey }, 0);
+      const done: RunDetail = { ...r, pending: undefined, closed: new Date().toISOString() };
+      if (approved) {
+        audit(p.request.subject.id, "writeback.committed", { target: p.request.target, operation: p.request.operation, key: p.request.idempotencyKey }, 0);
+        done.status = "completed";
+        done.result = { writes: [{ step: p.step, endpoint: p.request.target, operation: p.request.operation, status: "committed", result: p.preview }] };
+      } else {
+        done.status = "failed";
+        done.failureType = "PorterRejected";
+        done.failure = "write rejected by approver";
+      }
+      runs = runs.map((x) => (x.id === r.id ? done : x));
+      return delay({ status: approved ? "approved" : "rejected" });
+    },
+  };
+}

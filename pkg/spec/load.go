@@ -93,7 +93,7 @@ func LoadFile(path string) ([]Document, error) {
 }
 
 // LoadPaths loads files and, recursively, every .yaml, .yml and .json file
-// under directories. Results are ordered by path for reproducibility.
+// under directories, skipping hidden files and directories. Results are ordered by path for reproducibility.
 func LoadPaths(paths ...string) ([]Document, error) {
 	var files []string
 	for _, p := range paths {
@@ -108,6 +108,14 @@ func LoadPaths(paths ...string) ([]Document, error) {
 		err = filepath.WalkDir(p, func(path string, d fs.DirEntry, err error) error {
 			if err != nil {
 				return err
+			}
+			// Skip hidden entries, such as the ..data directories of a
+			// Kubernetes ConfigMap mount, which hold second copies.
+			if path != p && strings.HasPrefix(d.Name(), ".") {
+				if d.IsDir() {
+					return filepath.SkipDir
+				}
+				return nil
 			}
 			if !d.IsDir() && isSpecFile(path) {
 				files = append(files, path)

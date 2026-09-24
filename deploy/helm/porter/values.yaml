@@ -1,0 +1,91 @@
+# Porter data plane. Everything runs namespace-scoped: no cluster roles, no
+# service-account tokens, the Kubernetes "restricted" pod security profile.
+
+image:
+  repository: ghcr.io/fduser123-coding/porter
+  tag: ""            # defaults to the chart's appVersion
+  pullPolicy: IfNotPresent
+imagePullSecrets: []
+
+# The Temporal cluster the workers and console use.
+temporal:
+  address: temporal-frontend:7233
+  namespace: default
+
+# Porter's own state: idempotency records, cursors, cross-references and the
+# shared audit log. Use an existing database, or let the chart create a
+# CloudNativePG cluster (the operator must be installed).
+database:
+  existingSecret: ""       # Secret holding the connection URL
+  existingSecretKey: url
+  cloudNativePG:
+    enabled: false
+    instances: 1           # 3 for the medium and large profiles
+    storage:
+      size: 20Gi
+      storageClass: ""
+
+# Compiled runtime specs, one worker Deployment each. Pass files with
+#   --set-file specs.shop-orders-to-erp=runtime-spec.json
+# Keys must be DNS labels. Specs are verified against their digest at start.
+specs: {}
+
+workers:
+  replicas: 1
+  pollInterval: 2s
+  approvalTimeout: 72h
+  # Secrets whose keys become environment variables. Connection secrets are
+  # read from PORTER_SECRET_* variables (see `porter secrets <spec>`).
+  secretEnvFrom: []
+  resources:
+    requests: { cpu: 100m, memory: 128Mi }
+    limits: { memory: 512Mi }
+
+console:
+  enabled: true
+  replicas: 1
+  auth:
+    # "proxy": trust X-Auth-Request-Email/Groups from an authenticating
+    # reverse proxy (e.g. oauth2-proxy with your identity provider).
+    mode: proxy
+    trustedProxies: []     # CIDRs the proxy connects from; required
+    approverGroup: ""      # required
+    viewerGroup: ""
+  # Optional ConfigMap holding catalog specs to show verifier reports for.
+  catalogConfigMap: ""
+  service:
+    type: ClusterIP
+    port: 8080
+  ingress:
+    enabled: false
+    className: ""
+    host: ""
+    annotations: {}
+    tls: []
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
+networkPolicy:
+  enabled: true
+  # Who may reach the console (NetworkPolicy "from" entries). Empty allows
+  # any pod in the namespace, e.g. the authenticating proxy.
+  consoleFrom: []
+  # Egress. With allowAllEgress false, only DNS and egressRules are allowed:
+  # list Temporal, the state database and every connected system.
+  allowAllEgress: true
+  egressRules: []
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile: { type: RuntimeDefault }
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities: { drop: [ALL] }
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

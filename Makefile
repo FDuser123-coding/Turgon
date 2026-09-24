@@ -1,4 +1,4 @@
-.PHONY: all build console test test-integration vet fmt demo spec
+.PHONY: all build console test test-integration vet fmt demo spec chart image
 
 all: fmt vet test console build
 
@@ -32,3 +32,14 @@ demo:
 # Compile the prototype's end-to-end flow for `porter run`.
 spec: build
 	bin/porter compile -c examples shop-orders-to-erp -o runtime-spec.json
+
+# Render the Helm chart with the example specs (needs helm).
+chart: build
+	bin/porter compile -c examples shop-orders-to-erp -o /tmp/porter-shop.json
+	helm lint deploy/helm/porter --set database.existingSecret=porter-db \
+		--set console.auth.trustedProxies={10.0.0.0/8} --set console.auth.approverGroup=porter-approvers \
+		--set-file specs.shop-orders-to-erp=/tmp/porter-shop.json
+
+# Build the container image (needs a container builder).
+image:
+	docker build -t ghcr.io/fduser123-coding/porter:dev .

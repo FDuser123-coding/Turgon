@@ -1,0 +1,10 @@
+Porter {{ .Chart.AppVersion }} is installed in namespace {{ .Release.Namespace }}.
+
+Workers: {{ if .Values.specs }}{{ keys .Values.specs | sortAlpha | join ", " }}{{ else }}none — pass compiled specs with --set-file specs.<name>=runtime-spec.json{{ end }}
+{{- if .Values.console.enabled }}
+Console: service {{ include "porter.fullname" . }}-console:{{ .Values.console.service.port }}, behind your authenticating proxy.
+         Approvers: members of {{ .Values.console.auth.approverGroup }}.
+{{- end }}
+
+Check every connection now:
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}

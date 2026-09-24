@@ -1,6 +1,8 @@
 package spec
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -67,5 +69,28 @@ func TestLoadExamples(t *testing.T) {
 		if errs := d.Object.Validate(); len(errs) > 0 {
 			t.Errorf("%s: %v", d.Source, errs)
 		}
+	}
+}
+
+func TestLoadPathsSkipsConfigMapCopies(t *testing.T) {
+	// A ConfigMap volume: visible symlinks into a hidden timestamped directory.
+	dir := t.TempDir()
+	hidden := filepath.Join(dir, "..2026_09_24_10_00_00.1")
+	if err := os.Mkdir(hidden, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	doc := "apiVersion: porter.dev/v1alpha1\nkind: PolicyPack\nmetadata: { name: a }\nspec: { rego: \"package a\" }\n"
+	if err := os.WriteFile(filepath.Join(hidden, "a.yaml"), []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Base(hidden), filepath.Join(dir, "..data")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join("..data", "a.yaml"), filepath.Join(dir, "a.yaml")); err != nil {
+		t.Fatal(err)
+	}
+	docs, err := LoadPaths(dir)
+	if err != nil || len(docs) != 1 {
+		t.Fatalf("docs = %d, err = %v", len(docs), err)
 	}
 }

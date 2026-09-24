@@ -1,0 +1,7 @@
+# Vercel only hosts the console's demo build (see vercel.json). Everything
+# else stays out of the deployment: in particular api/, which Vercel would
+# otherwise try to build as serverless functions (it holds Go spec types).
+/*
+!/console
+!/vercel.json
+/console/node_modules

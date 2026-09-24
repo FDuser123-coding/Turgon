@@ -91,3 +91,42 @@ func (s StaticSecrets) Resolve(_ context.Context, ref string) (string, error) {
 	}
 	return "", fmt.Errorf("secret %s: not found", ref)
 }
+
+// CheckResult is one connectivity or configuration check, with a
+// plain-language fix when it fails (pipeline stage 1, "Connect").
+type CheckResult struct {
+	Name   string `json:"name"`
+	OK     bool   `json:"ok"`
+	Detail string `json:"detail,omitempty"`
+	Fix    string `json:"fix,omitempty"`
+}
+
+// Checker is implemented by connectors that can verify their connection
+// and configuration against the live system.
+type Checker interface {
+	Check(ctx context.Context) []CheckResult
+}
+
+// Pass and Fail build check results.
+func Pass(name, detail string) CheckResult { return CheckResult{Name: name, OK: true, Detail: detail} }
+func Fail(name, detail, fix string) CheckResult {
+	return CheckResult{Name: name, Detail: detail, Fix: fix}
+}
+
+// NetworkFix explains common network errors in plain language.
+func NetworkFix(err error, target string) string {
+	msg := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(msg, "refused"):
+		return fmt.Sprintf("Nothing is listening at %s. Check the host and port, and that the service is running.", target)
+	case strings.Contains(msg, "no such host"):
+		return fmt.Sprintf("The host in %s does not resolve. Check the name and the cluster's DNS.", target)
+	case strings.Contains(msg, "timeout") || strings.Contains(msg, "deadline exceeded"):
+		return fmt.Sprintf("%s did not answer in time. A firewall or network policy is probably blocking the connection from this node.", target)
+	case strings.Contains(msg, "certificate") || strings.Contains(msg, "x509") || strings.Contains(msg, "tls"):
+		return fmt.Sprintf("TLS to %s failed. Install the issuing CA in the trust store, or check the certificate's host name.", target)
+	case strings.Contains(msg, "password authentication failed") || strings.Contains(msg, "authentication"):
+		return "The credentials were rejected. Check the user and password in the secret."
+	}
+	return ""
+}

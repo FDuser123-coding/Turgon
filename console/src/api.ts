@@ -1,3 +1,4 @@
+import { createDemoApi } from "./demo";
 import type { AuditLog, CatalogReport, RunDetail, RunSummary, User } from "./types";
 
 export class ApiError extends Error {
@@ -25,7 +26,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-export const api = {
+const liveApi = {
   me: () => request<User>("/api/me"),
   runs: () => request<RunSummary[]>("/api/runs"),
   run: (id: string) => request<RunDetail>(`/api/runs/${id.split("/").map(encodeURIComponent).join("/")}`),
@@ -38,3 +39,8 @@ export const api = {
       body: JSON.stringify(d),
     }),
 };
+
+// The demo build (Vercel) uses sample data: the real API runs inside the
+// customer's environment and is never exposed publicly.
+export const demo = __PORTER_DEMO__;
+export const api: typeof liveApi = demo ? createDemoApi() : liveApi;
