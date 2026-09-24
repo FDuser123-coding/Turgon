@@ -3,6 +3,7 @@ package compiler
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/fduser123-coding/turgon/api/v1alpha1"
@@ -116,5 +117,22 @@ func TestCompileRefusesBlockedRecipe(t *testing.T) {
 	rt, rep, err := Compile(cat, obj, verifier.Options{})
 	if !errors.Is(err, ErrNotDeployable) || rt != nil || rep == nil {
 		t.Fatalf("rt=%v err=%v", rt, err)
+	}
+}
+
+func TestConnectionConfigIsCompiledIn(t *testing.T) {
+	cat, _ := catalog.Load("../../examples")
+	rt := compileNamed(t, cat, "shop-orders-to-erp")
+	byEndpoint := map[string]ConnectorConfig{}
+	for _, c := range rt.Spec.Connectors {
+		byEndpoint[c.Endpoint] = c
+	}
+	erp := byEndpoint["erp-db"]
+	if erp.Name != "postgres" || erp.Connection != "erp-db" || erp.SecretRef != "openbao://erp-db/dsn" ||
+		!strings.Contains(string(erp.Config), "erp.sales_orders") {
+		t.Fatalf("erp-db = %+v", erp)
+	}
+	if w := rt.Spec.Workflows[0].Steps[2].Write; w.Simulation != "rollback" || w.Entity != "SalesOrder" {
+		t.Fatalf("write = %+v", w)
 	}
 }

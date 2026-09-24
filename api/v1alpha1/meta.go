@@ -17,6 +17,7 @@ const APIVersion = "porter.dev/v1alpha1"
 // Object kinds.
 const (
 	KindConnectorManifest = "ConnectorManifest"
+	KindConnection        = "Connection"
 	KindRecipe            = "Recipe"
 	KindMapping           = "Mapping"
 	KindSlotContract      = "SlotContract"
@@ -28,6 +29,7 @@ const (
 // Kinds lists every kind in load order: things other objects depend on first.
 var Kinds = []string{
 	KindConnectorManifest,
+	KindConnection,
 	KindSlotContract,
 	KindPolicyPack,
 	KindMapping,

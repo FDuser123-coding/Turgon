@@ -16,6 +16,8 @@ type Store interface {
 	// Begin claims key. It returns the stored outcome if the key already
 	// completed, or ErrInFlight if another caller holds it.
 	Begin(key string) (*Outcome, error)
+	// Lookup returns the stored outcome for a completed key, or nil.
+	Lookup(key string) (*Outcome, error)
 	// Complete records the outcome and releases the claim.
 	Complete(key string, out Outcome) error
 	// Abort releases the claim without recording an outcome, so the write
@@ -44,6 +46,15 @@ func (s *MemoryStore) Begin(key string) (*Outcome, error) {
 		return nil, ErrInFlight
 	}
 	s.inflight[key] = true
+	return nil, nil
+}
+
+func (s *MemoryStore) Lookup(key string) (*Outcome, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if out, ok := s.done[key]; ok {
+		return &out, nil
+	}
 	return nil, nil
 }
 

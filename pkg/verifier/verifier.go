@@ -7,6 +7,7 @@ import (
 
 	"github.com/fduser123-coding/turgon/api/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/catalog"
+	"github.com/fduser123-coding/turgon/pkg/mapping"
 )
 
 // Options tune verification policy.
@@ -97,6 +98,13 @@ func (v *Verifier) recipe(rec *v1alpha1.Recipe, bound map[string]*v1alpha1.Conne
 	for _, ep := range rec.Endpoints() {
 		if m, ok := bound[ep]; ok {
 			r.Resolution.Connectors[ep] = m
+			continue
+		}
+		if conn, err := v.cat.Connection(ep); err == nil {
+			if m := v.connection(r, conn, rec.Spec.Connectors[ep]); m != nil {
+				r.Resolution.Connectors[ep] = m
+				r.Resolution.Connections[ep] = conn
+			}
 			continue
 		}
 		m, err := v.cat.Connector(ep, rec.Spec.Connectors[ep])
@@ -208,6 +216,31 @@ func (v *Verifier) recipe(rec *v1alpha1.Recipe, bound map[string]*v1alpha1.Conne
 	return r
 }
 
+// connection resolves a connection's connector and returns the effective
+// manifest, or nil after reporting why it cannot be used. pin, if set,
+// further constrains the connector version.
+func (v *Verifier) connection(r *Report, c *v1alpha1.Connection, pin string) *v1alpha1.ConnectorManifest {
+	name, con := v1alpha1.ParseRef(c.Spec.Connector)
+	if pin != "" {
+		con = pin
+	}
+	m, err := v.cat.Connector(name, con)
+	if err != nil {
+		r.add(StageResolve, SeverityError, "", "connection %s: %v; an engineer must build the connector with the SDK", c.Metadata.Name, err)
+		r.raise(3)
+		return nil
+	}
+	errs := c.ValidateEffective(m)
+	for _, e := range errs {
+		r.add(StageInterfaces, SeverityError, e.Path, "%s", e.Message)
+	}
+	if len(errs) > 0 {
+		r.raise(3) // the connection asks for an interface the connector does not sanction
+		return nil
+	}
+	return c.Effective(m)
+}
+
 func (v *Verifier) writeStep(r *Report, path string, w *v1alpha1.WriteStep, producing string) {
 	m := r.Resolution.Connectors[w.Target]
 	if m == nil {
@@ -273,6 +306,11 @@ func (v *Verifier) mapStep(r *Report, path string, s *v1alpha1.MapStep, threshol
 		return
 	}
 	ref := m.Metadata.Name + "@" + m.Metadata.Version
+	for _, f := range m.Spec.Fields {
+		if err := mapping.Check(f.Expression); err != nil {
+			r.add(StageMapping, SeverityError, path+".map", "%s.%s: invalid JSONata expression: %v", ref, f.Target, err)
+		}
+	}
 	for _, f := range m.Spec.Fields {
 		if f.Approved || f.Origin == v1alpha1.OriginCertified || f.Confidence >= threshold {
 			continue

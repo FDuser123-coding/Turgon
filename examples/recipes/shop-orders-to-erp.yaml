@@ -1,0 +1,30 @@
+# The prototype's end-to-end flow (architecture §19.1): new web-shop orders
+# become ERP sales orders, simulated first and approved before commit.
+apiVersion: porter.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: shop-orders-to-erp
+  version: 1.0.0
+spec:
+  trigger:
+    source: shop-db
+    event: Order.Created
+  steps:
+    - map:
+        from: shop-db.Order
+        to: model.SalesOrder
+        mapping: shop-order-to-sales-order@1
+    - resolve:
+        entity: model.Customer
+        strategy: exact
+        autoMatchAbove: 1.0
+    - write:
+        target: erp-db
+        operation: create-sales-order
+        idempotencyKey: "SHOP-{{ source.order_number }}"
+        simulate: true
+  policies: [writeback-default]
+  capacity:
+    peakPerSecond: 20
+  slo:
+    p95Latency: 2s

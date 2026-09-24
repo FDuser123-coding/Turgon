@@ -1,0 +1,13 @@
+# The web shop's database. Orders are announced through a transactional
+# outbox written in the same transaction as the order.
+apiVersion: porter.dev/v1alpha1
+kind: Connection
+metadata: { name: shop-db }
+spec:
+  connector: postgres@^1
+  secretRef: openbao://shop-db/dsn
+  entities: [Order]
+  events:
+    - { name: Order.Created, entity: Order, interface: outbox }
+  config:
+    outbox: { table: shop.outbox }

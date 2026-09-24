@@ -25,6 +25,8 @@ var (
 	ErrDenied = errors.New("write denied by policy")
 	// ErrRejected is returned when an approver rejects the write.
 	ErrRejected = errors.New("write rejected by approver")
+	// ErrInvalid is returned when a payload fails validation.
+	ErrInvalid = errors.New("write payload invalid")
 	// ErrUnconfirmed is returned when a committed write cannot be read back.
 	ErrUnconfirmed = errors.New("write committed but not confirmed")
 )
@@ -99,7 +101,9 @@ type Request struct {
 	Amount         float64         `json:"amount,omitempty"`
 	Simulate       bool            `json:"simulate,omitempty"`
 	Compensation   string          `json:"compensation,omitempty"`
-	Reason         string          `json:"reason,omitempty"`
+	// RequireApproval asks a person even when policy would not.
+	RequireApproval bool   `json:"requireApproval,omitempty"`
+	Reason          string `json:"reason,omitempty"`
 }
 
 // Status of a write.
@@ -190,14 +194,106 @@ func (g *Guard) actor(req Request) string {
 	return req.Subject.ID
 }
 
-// Execute runs one governed write.
-func (g *Guard) Execute(ctx context.Context, req Request) (Outcome, error) {
+// Prepared is the result of the first phase of a write: everything up to
+// the point where a person may have to approve it.
+type Prepared struct {
+	// Duplicate is set when the write already committed under this key.
+	Duplicate     *Outcome        `json:"duplicate,omitempty"`
+	Decision      policy.Decision `json:"decision"`
+	Preview       json.RawMessage `json:"preview,omitempty"`
+	NeedsApproval bool            `json:"needsApproval"`
+}
+
+func (g *Guard) target(req Request) (*target, error) {
 	t, ok := g.targets[req.Target]
 	if !ok {
-		return Outcome{Status: StatusFailed}, fmt.Errorf("writeguard: unknown target %q", req.Target)
+		return nil, fmt.Errorf("writeguard: unknown target %q", req.Target)
 	}
 	if req.IdempotencyKey == "" {
-		return Outcome{Status: StatusFailed}, errors.New("writeguard: an idempotency key is required")
+		return nil, errors.New("writeguard: an idempotency key is required")
+	}
+	return t, nil
+}
+
+func input(req Request) policy.Input {
+	return policy.Input{
+		Tool:    policy.Tool{Name: req.Tool, Risk: req.Risk},
+		Subject: req.Subject,
+		Action:  policy.Action{Entity: req.Entity, Amount: req.Amount},
+	}
+}
+
+func (g *Guard) decide(ctx context.Context, actor string, in policy.Input) (policy.Decision, error) {
+	dec, err := g.cfg.Policy.Decide(ctx, in)
+	if err != nil {
+		return dec, fmt.Errorf("writeguard: policy: %w", err)
+	}
+	_, err = g.cfg.Audit.Record(actor, "policy.decision", map[string]any{"input": in, "decision": dec})
+	return dec, err
+}
+
+// Prepare runs the checks before approval: de-duplication, policy,
+// validation and simulation. It does not claim the idempotency key, so a
+// workflow can wait for approval for as long as it needs to.
+func (g *Guard) Prepare(ctx context.Context, req Request) (Prepared, error) {
+	t, err := g.target(req)
+	if err != nil {
+		return Prepared{}, err
+	}
+	actor := g.actor(req)
+	prior, err := g.cfg.Store.Lookup(storeKey(req))
+	if err != nil {
+		return Prepared{}, err
+	}
+	if prior != nil {
+		dup := *prior
+		dup.Status = StatusDuplicate
+		_, err := g.cfg.Audit.Record(actor, "writeback.duplicate", map[string]any{"target": req.Target, "operation": req.Operation, "key": req.IdempotencyKey})
+		return Prepared{Duplicate: &dup}, err
+	}
+
+	dec, err := g.decide(ctx, actor, input(req))
+	if err != nil {
+		return Prepared{}, err
+	}
+	p := Prepared{Decision: dec, NeedsApproval: dec.RequireApproval || req.RequireApproval}
+	// A request that is denied and would not become allowed through approval
+	// stops here. High-risk writes are denied until approved.
+	if !dec.Allow && !p.NeedsApproval {
+		return p, ErrDenied
+	}
+
+	if g.cfg.Validate != nil {
+		if err := g.cfg.Validate(ctx, req); err != nil {
+			_, _ = g.cfg.Audit.Record(actor, "writeback.invalid", map[string]any{"target": req.Target, "operation": req.Operation, "error": err.Error()})
+			return p, fmt.Errorf("%w: %v", ErrInvalid, err)
+		}
+	}
+
+	if req.Simulate {
+		preview, err := t.Target.Simulate(ctx, req.Operation, req.Payload)
+		switch {
+		case errors.Is(err, ErrSimulationUnsupported):
+		case err != nil:
+			_, _ = g.cfg.Audit.Record(actor, "writeback.simulation-failed", map[string]any{"target": req.Target, "operation": req.Operation, "error": err.Error()})
+			return p, fmt.Errorf("writeguard: simulation: %w", err)
+		default:
+			p.Preview = preview
+			if _, err := g.cfg.Audit.Record(actor, "writeback.simulated", map[string]any{"target": req.Target, "operation": req.Operation, "preview": preview}); err != nil {
+				return p, err
+			}
+		}
+	}
+	return p, nil
+}
+
+// Commit performs a prepared write. approval must be supplied when Prepare
+// reported NeedsApproval. Policy is evaluated again with the approval, so a
+// decision can never be carried over from a different request.
+func (g *Guard) Commit(ctx context.Context, req Request, approval *policy.Approval) (Outcome, error) {
+	t, err := g.target(req)
+	if err != nil {
+		return Outcome{Status: StatusFailed}, err
 	}
 	actor := g.actor(req)
 	key := storeKey(req)
@@ -219,81 +315,32 @@ func (g *Guard) Execute(ctx context.Context, req Request) (Outcome, error) {
 		}
 	}()
 
-	in := policy.Input{
-		Tool:    policy.Tool{Name: req.Tool, Risk: req.Risk},
-		Subject: req.Subject,
-		Action:  policy.Action{Entity: req.Entity, Amount: req.Amount},
+	in := input(req)
+	if approval != nil {
+		if _, err := g.cfg.Audit.Record(approval.By, "writeback.approval", map[string]any{"target": req.Target, "operation": req.Operation, "key": req.IdempotencyKey, "status": approval.Status}); err != nil {
+			return Outcome{Status: StatusFailed}, err
+		}
+		if approval.Status != policy.ApprovalApproved {
+			return Outcome{Status: StatusRejected, Approval: approval}, ErrRejected
+		}
+		in.Approval = *approval
 	}
-	dec, err := g.cfg.Policy.Decide(ctx, in)
+	dec, err := g.decide(ctx, actor, in)
 	if err != nil {
-		return Outcome{Status: StatusFailed}, fmt.Errorf("writeguard: policy: %w", err)
-	}
-	if _, err := g.cfg.Audit.Record(actor, "policy.decision", map[string]any{"input": in, "decision": dec}); err != nil {
 		return Outcome{Status: StatusFailed}, err
 	}
-	// A request that is denied and would not become allowed through approval
-	// stops here. High-risk writes are denied until approved.
-	if !dec.Allow && !dec.RequireApproval {
-		return Outcome{Status: StatusDenied, Reasons: dec.Reasons}, ErrDenied
-	}
-
-	if g.cfg.Validate != nil {
-		if err := g.cfg.Validate(ctx, req); err != nil {
-			_, _ = g.cfg.Audit.Record(actor, "writeback.invalid", map[string]any{"target": req.Target, "operation": req.Operation, "error": err.Error()})
-			return Outcome{Status: StatusFailed}, fmt.Errorf("writeguard: validation: %w", err)
-		}
-	}
-
-	var preview json.RawMessage
-	if req.Simulate {
-		preview, err = t.Target.Simulate(ctx, req.Operation, req.Payload)
-		switch {
-		case errors.Is(err, ErrSimulationUnsupported):
-			preview = nil
-		case err != nil:
-			_, _ = g.cfg.Audit.Record(actor, "writeback.simulation-failed", map[string]any{"target": req.Target, "operation": req.Operation, "error": err.Error()})
-			return Outcome{Status: StatusFailed}, fmt.Errorf("writeguard: simulation: %w", err)
-		default:
-			if _, err := g.cfg.Audit.Record(actor, "writeback.simulated", map[string]any{"target": req.Target, "operation": req.Operation, "preview": preview}); err != nil {
-				return Outcome{Status: StatusFailed}, err
-			}
-		}
-	}
-
-	var approval *policy.Approval
-	if dec.RequireApproval {
-		if g.cfg.Approver == nil {
-			return Outcome{Status: StatusDenied, Preview: preview, Reasons: dec.Reasons}, fmt.Errorf("%w: approval required but no approver is configured", ErrDenied)
-		}
-		a, err := g.cfg.Approver.Approve(ctx, ApprovalRequest{Request: req, Preview: preview, Reasons: dec.Reasons})
-		if err != nil {
-			return Outcome{Status: StatusFailed, Preview: preview}, fmt.Errorf("writeguard: approval: %w", err)
-		}
-		approval = &a
-		if _, err := g.cfg.Audit.Record(a.By, "writeback.approval", map[string]any{"target": req.Target, "operation": req.Operation, "key": req.IdempotencyKey, "status": a.Status}); err != nil {
-			return Outcome{Status: StatusFailed}, err
-		}
-		if a.Status != policy.ApprovalApproved {
-			return Outcome{Status: StatusRejected, Preview: preview, Approval: approval}, ErrRejected
-		}
-		in.Approval = a
-		dec, err = g.cfg.Policy.Decide(ctx, in)
-		if err != nil {
-			return Outcome{Status: StatusFailed}, fmt.Errorf("writeguard: policy: %w", err)
-		}
-		if _, err := g.cfg.Audit.Record(actor, "policy.decision", map[string]any{"input": in, "decision": dec}); err != nil {
-			return Outcome{Status: StatusFailed}, err
-		}
+	if (dec.RequireApproval || req.RequireApproval) && approval == nil {
+		return Outcome{Status: StatusDenied, Reasons: dec.Reasons}, fmt.Errorf("%w: approval required", ErrDenied)
 	}
 	if !dec.Allow {
-		return Outcome{Status: StatusDenied, Preview: preview, Approval: approval, Reasons: dec.Reasons}, ErrDenied
+		return Outcome{Status: StatusDenied, Approval: approval, Reasons: dec.Reasons}, ErrDenied
 	}
 
 	result, err := g.commit(ctx, t, actor, req.Operation, req.IdempotencyKey, req)
 	if err != nil {
-		return Outcome{Status: StatusFailed, Preview: preview, Approval: approval}, err
+		return Outcome{Status: StatusFailed, Approval: approval}, err
 	}
-	out := Outcome{Status: StatusCommitted, Result: result, Preview: preview, Approval: approval}
+	out := Outcome{Status: StatusCommitted, Result: result, Approval: approval}
 	if err := g.cfg.Store.Complete(key, out); err != nil {
 		return out, err
 	}
@@ -306,6 +353,36 @@ func (g *Guard) Execute(ctx context.Context, req Request) (Outcome, error) {
 		}
 	}
 	return out, nil
+}
+
+// Execute runs one governed write in-process: Prepare, ask the configured
+// approver if needed, then Commit.
+func (g *Guard) Execute(ctx context.Context, req Request) (Outcome, error) {
+	p, err := g.Prepare(ctx, req)
+	if err != nil {
+		status := StatusFailed
+		if errors.Is(err, ErrDenied) {
+			status = StatusDenied
+		}
+		return Outcome{Status: status, Preview: p.Preview, Reasons: p.Decision.Reasons}, err
+	}
+	if p.Duplicate != nil {
+		return *p.Duplicate, nil
+	}
+	var approval *policy.Approval
+	if p.NeedsApproval {
+		if g.cfg.Approver == nil {
+			return Outcome{Status: StatusDenied, Preview: p.Preview, Reasons: p.Decision.Reasons}, fmt.Errorf("%w: approval required but no approver is configured", ErrDenied)
+		}
+		a, err := g.cfg.Approver.Approve(ctx, ApprovalRequest{Request: req, Preview: p.Preview, Reasons: p.Decision.Reasons})
+		if err != nil {
+			return Outcome{Status: StatusFailed, Preview: p.Preview}, fmt.Errorf("writeguard: approval: %w", err)
+		}
+		approval = &a
+	}
+	out, err := g.Commit(ctx, req, approval)
+	out.Preview = p.Preview
+	return out, err
 }
 
 // commit runs a write through the governor and breaker, then meters and audits it.
@@ -335,6 +412,11 @@ func (g *Guard) commit(ctx context.Context, t *target, actor, op, key string, re
 		"result": result, "metered": t.Metered,
 	})
 	return result, err
+}
+
+// Compensate undoes a committed write given the result it returned.
+func (g *Guard) Compensate(ctx context.Context, req Request, result json.RawMessage) error {
+	return g.compensate(ctx, req, result)
 }
 
 // compensate undoes a committed write. Compensations are automatic: they

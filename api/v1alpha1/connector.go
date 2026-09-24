@@ -38,6 +38,10 @@ const (
 	RuntimeScreen    = "screen"
 	RuntimeWasm      = "wasm"
 	RuntimeContainer = "container"
+	// RuntimeNative connectors are built into the Porter worker. The
+	// prototype's Postgres connector is native; production connectors run
+	// on the worker types above.
+	RuntimeNative = "native"
 )
 
 type ConnectorAuth struct {
@@ -173,7 +177,7 @@ func (c *ConnectorManifest) Validate() FieldErrors {
 	if s.System == "" {
 		es.add("spec.system", "is required")
 	}
-	if !oneOf(s.Runtime, RuntimeCamelJava, RuntimeDebezium, RuntimeFilesEDI, RuntimeScreen, RuntimeWasm, RuntimeContainer) {
+	if !oneOf(s.Runtime, RuntimeCamelJava, RuntimeDebezium, RuntimeFilesEDI, RuntimeScreen, RuntimeWasm, RuntimeContainer, RuntimeNative) {
 		es.add("spec.runtime", "unknown runtime %q", s.Runtime)
 	}
 	if len(s.Auth.Methods) == 0 {

@@ -44,7 +44,8 @@ func newRoot(stdout, stderr io.Writer) *cobra.Command {
 	}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	root.AddCommand(validateCmd(), verifyCmd(), compileCmd(), auditCmd(), versionCmd())
+	root.AddCommand(validateCmd(), verifyCmd(), compileCmd(), auditCmd(), versionCmd(),
+		runCmd(), approveCmd(), pendingCmd(), retryCmd(), xrefCmd(), secretsCmd())
 	return root
 }
 

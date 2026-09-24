@@ -65,6 +65,8 @@ type Resolution struct {
 	// Connectors maps a recipe endpoint (connector or slot name) to its
 	// manifest; for blueprints, each bound slot to its connector.
 	Connectors map[string]*v1alpha1.ConnectorManifest `json:"-"`
+	// Connections maps a recipe endpoint to the connection it names, if any.
+	Connections map[string]*v1alpha1.Connection `json:"-"`
 	// Mappings maps a mapping reference to the resolved mapping.
 	Mappings map[string]*v1alpha1.Mapping `json:"-"`
 	// Slots maps a slot name to the plugin bound to it.
@@ -100,10 +102,11 @@ func newReport(obj v1alpha1.Object) *Report {
 	return &Report{
 		Subject: subject,
 		Resolution: Resolution{
-			Connectors: map[string]*v1alpha1.ConnectorManifest{},
-			Mappings:   map[string]*v1alpha1.Mapping{},
-			Slots:      map[string]*v1alpha1.Plugin{},
-			Contracts:  map[string]*v1alpha1.SlotContract{},
+			Connectors:  map[string]*v1alpha1.ConnectorManifest{},
+			Mappings:    map[string]*v1alpha1.Mapping{},
+			Connections: map[string]*v1alpha1.Connection{},
+			Slots:       map[string]*v1alpha1.Plugin{},
+			Contracts:   map[string]*v1alpha1.SlotContract{},
 		},
 	}
 }

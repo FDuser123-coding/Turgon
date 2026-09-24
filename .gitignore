@@ -2,3 +2,4 @@ bin/
 *.test
 *.out
 /runtime-spec*.json
+/porter-audit.jsonl
