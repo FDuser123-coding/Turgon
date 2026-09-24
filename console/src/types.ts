@@ -57,6 +57,7 @@ export interface WriteRecord {
 export interface RunDetail extends RunSummary {
   specDigest?: string;
   event?: { id: string; position: number; name: string; payload: unknown };
+  request?: WriteRequest;
   result?: { writes: WriteRecord[] | null };
   failure?: string;
   failureType?: string;

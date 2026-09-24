@@ -7,7 +7,7 @@ package policy
 import (
 	"context"
 
-	"github.com/fduser123-coding/turgon/api/v1alpha1"
+	"github.com/fduser123-coding/turgon/apis/v1alpha1"
 )
 
 // Approval statuses.
@@ -91,7 +91,9 @@ const (
 //   - reads are allowed for operators and readers;
 //   - low-risk writes are allowed for operators;
 //   - high-risk writes are allowed only once approved;
-//   - approval is required for high-risk writes and for amounts above the threshold.
+//   - approval is required for high-risk writes and for amounts above the threshold;
+//   - agents need the operator role to ask for any write, so an agent
+//     without it cannot even put a write in front of an approver.
 type WritebackDefault struct {
 	AmountThreshold float64 // default 50000
 }
@@ -117,6 +119,10 @@ func (p WritebackDefault) Decide(_ context.Context, in Input) (Decision, error) 
 	if in.Action.Amount > threshold {
 		d.RequireApproval = true
 		d.Reasons = append(d.Reasons, "amount above approval threshold")
+	}
+	if in.Subject.Agent && (in.Tool.Risk == v1alpha1.RiskLow || in.Tool.Risk == v1alpha1.RiskHigh) && !in.Subject.HasRole(RoleOperator) {
+		d.Allow, d.Denied = false, true
+		d.Reasons = append(d.Reasons, "agents need the integration-operator role to write")
 	}
 	if in.Approval.Status == ApprovalRejected {
 		d.Allow, d.Denied = false, true

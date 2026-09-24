@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fduser123-coding/turgon/api/v1alpha1"
+	"github.com/fduser123-coding/turgon/apis/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/catalog"
 	"github.com/fduser123-coding/turgon/pkg/verifier"
 )
@@ -77,8 +77,14 @@ func TestRecipeRuntimeSpec(t *testing.T) {
 	if sap == nil || sap.SecretRef != "openbao://sap/ecc/prod" || len(sap.Prohibited) != 2 {
 		t.Fatalf("sap connector = %+v", sap)
 	}
-	if len(rt.Spec.Tools) != 1 || rt.Spec.Tools[0].Name != "create_sales_order" {
-		t.Fatalf("tools = %+v", rt.Spec.Tools)
+	// The write it performs, plus read-only tools for each endpoint's read
+	// operations; get-customer exists on both, so both are qualified.
+	var names []string
+	for _, tl := range rt.Spec.Tools {
+		names = append(names, tl.Name+":"+tl.Risk)
+	}
+	if strings.Join(names, ",") != "create_sales_order:high,salesforce_get_customer:read,sap_ecc_get_customer:read" {
+		t.Fatalf("tools = %v", names)
 	}
 }
 

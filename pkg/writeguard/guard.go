@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fduser123-coding/turgon/api/v1alpha1"
+	"github.com/fduser123-coding/turgon/apis/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/audit"
 	"github.com/fduser123-coding/turgon/pkg/policy"
 )
@@ -171,6 +171,12 @@ func New(cfg Config) (*Guard, error) {
 		}
 	}
 	return g, nil
+}
+
+// Has reports whether name is a target of this guard.
+func (g *Guard) Has(name string) bool {
+	_, ok := g.targets[name]
+	return ok
 }
 
 // Metered returns how many documents each metered target has created, for
@@ -447,7 +453,7 @@ func (g *Guard) compensate(ctx context.Context, req Request, result json.RawMess
 	if prior != nil {
 		return nil
 	}
-	res, err := g.commit(ctx, t, "porter/saga", creq.Operation, creq.IdempotencyKey, creq)
+	res, err := g.commit(ctx, t, "turgon/saga", creq.Operation, creq.IdempotencyKey, creq)
 	if err != nil {
 		_ = g.cfg.Store.Abort(key)
 		return err

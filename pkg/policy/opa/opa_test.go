@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fduser123-coding/turgon/api/v1alpha1"
+	"github.com/fduser123-coding/turgon/apis/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/catalog"
 	"github.com/fduser123-coding/turgon/pkg/policy"
 )
@@ -37,6 +37,7 @@ func TestRegoPackMatchesBuiltInDefault(t *testing.T) {
 		{ID: "reader", Roles: []string{policy.RoleReader}},
 		{ID: "nobody"},
 		{ID: "agent", Agent: true, OnBehalfOf: "alice", Roles: []string{policy.RoleOperator, "sales"}},
+		{ID: "reading-agent", Agent: true, OnBehalfOf: "alice", Roles: []string{policy.RoleReader}},
 	}
 	cases := 0
 	for _, risk := range []string{v1alpha1.RiskRead, v1alpha1.RiskLow, v1alpha1.RiskHigh, "bogus"} {
@@ -58,14 +59,14 @@ func TestRegoPackMatchesBuiltInDefault(t *testing.T) {
 			}
 		}
 	}
-	if cases != 240 {
+	if cases != 300 {
 		t.Fatalf("ran %d cases", cases)
 	}
 }
 
 func TestPackTestsRun(t *testing.T) {
 	fails, n, err := Test(context.Background(), []Module{examplePack(t, "writeback-default")})
-	if err != nil || len(fails) != 0 || n != 3 {
+	if err != nil || len(fails) != 0 || n != 4 {
 		t.Fatalf("n=%d fails=%+v err=%v", n, fails, err)
 	}
 	broken := Module{Name: "broken", Source: `package porter.writeback

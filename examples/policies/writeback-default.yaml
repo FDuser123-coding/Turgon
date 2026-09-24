@@ -3,7 +3,7 @@
 # rules below; a failing test blocks deployment.
 apiVersion: porter.dev/v1alpha1
 kind: PolicyPack
-metadata: { name: writeback-default, version: 1.1.0 }
+metadata: { name: writeback-default, version: 1.2.0 }
 spec:
   rego: |
     package porter.writeback
@@ -38,9 +38,15 @@ spec:
       not input.tool.risk in {"read", "low", "high"}
     }
 
+    deny contains "agents need the integration-operator role to write" if {
+      input.subject.agent
+      input.tool.risk in {"low", "high"}
+      not "integration-operator" in input.subject.roles
+    }
+
     deny contains "approval rejected" if input.approval.status == "rejected"
 
-    operator := {"id": "porter/recipe/x", "roles": ["integration-operator"]}
+    operator := {"id": "turgon/recipe/x", "roles": ["integration-operator"]}
 
     test_low_risk_needs_the_operator_role if {
       allow with input as {"tool": {"risk": "low"}, "subject": operator, "action": {}, "approval": {}}
@@ -56,4 +62,11 @@ spec:
     test_large_amounts_need_approval if {
       require_approval with input as {"tool": {"risk": "low"}, "subject": operator, "action": {"amount": 60000}, "approval": {}}
       not require_approval with input as {"tool": {"risk": "low"}, "subject": operator, "action": {"amount": 100}, "approval": {}}
+    }
+
+    test_agents_need_the_operator_role_to_write if {
+      agent := {"id": "claude", "agent": true, "onBehalfOf": "ada", "roles": ["integration-reader"]}
+      count(deny) > 0 with input as {"tool": {"risk": "high"}, "subject": agent, "action": {}, "approval": {"status": "approved"}}
+      allow with input as {"tool": {"risk": "read"}, "subject": agent, "action": {}, "approval": {}}
+      count(deny) == 0 with input as {"tool": {"risk": "low"}, "subject": object.union(agent, {"roles": ["integration-operator"]}), "action": {}, "approval": {}}
     }

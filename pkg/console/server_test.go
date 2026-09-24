@@ -54,7 +54,7 @@ func (f *fakeRuns) Signal(_ context.Context, id string, sig engine.ApprovalSigna
 func newRuns() *fakeRuns {
 	return &fakeRuns{pending: map[string]*engine.PendingApproval{
 		"shop-orders-to-erp/7": {Step: "03-write", Digest: "abc123", Request: writeguard.Request{
-			Target: "erp-db", Operation: "create-sales-order", Subject: policy.Subject{ID: "porter/recipe/shop-orders-to-erp"},
+			Target: "erp-db", Operation: "create-sales-order", Subject: policy.Subject{ID: "turgon/recipe/shop-orders-to-erp"},
 		}},
 		"agent-orders/1": {Step: "01-write", Digest: "def456", Request: writeguard.Request{
 			Subject: policy.Subject{ID: "agent-7", Agent: true, OnBehalfOf: "alice@example.com"},

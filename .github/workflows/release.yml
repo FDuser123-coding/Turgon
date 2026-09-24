@@ -1,0 +1,161 @@
+# Signed releases (architecture §9 supply chain, §11 delivery). Pushing a
+# tag like v0.2.0 builds, scans, signs and publishes:
+#   ghcr.io/<owner>/porter:<version>          multi-arch image, provenance + SBOM
+#   oci://ghcr.io/<owner>/charts/porter       Helm chart
+#   GitHub release                             binaries, checksums, SBOM
+# Signatures are keyless (Sigstore, GitHub OIDC): no signing key to guard.
+# Customers verify with the identity of this workflow; see README.
+name: release
+
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  image:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write        # keyless signing
+      attestations: write
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Registry names
+        # GHCR repository names must be lowercase; the owner is not.
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "IMAGE=ghcr.io/${owner}/porter" >> "$GITHUB_ENV"
+          echo "CHARTS=ghcr.io/${owner}/charts" >> "$GITHUB_ENV"
+      - name: Version
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ steps.version.outputs.version }}
+          build-args: VERSION=${{ steps.version.outputs.version }}
+          provenance: mode=max
+          sbom: true
+      - name: Scan for vulnerabilities
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign the image
+        run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
+      - name: SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: porter-image.spdx.json
+      - name: Attest the SBOM
+        run: cosign attest --yes --type spdxjson --predicate porter-image.spdx.json "${IMAGE}@${{ steps.build.outputs.digest }}"
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+  chart:
+    needs: image
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Registry names
+        # GHCR repository names must be lowercase; the owner is not.
+        run: |
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+          echo "IMAGE=ghcr.io/${owner}/porter" >> "$GITHUB_ENV"
+          echo "CHARTS=ghcr.io/${owner}/charts" >> "$GITHUB_ENV"
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - uses: sigstore/cosign-installer@v3
+      - name: Package, push and sign the chart
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          helm package deploy/helm/porter --version "$version" --app-version "$version"
+          echo "$GH_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
+          out=$(helm push "porter-${version}.tgz" "oci://${CHARTS}" 2>&1)
+          echo "$out"
+          digest=$(echo "$out" | sed -n 's/^Digest: //p')
+          test -n "$digest"
+          echo "$GH_TOKEN" | cosign login ghcr.io -u "${{ github.actor }}" --password-stdin
+          cosign sign --yes "${CHARTS}/porter@${digest}"
+
+  binaries:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # create the release
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Build the console
+        run: cd console && npm ci && npm run build
+      - name: Build binaries
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          mkdir dist
+          for arch in amd64 arm64; do
+            CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath \
+              -ldflags "-s -w -X main.version=${version}" -o "dist/porter-linux-${arch}" ./cmd/porter
+          done
+          (cd dist && sha256sum porter-* > SHA256SUMS)
+      - name: Source SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/porter-source.spdx.json
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign the checksums
+        run: cosign sign-blob --yes --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "Porter $GITHUB_REF_NAME" --generate-notes --verify-tag

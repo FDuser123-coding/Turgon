@@ -67,7 +67,7 @@ func consoleCmd() *cobra.Command {
 					return err
 				}
 				defer pool.Close()
-				sources = append(sources, console.AuditTable{Name: "postgres: porter_audit", Log: pgstore.NewAuditLog(pool)})
+				sources = append(sources, console.AuditTable{Name: "Postgres audit log", Log: pgstore.NewAuditLog(pool)})
 			}
 			s := console.New(console.Config{
 				Runs:     console.TemporalRuns{Client: c, Namespace: tf.namespace},

@@ -94,6 +94,43 @@ A decision always refers to the exact request shown (by its SHA-256 digest), nob
 approve a write made on their own behalf, and cross-site requests are refused.
 For UI development, `cd console && npm run dev` proxies `/api` to a running console.
 
+### Tools for AI agents (MCP)
+
+`porter mcp` serves a spec's read-only tools to AI agents over MCP (streamable HTTP). Tools are
+generated from the connections' read operations and named in business terms, such as
+`get_customer` or `get_sales_order`; when two systems offer the same operation, both are
+qualified (`erp_db_get_customer`, `salesforce_prod_get_customer`). A Salesforce read returns
+business field names (`name`, `city`) rather than `BillingCity`.
+
+```sh
+bin/porter mcp -s runtime-spec.json --dev-agent claude --dev-user you@example.com   # loopback only
+bin/porter mcp -s runtime-spec.json --auth gateway --trusted-gateway 10.42.0.0/16    # behind agentgateway
+```
+
+Every call is authorized for the agent and the person it acts for (the built-in policy lets
+`integration-reader` and `integration-operator` read), passes the system's rate limit and circuit
+breaker, and is audited as "agent for user", without the data returned. Agents never see system
+credentials. Behind the gateway, identity comes from `X-Agent-Id`, `X-On-Behalf-Of` and
+`X-Agent-Roles`, trusted only from `--trusted-gateway` addresses.
+
+With `--writes`, the recipe's write operations are served too (`create_sales_order`), taking a
+record whose fields come from the mapping that feeds the write. A call starts a governed write
+on Temporal (architecture §8, figure 4), run by the `porter run` workers of the same spec:
+policy, validation and the target's dry-run first; then, for high-risk tools or large amounts, a
+person approves the previewed write in the console; then the commit, audited as the agent for
+its user. Agents need the `integration-operator` role to ask for a write at all.
+
+```sh
+bin/porter run -s runtime-spec.json                                   # workers commit the writes
+bin/porter mcp -s runtime-spec.json --writes --dev-agent claude --dev-user you@example.com --dev-roles integration-operator
+```
+
+Each write carries the agent's own `requestId`. A call waits up to `--wait` (15s) and answers
+`committed`, `pending_approval` (with the preview), or why nothing was written; calling again
+with the same arguments reports how the write stands and never writes twice, and reusing a
+`requestId` for a different record is refused. Unanswered approvals are rejected after
+`--approval-timeout` (72h).
+
 ### Install on Kubernetes
 
 The chart in `deploy/helm/porter` installs one worker per compiled spec and the console into
@@ -121,6 +158,32 @@ plain-language fix for each failure. `deploy/flux/porter.yaml` shows pull-based 
 cosign verification and automatic rollback. The image is built by the `Dockerfile` (distroless,
 non-root, static binary).
 
+### Releases and verifying them
+
+Pushing a tag such as `v0.2.0` runs `.github/workflows/release.yml`. It tests, builds a multi-arch
+image with build provenance, blocks on critical vulnerabilities (Trivy), and publishes:
+
+- `ghcr.io/fduser123-coding/porter:<version>`, signed with cosign and carrying a signed SPDX SBOM;
+- the Helm chart at `oci://ghcr.io/fduser123-coding/charts/porter`, signed;
+- a GitHub release with static binaries, `SHA256SUMS` and its Sigstore bundle, and a source SBOM.
+
+Signing is keyless (Sigstore with GitHub's OIDC token), so there is no signing key to protect;
+the signature names the workflow that made it. To verify:
+
+```sh
+ID='^https://github\.com/FDuser123-coding/Turgon/\.github/workflows/release\.yml@refs/tags/v'
+ISSUER=https://token.actions.githubusercontent.com
+cosign verify ghcr.io/fduser123-coding/porter:0.2.0 --certificate-identity-regexp "$ID" --certificate-oidc-issuer $ISSUER
+cosign verify-attestation --type spdxjson ghcr.io/fduser123-coding/porter:0.2.0 --certificate-identity-regexp "$ID" --certificate-oidc-issuer $ISSUER
+cosign verify-blob --bundle SHA256SUMS.sigstore.json --certificate-identity-regexp "$ID" --certificate-oidc-issuer $ISSUER SHA256SUMS
+```
+
+In the cluster, `deploy/kyverno/verify-porter-images.yaml` admits Porter pods only with an image
+signed by that workflow and a signed SBOM, and pins the verified digest; the Flux example
+checks the chart's signature against the same identity. CI checks every shipped Go and npm
+dependency against the license policy (`scripts/check-licenses.sh`: Apache-2.0, MIT, BSD, ISC
+and MPL-2.0 pass; anything else needs a recorded review).
+
 ### Console demo on Vercel
 
 Vercel builds only the console, in demo mode with sample data (`vercel.json`, `.vercelignore`):
@@ -137,7 +200,7 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 
 | Path | Architecture | What it is |
 |---|---|---|
-| `api/v1alpha1` | §3, §7, §18, App. A–B | Object model: `ConnectorManifest`, `Recipe`, `Mapping`, `SlotContract`, `Plugin`, `StackBlueprint`, `PolicyPack`, with schema validation |
+| `apis/v1alpha1` | §3, §7, §18, App. A–B | Object model: `ConnectorManifest`, `Recipe`, `Mapping`, `SlotContract`, `Plugin`, `StackBlueprint`, `PolicyPack`, with schema validation |
 | `pkg/spec` | §2 "declarative everything" | Strict YAML/JSON loader (unknown fields are errors) |
 | `pkg/catalog` | §7.1 versioning | Index with semver resolution of refs like `sf-opportunity-to-order@3` |
 | `pkg/verifier` | §7.5, §18.1 | Verifier stages: schema, resolve, permitted interfaces, slot contracts, mappings/review queue, policy, capacity; computes L0–L3 |
@@ -146,15 +209,16 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 | `pkg/policy` | §9, App. C | Policy decision interface and the built-in write-back default; `opa/` evaluates and tests Rego packs with Open Policy Agent |
 | `pkg/audit` | §9 | Append-only, hash-chained audit log with tamper detection |
 | `pkg/mapping` | §7.4 | JSONata evaluation of mapping sets |
-| `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher |
+| `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow, and one for agent writes; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher |
 | `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox events, rollback dry-runs, idempotent writes) |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Porter's state in Postgres: idempotency records with leases, source cursors, identity cross-references |
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
+| `pkg/agent` | §7.7, §8 | MCP server: business read tools, and write tools that start approval-gated writes; gateway identity, per-call policy and audit |
 | `pkg/console` | §12 | Console API (runs, approvals, audit, catalog), proxy/dev authentication, embedded web app |
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
-| `deploy/` | §11 | Helm chart, Flux example, Troubleshoot preflight spec |
-| `cmd/porter` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check` |
+| `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
+| `cmd/porter` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check`, `mcp` |
 | `wit/porter-stack.wit` | §18.4 | Host interface for Wasm plugins |
 | `examples/` | App. A–C, §18.5 | SAP ECC, Salesforce, Shopify, Stripe, Power BI connectors; slot contracts; the `eu-distributor-core` blueprint |
 
@@ -194,9 +258,9 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 ## Not built yet
 
 In rough roadmap order (§16, §19): Salesforce Pub/Sub API change capture and Bulk API reads;
-the Porter operator and signed releases (cosign, SBOMs); an appliance build (§11);
+the Porter operator; an appliance build (§11);
 Debezium change capture in place of outbox polling; probabilistic identity
 resolution (Splink) and the data-steward queue; signed OPA bundles; the metadata
-graph and discovery; MCP server generation behind agentgateway; direct OIDC sign-in for the
+graph and discovery; packaging the MCP server with agentgateway, and the A2A endpoint; direct OIDC sign-in for the
 console and approving mapping fields from its review queue; the Wasm plugin host. The native Postgres and Salesforce connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

@@ -12,6 +12,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -50,12 +51,13 @@ type EventQuery struct {
 // Operation binds a manifest operation to an sObject.
 type Operation struct {
 	SObject string `json:"sobject"`
-	// Action is update (set fields on a record) or restore (undo an update,
-	// given the update's result).
+	// Action is update (set fields on a record), restore (undo an update,
+	// given the update's result), or get (read a record by ID).
 	Action string `json:"action"`
 	// IDField is the payload field holding the record ID (update only).
 	IDField string `json:"idField,omitempty"`
-	// Fields maps Salesforce field names to payload fields (update only).
+	// Fields maps Salesforce field names to payload fields (update), or to
+	// the names a get returns them under.
 	Fields map[string]string `json:"fields,omitempty"`
 }
 
@@ -98,6 +100,15 @@ func (c Config) validate() error {
 				}
 			}
 		case "restore":
+		case "get":
+			if len(op.Fields) == 0 {
+				return fmt.Errorf("operation %s: get needs fields", name)
+			}
+			for f, as := range op.Fields {
+				if !identRE.MatchString(f) || !identRE.MatchString(as) {
+					return fmt.Errorf("operation %s: invalid field mapping %q: %q", name, f, as)
+				}
+			}
 		default:
 			return fmt.Errorf("operation %s: unknown action %q", name, op.Action)
 		}
@@ -456,4 +467,40 @@ func (c *Conn) Confirm(ctx context.Context, _ string, result json.RawMessage) er
 		}
 	}
 	return nil
+}
+
+var _ writeguard.Reader = (*Conn)(nil)
+
+// Read returns the configured fields of a record, under their business names.
+func (c *Conn) Read(ctx context.Context, name, id string) (json.RawMessage, error) {
+	op, err := c.operation(name)
+	if err != nil {
+		return nil, err
+	}
+	if op.Action != "get" {
+		return nil, fmt.Errorf("salesforce: operation %q is a %s, not a read", name, op.Action)
+	}
+	if !idRE.MatchString(id) {
+		return nil, writeguard.ErrNotFound // not an ID, so no such record
+	}
+	fields := make(map[string]any, len(op.Fields))
+	for f := range op.Fields {
+		fields[f] = nil
+	}
+	rec, err := c.record(ctx, op.SObject, id, fields)
+	var api *APIError
+	if errors.As(err, &api) && api.Status == http.StatusNotFound {
+		return nil, writeguard.ErrNotFound
+	}
+	if err != nil {
+		if strings.Contains(err.Error(), "NOT_FOUND") {
+			return nil, writeguard.ErrNotFound
+		}
+		return nil, err
+	}
+	out := map[string]any{"id": id}
+	for f, as := range op.Fields {
+		out[as] = rec[f]
+	}
+	return json.Marshal(out)
 }

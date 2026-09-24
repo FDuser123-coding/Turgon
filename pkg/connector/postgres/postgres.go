@@ -44,7 +44,7 @@ type Outbox struct {
 // Operation binds a manifest operation to a table.
 type Operation struct {
 	Table string `json:"table"`
-	// Action is insert, update or delete.
+	// Action is insert, update, delete, or select (a read by key).
 	Action string `json:"action"`
 	// Key is the column that identifies a row. For inserts it must have a
 	// unique constraint; a repeated insert then returns the existing row.
@@ -118,11 +118,46 @@ func (op Operation) validate() error {
 		if len(op.Columns) == 0 && len(op.Set) == 0 {
 			return errors.New("update needs columns or set")
 		}
-	case "delete":
+	case "delete", "select":
 	default:
 		return fmt.Errorf("unknown action %q", op.Action)
 	}
 	return nil
+}
+
+var _ writeguard.Reader = (*Conn)(nil)
+
+// Read returns the row whose key column equals id. With Columns set, only
+// those columns are returned.
+func (c *Conn) Read(ctx context.Context, name, id string) (json.RawMessage, error) {
+	op, err := c.operation(name)
+	if err != nil {
+		return nil, err
+	}
+	if op.Action != "select" {
+		return nil, fmt.Errorf("postgres: operation %q is a %s, not a read", name, op.Action)
+	}
+	var raw []byte
+	err = c.pool.QueryRow(ctx, fmt.Sprintf(`SELECT to_jsonb(t) FROM %s t WHERE t.%s::text = $1`,
+		ident(op.Table), pgx.Identifier{op.Key}.Sanitize()), id).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, writeguard.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("postgres: read %s: %w", op.Table, err)
+	}
+	if len(op.Columns) == 0 {
+		return raw, nil
+	}
+	var row map[string]any
+	if err := json.Unmarshal(raw, &row); err != nil {
+		return nil, err
+	}
+	out := make(map[string]any, len(op.Columns))
+	for _, col := range op.Columns {
+		out[col] = row[col]
+	}
+	return json.Marshal(out)
 }
 
 func ident(name string) string {

@@ -12,7 +12,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fduser123-coding/turgon/api/v1alpha1"
+	"github.com/fduser123-coding/turgon/apis/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/audit"
 	"github.com/fduser123-coding/turgon/pkg/catalog"
 	"github.com/fduser123-coding/turgon/pkg/compiler"
@@ -45,7 +45,7 @@ func newRoot(stdout, stderr io.Writer) *cobra.Command {
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	root.AddCommand(validateCmd(), verifyCmd(), compileCmd(), auditCmd(), versionCmd(),
-		runCmd(), approveCmd(), pendingCmd(), retryCmd(), xrefCmd(), secretsCmd(), consoleCmd(), checkCmd())
+		runCmd(), approveCmd(), pendingCmd(), retryCmd(), xrefCmd(), secretsCmd(), consoleCmd(), checkCmd(), mcpCmd())
 	return root
 }
 

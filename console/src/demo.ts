@@ -8,7 +8,7 @@ export function createDemoApi() {
   const now = Date.now();
   const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
 
-  const recipe = (name: string) => ({ id: `porter/recipe/${name}`, roles: ["integration-operator"] });
+  const recipe = (name: string) => ({ id: `turgon/recipe/${name}`, roles: ["integration-operator"] });
 
   const erpOrder: PendingApproval = {
     step: "03-write",
@@ -50,7 +50,7 @@ export function createDemoApi() {
       operation: "update-opportunity",
       tool: "update_opportunity",
       risk: "low",
-      subject: { id: "agent-7", roles: ["integration-operator"], agent: true, onBehalfOf: "sam@example.com" },
+      subject: recipe("salesforce-won-deals-to-erp"),
       idempotencyKey: "006000000000002AAA",
       entity: "Opportunity",
       simulate: true,
@@ -64,7 +64,39 @@ export function createDemoApi() {
     },
   };
 
+  const agentOrder: PendingApproval = {
+    step: "agent-write",
+    digest: "5b8e2d4f6a1c3e5b7d9f0a2c4e6b8d0f1a3c5e7b9d1f3a5c7e9b1d3f5a7c9e1b",
+    since: at(2),
+    reasons: ["high-risk tool"],
+    request: {
+      target: "erp-db",
+      operation: "create-sales-order",
+      tool: "create_sales_order",
+      risk: "high",
+      subject: { id: "claude", roles: ["integration-operator"], agent: true, onBehalfOf: "sam@example.com" },
+      idempotencyKey: "agent:claude:quote-4471",
+      entity: "SalesOrder",
+      amount: 2350,
+      simulate: true,
+      reason: "Customer accepted quote 4471 by email",
+      payload: {
+        currency: "EUR", customerId: "C-100", externalId: "QUOTE-4471", lines: [{ material: "M-2", quantity: 10 }],
+        netValue: 2350, orderDate: "2026-09-24",
+      },
+    },
+    preview: {
+      mode: "rollback",
+      row: {
+        id: 9, external_id: "QUOTE-4471", customer_id: "C-100", order_date: "2026-09-24", net_value: 2350.0,
+        currency: "EUR", lines: [{ material: "M-2", quantity: 10 }], status: "open",
+      },
+    },
+  };
+
   let runs: RunDetail[] = [
+    { id: "create_sales_order/claude:quote-4471", runId: "r7", workflow: "create_sales_order", status: "running", started: at(2),
+      pending: agentOrder, request: agentOrder.request },
     { id: "shop-orders-to-erp/6", runId: "r6", workflow: "shop-orders-to-erp", status: "running", started: at(4), pending: erpOrder,
       event: { id: "6", position: 6, name: "Order.Created", payload: { order_number: 3002, total: "64000.00", currency: "eur", customer: { email: "ada@example.com" } } } },
     { id: "salesforce-won-deals-to-erp/006000000000002AAA", runId: "r5", workflow: "salesforce-won-deals-to-erp", status: "running", started: at(11), pending: sfLink,
@@ -79,7 +111,7 @@ export function createDemoApi() {
       ] },
       event: { id: "006000000000001AAA", position: 1790259000000, name: "Opportunity.ClosedWon", payload: { Id: "006000000000001AAA", Amount: 7800 } } },
     { id: "shop-orders-to-erp/2", runId: "r2", workflow: "shop-orders-to-erp", status: "failed", started: at(95), closed: at(94.9),
-      failure: "writeguard: simulation: write payload invalid: null value in column \"lines\" violates not-null constraint", failureType: "PorterInvalid",
+      failure: "writeguard: simulation: write payload invalid: null value in column \"lines\" violates not-null constraint", failureType: "TurgonInvalid",
       result: undefined, event: { id: "2", position: 2, name: "Order.Created", payload: { order_number: 2002, total: "99000", items: [] } } },
   ];
 
@@ -88,13 +120,13 @@ export function createDemoApi() {
     const seq = entries.length + 1;
     entries.push({ seq, time: at(minutesAgo), actor, action, data, prev: seq === 1 ? "0".repeat(64) : `demo${seq - 1}`, hash: `demo${seq}` });
   }
-  audit("porter/recipe/salesforce-won-deals-to-erp", "writeback.simulated", { target: "erp-db", operation: "create-sales-order" }, 58);
+  audit("turgon/recipe/salesforce-won-deals-to-erp", "writeback.simulated", { target: "erp-db", operation: "create-sales-order" }, 58);
   audit("controller@example.com", "writeback.approval", { target: "erp-db", operation: "create-sales-order", status: "approved", note: "Matches PO 4471", key: "006000000000001AAA" }, 57.9);
-  audit("porter/recipe/salesforce-won-deals-to-erp", "writeback.committed", { target: "erp-db", operation: "create-sales-order", key: "006000000000001AAA" }, 57.9);
-  audit("porter/recipe/salesforce-won-deals-to-erp", "writeback.committed", { target: "salesforce-prod", operation: "update-opportunity", key: "006000000000001AAA" }, 57.8);
-  audit("porter/recipe/shop-orders-to-erp", "writeback.simulated", { target: "erp-db", operation: "create-sales-order" }, 26);
+  audit("turgon/recipe/salesforce-won-deals-to-erp", "writeback.committed", { target: "erp-db", operation: "create-sales-order", key: "006000000000001AAA" }, 57.9);
+  audit("turgon/recipe/salesforce-won-deals-to-erp", "writeback.committed", { target: "salesforce-prod", operation: "update-opportunity", key: "006000000000001AAA" }, 57.8);
+  audit("turgon/recipe/shop-orders-to-erp", "writeback.simulated", { target: "erp-db", operation: "create-sales-order" }, 26);
   audit("controller@example.com", "writeback.approval", { target: "erp-db", operation: "create-sales-order", status: "approved", key: "SHOP-3001" }, 25.7);
-  audit("porter/recipe/shop-orders-to-erp", "writeback.committed", { target: "erp-db", operation: "create-sales-order", key: "SHOP-3001" }, 25.6);
+  audit("turgon/recipe/shop-orders-to-erp", "writeback.committed", { target: "erp-db", operation: "create-sales-order", key: "SHOP-3001" }, 25.6);
 
   const catalog: CatalogReport = {
     reports: [
@@ -135,7 +167,7 @@ export function createDemoApi() {
       return r ? delay(r) : Promise.reject(new Error("run not found"));
     },
     audit: (): Promise<AuditLog[]> =>
-      delay([{ file: "postgres: porter_audit (demo)", ok: true, count: entries.length, head: `demo${entries.length}`, entries: [...entries].reverse() }]),
+      delay([{ file: "Postgres audit log (demo)", ok: true, count: entries.length, head: `demo${entries.length}`, entries: [...entries].reverse() }]),
     catalog: () => delay(catalog),
     decide: (d: { runId: string; step: string; digest: string; decision: "approve" | "reject"; note?: string }) => {
       const r = runs.find((x) => x.id === d.runId);
@@ -145,12 +177,14 @@ export function createDemoApi() {
       audit(user.id, "writeback.approval", { target: p.request.target, operation: p.request.operation, status: approved ? "approved" : "rejected", note: d.note, key: p.request.idempotencyKey }, 0);
       const done: RunDetail = { ...r, pending: undefined, closed: new Date().toISOString() };
       if (approved) {
-        audit(p.request.subject.id, "writeback.committed", { target: p.request.target, operation: p.request.operation, key: p.request.idempotencyKey }, 0);
+        const who = p.request.subject;
+        const actor = who.agent && who.onBehalfOf ? `${who.id} for ${who.onBehalfOf}` : who.id;
+        audit(actor, "writeback.committed", { target: p.request.target, operation: p.request.operation, key: p.request.idempotencyKey }, 0);
         done.status = "completed";
         done.result = { writes: [{ step: p.step, endpoint: p.request.target, operation: p.request.operation, status: "committed", result: p.preview }] };
       } else {
         done.status = "failed";
-        done.failureType = "PorterRejected";
+        done.failureType = "TurgonRejected";
         done.failure = "write rejected by approver";
       }
       runs = runs.map((x) => (x.id === r.id ? done : x));

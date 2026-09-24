@@ -161,7 +161,7 @@ func buildRequest(in PrepareInput) (writeguard.Request, error) {
 		Operation:       c.Operation,
 		Tool:            strings.ReplaceAll(c.Operation, "-", "_"),
 		Risk:            c.Risk,
-		Subject:         policy.Subject{ID: "porter/recipe/" + in.Workflow, Roles: []string{policy.RoleOperator}},
+		Subject:         policy.Subject{ID: "turgon/recipe/" + in.Workflow, Roles: []string{policy.RoleOperator}},
 		IdempotencyKey:  key,
 		Payload:         payload,
 		Entity:          c.Entity,
