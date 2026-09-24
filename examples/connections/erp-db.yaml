@@ -9,6 +9,8 @@ spec:
   operations:
     - { name: create-sales-order, entity: SalesOrder, direction: write, interface: jdbc, risk: high, compensation: cancel-sales-order }
     - { name: cancel-sales-order, entity: SalesOrder, direction: write, interface: jdbc, risk: high }
+    - { name: get-customer, entity: Customer, direction: read, interface: jdbc, risk: read }
+    - { name: get-sales-order, entity: SalesOrder, direction: read, interface: jdbc, risk: read }
   config:
     operations:
       create-sales-order:
@@ -21,3 +23,12 @@ spec:
         action: update
         key: external_id
         set: { status: cancelled }
+      get-customer:
+        table: erp.customers
+        action: select
+        key: id
+      get-sales-order:
+        table: erp.sales_orders
+        action: select
+        key: external_id
+        columns: [external_id, customer_id, order_date, net_value, currency, lines, status]

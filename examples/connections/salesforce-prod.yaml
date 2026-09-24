@@ -29,3 +29,7 @@ spec:
       restore-opportunity:
         sobject: Opportunity
         action: restore
+      get-customer:
+        sobject: Account
+        action: get
+        fields: { Name: name, BillingCity: city, BillingCountry: country, Industry: industry }

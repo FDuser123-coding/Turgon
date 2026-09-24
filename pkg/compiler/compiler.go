@@ -330,6 +330,18 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 		}
 		wf.Steps = append(wf.Steps, step)
 	}
+	// Every read operation of an endpoint the recipe uses becomes a
+	// read-only agent tool, named in business terms (architecture §7.7).
+	for ep, m := range conns {
+		for _, op := range m.Spec.Operations {
+			if op.Direction != v1alpha1.DirectionRead {
+				continue
+			}
+			b.connector(ep, m, op.Interface)
+			desc := fmt.Sprintf("%s from %s by its identifier (read-only)", humanize(op.Name), b.endpoint(ep))
+			b.tool(b.endpoint(ep), op.Name, op.Entity, op.Risk, desc)
+		}
+	}
 	for ep, conn := range rep.Resolution.Connections {
 		if c := b.connectors[b.endpoint(ep)]; c != nil {
 			c.Connection, c.Config = conn.Metadata.Name, conn.Spec.Config

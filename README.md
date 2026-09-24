@@ -94,6 +94,25 @@ A decision always refers to the exact request shown (by its SHA-256 digest), nob
 approve a write made on their own behalf, and cross-site requests are refused.
 For UI development, `cd console && npm run dev` proxies `/api` to a running console.
 
+### Tools for AI agents (MCP)
+
+`porter mcp` serves a spec's read-only tools to AI agents over MCP (streamable HTTP). Tools are
+generated from the connections' read operations and named in business terms, such as
+`get_customer` or `get_sales_order`; when two systems offer the same operation, both are
+qualified (`erp_db_get_customer`, `salesforce_prod_get_customer`). A Salesforce read returns
+business field names (`name`, `city`) rather than `BillingCity`.
+
+```sh
+bin/porter mcp -s runtime-spec.json --dev-agent claude --dev-user you@example.com   # loopback only
+bin/porter mcp -s runtime-spec.json --auth gateway --trusted-gateway 10.42.0.0/16    # behind agentgateway
+```
+
+Every call is authorized for the agent and the person it acts for (the built-in policy lets
+`integration-reader` and `integration-operator` read), passes the system's rate limit and circuit
+breaker, and is audited as "agent for user", without the data returned. Agents never see system
+credentials. Behind the gateway, identity comes from `X-Agent-Id`, `X-On-Behalf-Of` and
+`X-Agent-Roles`, trusted only from `--trusted-gateway` addresses.
+
 ### Install on Kubernetes
 
 The chart in `deploy/helm/porter` installs one worker per compiled spec and the console into
@@ -177,10 +196,11 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Porter's state in Postgres: idempotency records with leases, source cursors, identity cross-references |
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
+| `pkg/agent` | §7.7 | MCP server: read-only business tools for agents, gateway identity, per-call policy and audit |
 | `pkg/console` | §12 | Console API (runs, approvals, audit, catalog), proxy/dev authentication, embedded web app |
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
 | `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
-| `cmd/porter` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check` |
+| `cmd/porter` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check`, `mcp` |
 | `wit/porter-stack.wit` | §18.4 | Host interface for Wasm plugins |
 | `examples/` | App. A–C, §18.5 | SAP ECC, Salesforce, Shopify, Stripe, Power BI connectors; slot contracts; the `eu-distributor-core` blueprint |
 
@@ -223,6 +243,6 @@ In rough roadmap order (§16, §19): Salesforce Pub/Sub API change capture and B
 the Porter operator; an appliance build (§11);
 Debezium change capture in place of outbox polling; probabilistic identity
 resolution (Splink) and the data-steward queue; signed OPA bundles; the metadata
-graph and discovery; MCP server generation behind agentgateway; direct OIDC sign-in for the
+graph and discovery; approval-gated write tools for agents, and packaging the MCP server with agentgateway; direct OIDC sign-in for the
 console and approving mapping fields from its review queue; the Wasm plugin host. The native Postgres and Salesforce connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.
