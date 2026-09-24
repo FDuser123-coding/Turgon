@@ -1,0 +1,152 @@
+{{- if .Values.agents.enabled }}
+{{- $g := .Values.agents.gateway }}
+{{- $names := include "porter.agentSpecs" . | fromJsonArray }}
+{{- if not $names }}
+{{- fail "agents.enabled needs at least one spec in specs (and agents.specs, if set)" }}
+{{- end }}
+---
+# The agent gateway: agentgateway authenticates agents with JWTs from your
+# identity provider and fronts one `porter mcp` per spec. The MCP servers
+# run in the same pod and listen on loopback only, so nothing but the
+# gateway can reach them or set the identity headers they trust.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "porter.fullname" . }}-agents
+  labels:
+    {{- include "porter.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agents
+spec:
+  replicas: {{ $g.replicas }}
+  selector:
+    matchLabels:
+      {{- include "porter.selector" . | nindent 6 }}
+      app.kubernetes.io/component: agents
+  template:
+    metadata:
+      labels:
+        {{- include "porter.selector" . | nindent 8 }}
+        app.kubernetes.io/component: agents
+      annotations:
+        porter.dev/specs-checksum: {{ .Values.specs | toJson | sha256sum }}
+        porter.dev/agents-checksum: {{ .Values.agents | toJson | sha256sum }}
+    spec:
+      {{- include "porter.podSettings" . | nindent 6 }}
+      initContainers:
+        - name: gateway-config
+          image: {{ include "porter.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          args:
+            {{- include "porter.gatewayConfigArgs" . | nindent 12 }}
+            - --output=/config/config.yaml
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - { name: specs, mountPath: /specs, readOnly: true }
+            - { name: config, mountPath: /config }
+      containers:
+        - name: gateway
+          image: "{{ $g.image.repository }}:{{ $g.image.tag }}"
+          imagePullPolicy: {{ $g.image.pullPolicy }}
+          args: [--file=/config/config.yaml]
+          ports:
+            - { name: mcp, containerPort: 3000 }
+            - { name: ready, containerPort: 15021 }
+          readinessProbe:
+            httpGet: { path: /healthz/ready, port: ready }
+            periodSeconds: 10
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml $g.resources | nindent 12 }}
+          volumeMounts:
+            - { name: config, mountPath: /config, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+        {{- range $i, $name := $names }}
+        - name: mcp-{{ $name }}
+          image: {{ include "porter.image" $ }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          args:
+            - mcp
+            - --spec=/specs/{{ $name }}.json
+            - --listen=127.0.0.1:{{ add 8090 $i }}
+            - --auth=gateway
+            - --trusted-gateway=127.0.0.1/32
+            - --audit-log=postgres
+            {{- if has $name $.Values.agents.writes }}
+            - --writes
+            - --wait={{ $.Values.agents.wait }}
+            - --approval-timeout={{ $.Values.workers.approvalTimeout }}
+            {{- end }}
+          env:
+            {{- include "porter.commonEnv" $ | nindent 12 }}
+          {{- with $.Values.workers.secretEnvFrom }}
+          envFrom:
+            {{- range . }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+          {{- end }}
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml $.Values.agents.mcp.resources | nindent 12 }}
+          volumeMounts:
+            - { name: specs, mountPath: /specs, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+        {{- end }}
+      volumes:
+        - name: specs
+          configMap:
+            name: {{ include "porter.fullname" . }}-specs
+        - name: config
+          emptyDir: { sizeLimit: 1Mi }
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "porter.fullname" . }}-agents
+  labels:
+    {{- include "porter.labels" . | nindent 4 }}
+    app.kubernetes.io/component: agents
+spec:
+  type: {{ $g.service.type }}
+  selector:
+    {{- include "porter.selector" . | nindent 4 }}
+    app.kubernetes.io/component: agents
+  ports:
+    - { name: mcp, port: {{ $g.service.port }}, targetPort: mcp }
+{{- if $g.ingress.enabled }}
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "porter.fullname" . }}-agents
+  labels:
+    {{- include "porter.labels" . | nindent 4 }}
+  {{- with $g.ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with $g.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with $g.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ required "agents.gateway.ingress.host is required" $g.ingress.host | quote }}
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ include "porter.fullname" . }}-agents
+                port: { name: mcp }
+{{- end }}
+{{- end }}

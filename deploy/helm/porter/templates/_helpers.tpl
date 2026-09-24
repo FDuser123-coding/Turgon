@@ -70,3 +70,44 @@ affinity:
   {{- toYaml . | nindent 2 }}
 {{- end }}
 {{- end -}}
+
+{{/* The specs served to agents, sorted, as a JSON list. Their order sets
+     each `porter mcp` port (8090, 8091, ...). */}}
+{{- define "porter.agentSpecs" -}}
+{{- $names := list -}}
+{{- range $n := keys .Values.specs | sortAlpha -}}
+{{- if or (not $.Values.agents.specs) (has $n $.Values.agents.specs) -}}
+{{- $names = append $names $n -}}
+{{- end -}}
+{{- end -}}
+{{- range $w := .Values.agents.writes -}}
+{{- if not (has $w $names) -}}
+{{- fail (printf "agents.writes: %s is not a spec served to agents" $w) -}}
+{{- end -}}
+{{- end -}}
+{{- toJson $names -}}
+{{- end -}}
+
+{{/* Arguments of `porter gateway-config` for the agents Deployment and its test. */}}
+{{- define "porter.gatewayConfigArgs" -}}
+{{- $g := .Values.agents.gateway -}}
+- gateway-config
+{{- range $i, $name := include "porter.agentSpecs" . | fromJsonArray }}
+- --spec={{ $name }}=/specs/{{ $name }}.json
+- --upstream={{ $name }}=http://127.0.0.1:{{ add 8090 $i }}/
+{{- end }}
+{{- range .Values.agents.writes }}
+- --writes={{ . }}
+{{- end }}
+- --issuer={{ required "agents.gateway.issuer is required" $g.issuer }}
+- --jwks={{ required "agents.gateway.jwksURL is required" $g.jwksURL }}
+{{- range $g.audiences }}
+- --audience={{ . }}
+{{- end }}
+- --agent-claim={{ $g.claims.agent }}
+- --user-claim={{ $g.claims.user }}
+- --roles-claim={{ $g.claims.roles }}
+{{- with $g.rateLimit }}
+- --rate-limit={{ . }}
+{{- end }}
+{{- end -}}

@@ -48,3 +48,28 @@ spec:
         {{- end }}
 {{- end }}
 {{- end }}
+{{- if and .Values.networkPolicy.enabled .Values.agents.enabled }}
+---
+# Only the gateway port is open; the MCP servers listen on loopback.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "porter.fullname" . }}-agents
+  labels:
+    {{- include "porter.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "porter.selector" . | nindent 6 }}
+      app.kubernetes.io/component: agents
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: 3000 }
+      from:
+        {{- if .Values.networkPolicy.agentsFrom }}
+        {{- toYaml .Values.networkPolicy.agentsFrom | nindent 8 }}
+        {{- else }}
+        - podSelector: {}
+        {{- end }}
+{{- end }}

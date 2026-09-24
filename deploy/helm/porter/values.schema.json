@@ -60,7 +60,40 @@
         "enabled": { "type": "boolean" },
         "allowAllEgress": { "type": "boolean" },
         "egressRules": { "type": "array" },
-        "consoleFrom": { "type": "array" }
+        "consoleFrom": { "type": "array" },
+        "agentsFrom": { "type": "array" }
+      }
+    },
+    "agents": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "specs": { "type": "array", "items": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" } },
+        "writes": { "type": "array", "items": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" } },
+        "wait": { "type": "string", "pattern": "^[0-9]+(ms|s|m)$" },
+        "gateway": {
+          "type": "object",
+          "properties": {
+            "image": {
+              "type": "object",
+              "required": ["repository", "tag"],
+              "properties": {
+                "repository": { "type": "string", "minLength": 1 },
+                "tag": { "type": "string", "minLength": 1 },
+                "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+              }
+            },
+            "replicas": { "type": "integer", "minimum": 0 },
+            "issuer": { "type": "string" },
+            "audiences": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+            "jwksURL": { "type": "string", "pattern": "^(https?://.+)?$" },
+            "claims": {
+              "type": "object",
+              "additionalProperties": { "type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$" }
+            },
+            "rateLimit": { "type": "string", "pattern": "^([0-9]+/[0-9]+(ms|s|m|h))?$" }
+          }
+        }
       }
     }
   }

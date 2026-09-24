@@ -94,7 +94,11 @@ jobs:
           set -o pipefail
           args=(--set database.cloudNativePG.enabled=true --set 'console.auth.trustedProxies={10.0.0.0/8}'
                 --set console.auth.approverGroup=porter-approvers --set networkPolicy.allowAllEgress=false
-                --set-file specs.shop-orders-to-erp=/tmp/shop.json --set-file specs.salesforce-won-deals-to-erp=/tmp/sf.json)
+                --set-file specs.shop-orders-to-erp=/tmp/shop.json --set-file specs.salesforce-won-deals-to-erp=/tmp/sf.json
+                --set agents.enabled=true --set 'agents.writes={shop-orders-to-erp}' --set agents.gateway.rateLimit=100/1m
+                --set agents.gateway.issuer=https://login.example.com --set agents.gateway.jwksURL=https://login.example.com/jwks
+                --set 'agents.gateway.audiences={turgon}' --set agents.gateway.ingress.enabled=true
+                --set agents.gateway.ingress.host=agents.example.com)
           helm lint deploy/helm/porter "${args[@]}"
           helm template porter deploy/helm/porter --kube-version 1.31.0 "${args[@]}" > /tmp/rendered.yaml
           ~/go/bin/kubeconform -strict -summary -kubernetes-version 1.31.0 \

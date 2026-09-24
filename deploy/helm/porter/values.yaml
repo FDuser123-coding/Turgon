@@ -66,11 +66,54 @@ console:
     requests: { cpu: 50m, memory: 64Mi }
     limits: { memory: 256Mi }
 
+# Tools for AI agents over MCP, behind agentgateway (architecture §7.7).
+# Agents present a JWT from your identity provider; the gateway passes the
+# agent, the user it acts for and its roles to Turgon, and lists and allows
+# only the tools those roles may use. Each spec's `porter mcp` runs in the
+# gateway's pod on loopback.
+agents:
+  enabled: false
+  specs: []                # spec names to serve; empty serves every spec
+  writes: []               # specs whose write tools are served (approval-gated)
+  wait: 15s                # how long a write tool call waits for the result
+  gateway:
+    image:
+      repository: ghcr.io/agentgateway/agentgateway
+      tag: v1.5.0          # the version `porter gateway-config` targets
+      pullPolicy: IfNotPresent
+    replicas: 1
+    issuer: ""             # required: issuer of agents' access tokens
+    audiences: []
+    jwksURL: ""            # required: the issuer's JWKS
+    claims:
+      agent: azp           # the agent's client id
+      user: sub            # the user it acts for
+      roles: roles         # a list of role names
+    rateLimit: ""          # per spec, e.g. "100/1m"
+    service:
+      type: ClusterIP
+      port: 3000
+    ingress:
+      enabled: false
+      className: ""
+      host: ""
+      annotations: {}
+      tls: []
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 256Mi }
+  mcp:
+    resources:
+      requests: { cpu: 50m, memory: 64Mi }
+      limits: { memory: 256Mi }
+
 networkPolicy:
   enabled: true
   # Who may reach the console (NetworkPolicy "from" entries). Empty allows
   # any pod in the namespace, e.g. the authenticating proxy.
   consoleFrom: []
+  # Who may reach the agent gateway. Empty allows any pod in the namespace.
+  agentsFrom: []
   # Egress. With allowAllEgress false, only DNS and egressRules are allowed:
   # list Temporal, the state database and every connected system.
   allowAllEgress: true

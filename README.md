@@ -152,6 +152,32 @@ helm install porter deploy/helm/porter -n integrations \
 helm test porter -n integrations                        # runs `porter check` for every spec
 ```
 
+#### Agents behind agentgateway
+
+With `agents.enabled`, the chart runs [agentgateway](https://agentgateway.dev) (v1.5.0) in front
+of one `porter mcp` per spec, as the architecture's agent gateway (§7.7). The MCP servers run in
+the gateway's pod and listen on loopback only, so the gateway is the only way in and the only
+party that can set the identity headers they trust.
+
+```sh
+helm upgrade porter deploy/helm/porter -n integrations --reuse-values \
+  --set agents.enabled=true --set 'agents.writes={shop-orders-to-erp}' \
+  --set agents.gateway.issuer=https://login.example.com \
+  --set agents.gateway.jwksURL=https://login.example.com/.well-known/jwks.json \
+  --set 'agents.gateway.audiences={turgon}' --set agents.gateway.rateLimit=100/1m
+```
+
+Agents connect to `/<spec>/mcp` with a bearer token from your identity provider. The gateway
+requires a valid token and drops it before forwarding; it passes the agent (`azp` claim), the
+user it acts for (`sub`) and the roles (`roles`, a list) as headers, and when a claim is missing
+it removes the header rather than forwarding one a caller sent. It lists and allows tools by
+risk tier: read tools for `integration-reader` or `integration-operator`, write tools for
+`integration-operator`, so agents never see tools they cannot use. Turgon's own policy still
+decides, and audits, every call. The claims, audiences and a per-spec rate limit are
+configurable. The configuration is generated from the specs at start by
+`porter gateway-config`, which you can also run yourself; `helm test` has agentgateway
+validate it.
+
 `porter check -s spec.json` is the pipeline's Connect stage: it tests each connection (reachability,
 tables, columns, unique keys, privileges; Salesforce login, objects and field access) and prints a
 plain-language fix for each failure. `deploy/flux/porter.yaml` shows pull-based delivery with Flux,
@@ -214,11 +240,11 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Porter's state in Postgres: idempotency records with leases, source cursors, identity cross-references |
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
-| `pkg/agent` | §7.7, §8 | MCP server: business read tools, and write tools that start approval-gated writes; gateway identity, per-call policy and audit |
+| `pkg/agent` | §7.7, §8 | MCP server: business read tools, and write tools that start approval-gated writes; gateway identity, per-call policy and audit; agentgateway configuration |
 | `pkg/console` | §12 | Console API (runs, approvals, audit, catalog), proxy/dev authentication, embedded web app |
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
 | `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
-| `cmd/porter` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check`, `mcp` |
+| `cmd/porter` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check`, `mcp`, `gateway-config` |
 | `wit/porter-stack.wit` | §18.4 | Host interface for Wasm plugins |
 | `examples/` | App. A–C, §18.5 | SAP ECC, Salesforce, Shopify, Stripe, Power BI connectors; slot contracts; the `eu-distributor-core` blueprint |
 
@@ -261,6 +287,6 @@ In rough roadmap order (§16, §19): Salesforce Pub/Sub API change capture and B
 the Porter operator; an appliance build (§11);
 Debezium change capture in place of outbox polling; probabilistic identity
 resolution (Splink) and the data-steward queue; signed OPA bundles; the metadata
-graph and discovery; packaging the MCP server with agentgateway, and the A2A endpoint; direct OIDC sign-in for the
+graph and discovery; the A2A endpoint; direct OIDC sign-in for the
 console and approving mapping fields from its review queue; the Wasm plugin host. The native Postgres and Salesforce connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

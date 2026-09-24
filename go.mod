@@ -7,6 +7,7 @@ require (
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/modelcontextprotocol/go-sdk v1.4.0
 	github.com/open-policy-agent/opa v1.9.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/spf13/cobra v1.10.2
 	go.temporal.io/api v1.62.12
 	go.temporal.io/sdk v1.45.0
