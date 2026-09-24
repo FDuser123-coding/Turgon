@@ -190,8 +190,7 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 In rough roadmap order (§16, §19): Salesforce Pub/Sub API change capture and Bulk API reads;
 the Porter operator and signed releases (cosign, SBOMs); an appliance build (§11);
 Debezium change capture in place of outbox polling; probabilistic identity
-resolution (Splink) and the data-steward queue; OPA evaluation of `PolicyPack`s; the metadata graph and discovery; MCP server
-generation behind agentgateway; direct OIDC sign-in for the console and approving mapping
-fields from its review queue; packaging (Helm, operator,
-Flux); the Wasm plugin host. The native Postgres and Salesforce connectors run inside the Go
+resolution (Splink) and the data-steward queue; OPA evaluation of `PolicyPack`s; the metadata
+graph and discovery; MCP server generation behind agentgateway; direct OIDC sign-in for the
+console and approving mapping fields from its review queue; the Wasm plugin host. The native Postgres and Salesforce connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.
