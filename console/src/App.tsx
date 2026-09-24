@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api } from "./api";
+import { api, demo } from "./api";
 import { ErrorBanner, Link } from "./components";
 import { usePath, usePoll } from "./hooks";
 import { Approvals } from "./pages/Approvals";
@@ -57,6 +57,11 @@ export function App() {
           </span>
         )}
       </nav>
+      {demo && (
+        <div className="demo-banner" role="note">
+          Demo with sample data: no systems are connected, and decisions stay in this browser tab.
+        </div>
+      )}
       <main>{page}</main>
     </>
   );

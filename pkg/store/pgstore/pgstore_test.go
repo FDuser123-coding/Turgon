@@ -9,9 +9,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/fduser123-coding/turgon/internal/pgtest"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
 )
+
+func newPool(t *testing.T) (*pgxpool.Pool, string) {
+	t.Helper()
+	pool, schema := pgtest.Pool(t)
+	if err := Migrate(context.Background(), pool); err != nil {
+		t.Fatal(err)
+	}
+	return pool, schema
+}
 
 func newStore(t *testing.T) *Store {
 	t.Helper()

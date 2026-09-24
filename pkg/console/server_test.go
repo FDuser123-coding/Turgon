@@ -178,7 +178,7 @@ func TestAuditEndpointReportsTampering(t *testing.T) {
 		}
 		_ = os.WriteFile(p, data, 0o600)
 	}
-	s := New(Config{Runs: newRuns(), Auth: DevAuth{User: "dev"}, AuditLogs: []string{good, bad}})
+	s := New(Config{Runs: newRuns(), Auth: DevAuth{User: "dev"}, Audit: []AuditSource{AuditFile(good), AuditFile(bad)}})
 	var logs []AuditLog
 	_ = json.Unmarshal(do(t, s, "GET", "/api/audit", "", nil).Body.Bytes(), &logs)
 	if len(logs) != 2 || !logs[0].OK || logs[0].Count != 3 || logs[0].Entries[0].Seq != 3 {

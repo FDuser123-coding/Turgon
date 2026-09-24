@@ -47,8 +47,17 @@ CREATE TABLE IF NOT EXISTS porter_xref (
 
 // Migrate creates or upgrades Porter's schema.
 func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
-	_, err := pool.Exec(ctx, schema)
-	return err
+	// Serialize concurrent migrations from replicas starting together.
+	return pgx.BeginFunc(ctx, pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(7070)`); err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, schema); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, auditSchema)
+		return err
+	})
 }
 
 // Store implements writeguard.Store, cursors and the cross-reference.

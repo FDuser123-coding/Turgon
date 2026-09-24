@@ -45,6 +45,39 @@ func computeHash(e Entry) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// Next builds and seals the entry that follows (seq, prev). Times are kept
+// to the microsecond so entries survive storage in a database unchanged.
+func Next(seq uint64, prev string, now time.Time, actor, action string, data json.RawMessage) Entry {
+	e := Entry{Seq: seq + 1, Time: now.UTC().Truncate(time.Microsecond), Actor: actor, Action: action, Data: data, Prev: prev}
+	e.Hash = computeHash(e)
+	return e
+}
+
+// Encode marshals data for an entry's Data field.
+func Encode(data any) (json.RawMessage, error) {
+	if data == nil {
+		return nil, nil
+	}
+	b, err := json.Marshal(data)
+	if err != nil {
+		return nil, fmt.Errorf("audit: encode data: %w", err)
+	}
+	return b, nil
+}
+
+// Link checks that e correctly follows the entry (seq, prev).
+func Link(seq uint64, prev string, e Entry) error {
+	switch {
+	case e.Seq != seq+1:
+		return fmt.Errorf("%w: entry has seq %d, want %d", ErrTampered, e.Seq, seq+1)
+	case e.Prev != prev:
+		return fmt.Errorf("%w: entry %d does not link to entry %d", ErrTampered, e.Seq, seq)
+	case computeHash(e) != e.Hash:
+		return fmt.Errorf("%w: entry %d content does not match its hash", ErrTampered, e.Seq)
+	}
+	return nil
+}
+
 // Recorder is the interface other packages depend on.
 type Recorder interface {
 	Record(actor, action string, data any) (Entry, error)
@@ -88,18 +121,13 @@ func (l *Log) SetClock(now func() time.Time) { l.now = now }
 
 // Record appends an entry. data is JSON-encoded; it must never contain secrets.
 func (l *Log) Record(actor, action string, data any) (Entry, error) {
-	var raw json.RawMessage
-	if data != nil {
-		b, err := json.Marshal(data)
-		if err != nil {
-			return Entry{}, fmt.Errorf("audit: encode data: %w", err)
-		}
-		raw = b
+	raw, err := Encode(data)
+	if err != nil {
+		return Entry{}, err
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	e := Entry{Seq: l.seq + 1, Time: l.now(), Actor: actor, Action: action, Data: raw, Prev: l.last}
-	e.Hash = computeHash(e)
+	e := Next(l.seq, l.last, l.now(), actor, action, raw)
 	line, err := json.Marshal(e)
 	if err != nil {
 		return Entry{}, err
@@ -133,13 +161,8 @@ func Verify(r io.Reader) (*Entry, error) {
 		if err := json.Unmarshal(sc.Bytes(), &e); err != nil {
 			return last, fmt.Errorf("%w: line %d is not a valid entry: %v", ErrTampered, line, err)
 		}
-		switch {
-		case e.Seq != seq+1:
-			return last, fmt.Errorf("%w: line %d has seq %d, want %d", ErrTampered, line, e.Seq, seq+1)
-		case e.Prev != prev:
-			return last, fmt.Errorf("%w: entry %d does not link to entry %d", ErrTampered, e.Seq, seq)
-		case computeHash(e) != e.Hash:
-			return last, fmt.Errorf("%w: entry %d content does not match its hash", ErrTampered, e.Seq)
+		if err := Link(seq, prev, e); err != nil {
+			return last, fmt.Errorf("line %d: %w", line, err)
 		}
 		prev, seq = e.Hash, e.Seq
 		last = &e

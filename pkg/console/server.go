@@ -5,6 +5,7 @@
 package console
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"errors"
@@ -32,10 +33,10 @@ var dist embed.FS
 
 // Config assembles a console server.
 type Config struct {
-	Runs      Runs
-	Auth      Authenticator
-	Catalogs  []string
-	AuditLogs []string
+	Runs     Runs
+	Auth     Authenticator
+	Catalogs []string
+	Audit    []AuditSource
 	// Assets overrides the embedded web app; for tests and development.
 	Assets fs.FS
 }
@@ -68,6 +69,10 @@ func New(cfg Config) *Server {
 
 // ServeHTTP authenticates every request and applies security headers.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/healthz" { // for probes; reveals nothing
+		_, _ = w.Write([]byte("ok\n"))
+		return
+	}
 	h := w.Header()
 	h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'")
 	h.Set("X-Content-Type-Options", "nosniff")
@@ -222,11 +227,50 @@ func (s *Server) audit(w http.ResponseWriter, r *http.Request) {
 	if n, err := strconv.Atoi(r.URL.Query().Get("limit")); err == nil && n > 0 && n <= 2000 {
 		limit = n
 	}
-	out := make([]AuditLog, 0, len(s.cfg.AuditLogs))
-	for _, path := range s.cfg.AuditLogs {
-		out = append(out, readAudit(path, limit))
+	out := make([]AuditLog, 0, len(s.cfg.Audit))
+	for _, src := range s.cfg.Audit {
+		out = append(out, src.Read(r.Context(), limit))
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// AuditSource is an audit log the console shows and verifies.
+type AuditSource interface {
+	Read(ctx context.Context, limit int) AuditLog
+}
+
+// AuditFile is a file-based audit log.
+type AuditFile string
+
+func (f AuditFile) Read(_ context.Context, limit int) AuditLog {
+	return readAudit(string(f), limit)
+}
+
+// AuditTable is an audit log stored in Postgres.
+type AuditTable struct {
+	Name string
+	Log  interface {
+		Verify(ctx context.Context) (*audit.Entry, error)
+		Tail(ctx context.Context, limit int) ([]audit.Entry, error)
+	}
+}
+
+func (a AuditTable) Read(ctx context.Context, limit int) AuditLog {
+	l := AuditLog{File: a.Name, Entries: []audit.Entry{}}
+	last, err := a.Log.Verify(ctx)
+	l.OK = err == nil
+	if err != nil {
+		l.Error = err.Error()
+	}
+	if last != nil {
+		l.Count, l.Head = last.Seq, last.Hash
+	}
+	if tail, err := a.Log.Tail(ctx, limit); err == nil {
+		l.Entries = tail
+	} else if l.Error == "" {
+		l.Error = err.Error()
+	}
+	return l
 }
 
 func readAudit(path string, limit int) AuditLog {

@@ -6,14 +6,16 @@ import (
 	"net/netip"
 	"os"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 
 	"github.com/fduser123-coding/turgon/pkg/console"
+	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
 )
 
 func consoleCmd() *cobra.Command {
 	var tf temporalFlags
-	var listen, authMode, devUser, approverGroup, viewerGroup string
+	var listen, authMode, devUser, approverGroup, viewerGroup, dbURL string
 	var catalogs, auditLogs, trusted []string
 	cmd := &cobra.Command{
 		Use:   "console",
@@ -51,11 +53,27 @@ func consoleCmd() *cobra.Command {
 				return fmt.Errorf("temporal: %w", err)
 			}
 			defer c.Close()
+			var sources []console.AuditSource
+			for _, a := range auditLogs {
+				if a != "postgres" {
+					sources = append(sources, console.AuditFile(a))
+					continue
+				}
+				if dbURL == "" {
+					return errors.New(`--audit-log postgres needs --database-url (or PORTER_DATABASE_URL)`)
+				}
+				pool, err := pgxpool.New(cmd.Context(), dbURL)
+				if err != nil {
+					return err
+				}
+				defer pool.Close()
+				sources = append(sources, console.AuditTable{Name: "postgres: porter_audit", Log: pgstore.NewAuditLog(pool)})
+			}
 			s := console.New(console.Config{
-				Runs:      console.TemporalRuns{Client: c, Namespace: tf.namespace},
-				Auth:      auth,
-				Catalogs:  catalogs,
-				AuditLogs: auditLogs,
+				Runs:     console.TemporalRuns{Client: c, Namespace: tf.namespace},
+				Auth:     auth,
+				Catalogs: catalogs,
+				Audit:    sources,
 			})
 			fmt.Fprintf(cmd.ErrOrStderr(), "porter console on http://%s (auth: %s)\n", listen, authMode)
 			return s.Serve(listen)
@@ -64,7 +82,8 @@ func consoleCmd() *cobra.Command {
 	tf.register(cmd)
 	cmd.Flags().StringVar(&listen, "listen", "127.0.0.1:8080", "address to listen on")
 	cmd.Flags().StringSliceVarP(&catalogs, "catalog", "c", nil, "catalog directories to show verifier reports for")
-	cmd.Flags().StringSliceVar(&auditLogs, "audit-log", nil, "audit log files to show and verify")
+	cmd.Flags().StringSliceVar(&auditLogs, "audit-log", nil, `audit logs to show and verify: "postgres" or file paths`)
+	cmd.Flags().StringVar(&dbURL, "database-url", os.Getenv("PORTER_DATABASE_URL"), "Postgres URL for Porter's state (for --audit-log postgres)")
 	cmd.Flags().StringVar(&authMode, "auth", "dev", "authentication: dev or proxy")
 	cmd.Flags().StringVar(&devUser, "dev-user", os.Getenv("USER"), "identity for --auth dev")
 	cmd.Flags().StringSliceVar(&trusted, "trusted-proxy", nil, "CIDRs the authenticating proxy connects from")

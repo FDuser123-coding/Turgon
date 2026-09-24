@@ -30,6 +30,8 @@ type Server struct {
 	Username string
 	// PageSize is the number of records per query page. Default 2000.
 	PageSize int
+	// ReadOnly lists "SObject.Field" names the integration user cannot edit.
+	ReadOnly map[string]bool
 	// FailPatch, if set, can reject an update with a Salesforce error code.
 	FailPatch func(sobject, id string, fields map[string]any) (status int, code, msg string)
 
@@ -133,6 +135,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		s.query(w, r.URL.Query().Get("q"))
 	case parts[3] == "query" && len(parts) == 5:
 		s.page(w, parts[4])
+	case parts[3] == "sobjects" && len(parts) == 6 && parts[5] == "describe":
+		s.describe(w, parts[4])
 	case parts[3] == "sobjects" && len(parts) == 6 && r.Method == http.MethodGet:
 		s.read(w, parts[4], parts[5], r.URL.Query().Get("fields"))
 	case parts[3] == "sobjects" && len(parts) == 6 && r.Method == http.MethodPatch:
@@ -326,4 +330,27 @@ func (s *Server) patch(w http.ResponseWriter, r *http.Request, sobject, id strin
 	rec["SystemModstamp"] = time.Now().UTC().Format("2006-01-02T15:04:05.000+0000")
 	s.Patches++
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// describe lists the fields seen on stored records of the sObject.
+func (s *Server) describe(w http.ResponseWriter, sobject string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	recs, ok := s.records[sobject]
+	if !ok {
+		writeErr(w, http.StatusNotFound, "NOT_FOUND", "The requested resource does not exist")
+		return
+	}
+	names := map[string]bool{"Id": true, "SystemModstamp": true}
+	for _, rec := range recs {
+		for k := range rec {
+			names[k] = true
+		}
+	}
+	var fields []map[string]any
+	for n := range names {
+		upd := n != "Id" && n != "SystemModstamp" && !s.ReadOnly[sobject+"."+n]
+		fields = append(fields, map[string]any{"name": n, "updateable": upd})
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"name": sobject, "fields": fields})
 }

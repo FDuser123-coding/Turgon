@@ -1,0 +1,9 @@
+.git
+bin
+**/node_modules
+pkg/console/dist/assets
+pkg/console/dist/index.html
+*.jsonl
+*.json.tmp
+sf.*
+runtime-spec*.json

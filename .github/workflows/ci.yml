@@ -61,9 +61,45 @@ jobs:
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - name: Vercel demo build lands in console/dist
+        run: VERCEL=1 npm run build && test -f dist/index.html
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
       - name: Build porter with the console embedded
         working-directory: .
         run: go build -o /tmp/porter ./cmd/porter
+
+  chart:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.19.0
+      - name: Install kubeconform and hadolint
+        run: |
+          go install github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0
+          curl -sSL -o /usr/local/bin/hadolint https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
+          chmod +x /usr/local/bin/hadolint
+      - name: Compile example specs
+        run: |
+          go run ./cmd/porter compile -c examples shop-orders-to-erp -o /tmp/shop.json
+          go run ./cmd/porter compile -c examples salesforce-won-deals-to-erp -o /tmp/sf.json
+      - name: Lint, render and validate the chart
+        run: |
+          set -o pipefail
+          args="--set database.cloudNativePG.enabled=true --set console.auth.trustedProxies={10.0.0.0/8}
+                --set console.auth.approverGroup=porter-approvers --set networkPolicy.allowAllEgress=false
+                --set-file specs.shop-orders-to-erp=/tmp/shop.json --set-file specs.salesforce-won-deals-to-erp=/tmp/sf.json"
+          helm lint deploy/helm/porter $args
+          helm template porter deploy/helm/porter --kube-version 1.31.0 $args > /tmp/rendered.yaml
+          ~/go/bin/kubeconform -strict -summary -kubernetes-version 1.31.0 \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            /tmp/rendered.yaml deploy/flux/porter.yaml
+      - name: Lint the Dockerfile
+        run: hadolint Dockerfile

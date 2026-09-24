@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -43,6 +46,11 @@ func (f *temporalFlags) dial() (client.Client, error) {
 	})
 }
 
+// connectorRegistry lists the connectors built into this worker.
+func connectorRegistry() connector.Registry {
+	return connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory}
+}
+
 func envOr(key, def string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -74,6 +82,7 @@ func runCmd() *cobra.Command {
 	var tf temporalFlags
 	var specPath, dbURL, auditPath string
 	var poll, approvalTimeout time.Duration
+	var healthAddr string
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run a compiled runtime spec: Temporal worker plus event dispatcher",
@@ -100,14 +109,20 @@ func runCmd() *cobra.Command {
 				return fmt.Errorf("migrate: %w", err)
 			}
 			store := pgstore.New(pool)
-			log, file, err := audit.OpenFile(auditPath)
-			if err != nil {
-				return fmt.Errorf("audit log: %w", err)
+			var log audit.Recorder
+			if auditPath == "postgres" {
+				log = pgstore.NewAuditLog(pool)
+			} else {
+				fl, file, err := audit.OpenFile(auditPath)
+				if err != nil {
+					return fmt.Errorf("audit log: %w", err)
+				}
+				defer file.Close()
+				log = fl
 			}
-			defer file.Close()
 
 			rt, err := engine.New(ctx, spec, engine.Options{
-				Registry: connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory},
+				Registry: connectorRegistry(),
 				Secrets:  connector.EnvSecrets{},
 				Store:    store, Resolver: store, Audit: log,
 			})
@@ -130,6 +145,9 @@ func runCmd() *cobra.Command {
 				return err
 			}
 			defer w.Stop()
+			if healthAddr != "" {
+				go serveHealth(ctx, healthAddr, pool, cmd.ErrOrStderr())
+			}
 
 			d := &engine.Dispatcher{Runtime: rt, Cursors: store, Starter: engine.TemporalStarter{Client: c, TaskQueue: tf.taskQueue}, ApprovalTimeout: approvalTimeout}
 			out := cmd.ErrOrStderr()
@@ -157,8 +175,9 @@ func runCmd() *cobra.Command {
 	tf.register(cmd)
 	cmd.Flags().StringVarP(&specPath, "spec", "s", "runtime-spec.json", "compiled runtime spec")
 	cmd.Flags().StringVar(&dbURL, "database-url", os.Getenv("PORTER_DATABASE_URL"), "Postgres URL for Porter's state")
-	cmd.Flags().StringVar(&auditPath, "audit-log", "porter-audit.jsonl", "append-only audit log file")
+	cmd.Flags().StringVar(&auditPath, "audit-log", "postgres", `audit log: "postgres" (shared by all workers) or a file path`)
 	cmd.Flags().DurationVar(&poll, "poll", 2*time.Second, "event source poll interval")
+	cmd.Flags().StringVar(&healthAddr, "health-listen", "", "serve /healthz and /readyz on this address, e.g. :8081")
 	cmd.Flags().DurationVar(&approvalTimeout, "approval-timeout", engine.DefaultApprovalTimeout, "reject approvals nobody answers within this time")
 	return cmd
 }
@@ -322,5 +341,29 @@ func secretsCmd() *cobra.Command {
 			}
 			return nil
 		},
+	}
+}
+
+// serveHealth answers Kubernetes probes: /healthz while the process runs,
+// /readyz while Porter's database answers.
+func serveHealth(ctx context.Context, addr string, pool *pgxpool.Pool, logw io.Writer) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintln(w, "ok") })
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		pctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := pool.Ping(pctx); err != nil {
+			http.Error(w, "state database: "+err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		fmt.Fprintln(w, "ready")
+	})
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	go func() {
+		<-ctx.Done()
+		_ = srv.Close()
+	}()
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		fmt.Fprintf(logw, "porter: health endpoint: %v\n", err)
 	}
 }

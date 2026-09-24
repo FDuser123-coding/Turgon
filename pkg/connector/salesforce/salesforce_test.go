@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -181,4 +182,31 @@ func TestLoginFailuresAreExplained(t *testing.T) {
 func jsonEscape(s string) string {
 	b, _ := json.Marshal(s)
 	return strings.Trim(string(b), `"`)
+}
+
+func TestCheck(t *testing.T) {
+	c, sf := newConn(t)
+	sf.Put("Opportunity", oppID(1), map[string]any{"StageName": "Closed Won", "AccountId": "001", "Amount": 1, "ERP_Order_Number__c": nil}, t0)
+	results := map[string]string{}
+	for _, r := range c.Check(context.Background()) {
+		results[r.Name] = fmt.Sprint(r.OK, " ", r.Detail, " ", r.Fix)
+	}
+	if !strings.HasPrefix(results["login"], "true") || !strings.HasPrefix(results["sobject Opportunity"], "true") {
+		t.Fatalf("healthy org: %v", results)
+	}
+
+	sf.ReadOnly = map[string]bool{"Opportunity.ERP_Order_Number__c": true}
+	for _, r := range c.Check(context.Background()) {
+		if r.Name == "sobject Opportunity" && (r.OK || !strings.Contains(r.Detail, "ERP_Order_Number__c is read-only") || !strings.Contains(r.Fix, "permission set")) {
+			t.Fatalf("read-only field: %+v", r)
+		}
+	}
+
+	other := sftest.New()
+	defer other.Close()
+	bad, _ := New(strings.Replace(sf.Credentials(), jsonEscape(sf.PrivateKeyPEM()), jsonEscape(other.PrivateKeyPEM()), 1), cfg, sf.Client())
+	r := bad.Check(context.Background())[0]
+	if r.OK || !strings.Contains(r.Fix, "certificate matching this private key") {
+		t.Fatalf("wrong key: %+v", r)
+	}
 }

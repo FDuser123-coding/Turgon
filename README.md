@@ -94,6 +94,40 @@ A decision always refers to the exact request shown (by its SHA-256 digest), nob
 approve a write made on their own behalf, and cross-site requests are refused.
 For UI development, `cd console && npm run dev` proxies `/api` to a running console.
 
+### Install on Kubernetes
+
+The chart in `deploy/helm/porter` installs one worker per compiled spec and the console into
+a single namespace: no cluster roles, no service-account tokens, the "restricted" pod security
+profile, read-only root filesystems and deny-by-default network policies. Porter's state and
+the shared, hash-chained audit log live in Postgres: an existing database, or a CloudNativePG
+cluster the chart creates. Temporal is expected to be reachable at `temporal.address`.
+
+```sh
+kubectl preflight deploy/preflight.yaml                 # Troubleshoot: version, sizing, storage
+bin/porter compile -c examples shop-orders-to-erp -o shop.json
+kubectl -n integrations create secret generic porter-connection-secrets \
+  --from-literal=PORTER_SECRET_SHOP_DB_DSN=... --from-literal=PORTER_SECRET_ERP_DB_DSN=...
+helm install porter deploy/helm/porter -n integrations \
+  --set database.cloudNativePG.enabled=true \
+  --set console.auth.trustedProxies={10.42.0.0/16} --set console.auth.approverGroup=porter-approvers \
+  --set 'workers.secretEnvFrom={porter-connection-secrets}' \
+  --set-file specs.shop-orders-to-erp=shop.json
+helm test porter -n integrations                        # runs `porter check` for every spec
+```
+
+`porter check -s spec.json` is the pipeline's Connect stage: it tests each connection (reachability,
+tables, columns, unique keys, privileges; Salesforce login, objects and field access) and prints a
+plain-language fix for each failure. `deploy/flux/porter.yaml` shows pull-based delivery with Flux,
+cosign verification and automatic rollback. The image is built by the `Dockerfile` (distroless,
+non-root, static binary).
+
+### Console demo on Vercel
+
+Vercel builds only the console, in demo mode with sample data (`vercel.json`, `.vercelignore`):
+the real API runs inside the customer's environment and is never exposed publicly. The demo
+build is labelled as such, keeps decisions in the browser tab, and its sample data is not part
+of the console embedded in `porter`.
+
 Run IDs are `<workflow>/<event id>`, so an event starts at most one successful run. A failed
 run can be retried; writes it already committed are recognized by their idempotency keys.
 Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
@@ -119,7 +153,8 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
 | `pkg/console` | §12 | Console API (runs, approvals, audit, catalog), proxy/dev authentication, embedded web app |
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
-| `cmd/porter` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console` |
+| `deploy/` | §11 | Helm chart, Flux example, Troubleshoot preflight spec |
+| `cmd/porter` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check` |
 | `wit/porter-stack.wit` | §18.4 | Host interface for Wasm plugins |
 | `examples/` | App. A–C, §18.5 | SAP ECC, Salesforce, Shopify, Stripe, Power BI connectors; slot contracts; the `eu-distributor-core` blueprint |
 
@@ -153,9 +188,9 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 ## Not built yet
 
 In rough roadmap order (§16, §19): Salesforce Pub/Sub API change capture and Bulk API reads;
+the Porter operator and signed releases (cosign, SBOMs); an appliance build (§11);
 Debezium change capture in place of outbox polling; probabilistic identity
-resolution (Splink) and the data-steward queue; OPA evaluation of `PolicyPack`s; a shared
-audit store instead of a per-worker file; the metadata graph and discovery; MCP server
+resolution (Splink) and the data-steward queue; OPA evaluation of `PolicyPack`s; the metadata graph and discovery; MCP server
 generation behind agentgateway; direct OIDC sign-in for the console and approving mapping
 fields from its review queue; packaging (Helm, operator,
 Flux); the Wasm plugin host. The native Postgres and Salesforce connectors run inside the Go
