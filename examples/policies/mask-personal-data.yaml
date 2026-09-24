@@ -1,0 +1,16 @@
+apiVersion: porter.dev/v1alpha1
+kind: PolicyPack
+metadata: { name: mask-personal-data, version: 1.0.0 }
+spec:
+  rego: |
+    package porter.data.masking
+
+    # Fields classified as personal data are masked in logs, previews shown
+    # to approvers outside the owning team, and anything sent to AI models.
+    personal_fields := {"email", "phone", "birthDate", "taxId", "iban"}
+
+    mask contains field if {
+      some field in input.fields
+      field in personal_fields
+      not input.purpose == "system-of-record-write"
+    }

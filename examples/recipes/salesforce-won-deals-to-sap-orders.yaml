@@ -1,0 +1,35 @@
+# Appendix B.
+apiVersion: porter.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: salesforce-won-deals-to-sap-orders
+  version: 1.0.0
+  certification: L0
+spec:
+  trigger:
+    source: salesforce
+    event: Opportunity.ClosedWon
+  connectors:
+    salesforce: "^3"
+    sap-ecc: "^0.4"
+  steps:
+    - map:
+        from: salesforce.Opportunity
+        to: model.SalesOrder
+        mapping: sf-opportunity-to-order@3
+    - resolve:
+        entity: model.Customer
+        strategy: splink
+        autoMatchAbove: 0.92
+    - write:
+        target: sap-ecc
+        operation: create-sales-order
+        idempotencyKey: "{{ source.Id }}"
+        simulate: true
+        approval: policy
+        compensation: cancel-sales-order
+  policies: [writeback-default, mask-personal-data]
+  capacity:
+    peakPerSecond: 2
+  slo:
+    p95Latency: 2s

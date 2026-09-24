@@ -1,0 +1,18 @@
+apiVersion: porter.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: sf-opportunity-to-order
+  version: 3.0.0
+spec:
+  from: salesforce.Opportunity
+  to: model.SalesOrder
+  fields:
+    - { target: externalId,   expression: "Id",                          origin: certified, confidence: 1.0 }
+    - { target: customerRef,  expression: "AccountId",                   origin: certified, confidence: 0.99 }
+    - { target: orderDate,    expression: "$substring(CloseDate, 0, 10)", origin: certified, confidence: 0.99 }
+    - { target: netValue,     expression: "Amount",                      origin: certified, confidence: 0.98 }
+    - { target: currency,     expression: "CurrencyIsoCode",             origin: certified, confidence: 0.99 }
+    - target: lines
+      expression: "OpportunityLineItems.records.{ 'material': Product2.ProductCode, 'quantity': Quantity }"
+      origin: certified
+      confidence: 0.97

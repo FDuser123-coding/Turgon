@@ -1,0 +1,20 @@
+apiVersion: porter.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: shopify-order-to-order
+  version: 1.0.0
+spec:
+  from: commerce.Order
+  to: model.SalesOrder
+  fields:
+    - { target: externalId,  expression: "admin_graphql_api_id", origin: certified, confidence: 1.0 }
+    - { target: customerRef, expression: "customer.email",       origin: human,     confidence: 0.96 }
+    - { target: orderDate,   expression: "$substring(created_at, 0, 10)", origin: certified, confidence: 0.99 }
+    - { target: netValue,    expression: "$number(subtotal_price)", origin: certified, confidence: 0.98 }
+    - { target: currency,    expression: "currency",             origin: certified, confidence: 0.99 }
+    - target: shippingCondition
+      expression: "shipping_lines[0].code = 'express' ? '01' : '02'"
+      origin: ai
+      confidence: 0.88
+      approved: true
+      rationale: "Express shipping lines map to SAP shipping condition 01 (immediate); all others to 02 (standard)."

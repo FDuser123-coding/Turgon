@@ -1,0 +1,44 @@
+apiVersion: porter.dev/v1alpha1
+kind: ConnectorManifest
+metadata:
+  name: salesforce
+  version: 3.1.0
+spec:
+  system: "Salesforce Sales Cloud, API v60+"
+  runtime: camel-java
+  auth:
+    methods: [oauth2-jwt]
+    secretRef: openbao://salesforce/prod
+  discovery:
+    - kind: openapi
+  interfaces:
+    read:
+      - kind: rest-api
+      - kind: bulk-api
+    write:
+      - kind: rest-api
+    events:
+      - kind: change-data-capture
+      - kind: platform-events
+  entities: [Customer, Opportunity]
+  events:
+    - name: Opportunity.ClosedWon
+      entity: Opportunity
+      interface: change-data-capture
+  operations:
+    - name: get-customer
+      entity: Customer
+      direction: read
+      interface: rest-api
+      risk: read
+    - name: update-opportunity
+      entity: Opportunity
+      direction: write
+      interface: rest-api
+      risk: low
+      compensation: update-opportunity
+  limits:
+    maxConcurrentCalls: 10
+    requestsPerSecond: 20
+  semanticBindings:
+    - template: ossie://porter/distribution/customer@1
