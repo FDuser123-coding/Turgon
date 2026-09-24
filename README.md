@@ -131,6 +131,25 @@ with the same arguments reports how the write stands and never writes twice, and
 `requestId` for a different record is refused. Unanswered approvals are rejected after
 `--approval-timeout` (72h).
 
+#### Turgon as an A2A agent
+
+The same server is an [A2A](https://a2a-protocol.org) agent (protocol 0.3, JSON-RPC), so other
+agents can delegate integration tasks to Turgon (§7.7). Its agent card is at
+`/a2a/.well-known/agent-card.json` and lists the tools as skills. Requests are structured, not
+prose, because Turgon runs no language model at run time: a message carries a data part
+`{"skill": "create_sales_order", "arguments": {...}}` with the MCP tool's arguments.
+
+- A read answers at once with a message holding the record.
+- A write becomes a task whose ID is its durable agent-write workflow, so it can wait days for
+  approval and survive restarts: `working` while it waits, then `completed` with the result as
+  an artifact, or `rejected` / `failed` with the reason. Poll it with `tasks/get`; only the agent
+  that asked can see it, and a person, not the agent, decides it (`tasks/cancel` is refused).
+- A write's `requestId` defaults to the message ID, so resending a message never writes twice.
+
+Streaming and push notifications are not offered. Behind agentgateway each spec's agent is at
+`/<spec>/a2a`, with the same token authentication and identity headers; the gateway rewrites
+the card's URL to its own.
+
 ### Install on Kubernetes
 
 The chart in `deploy/helm/porter` installs one worker per compiled spec and the console into
@@ -240,7 +259,7 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Porter's state in Postgres: idempotency records with leases, source cursors, identity cross-references |
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
-| `pkg/agent` | §7.7, §8 | MCP server: business read tools, and write tools that start approval-gated writes; gateway identity, per-call policy and audit; agentgateway configuration |
+| `pkg/agent` | §7.7, §8 | MCP server and A2A agent: business read tools, and write tools that start approval-gated writes; gateway identity, per-call policy and audit; agentgateway configuration |
 | `pkg/console` | §12 | Console API (runs, approvals, audit, catalog), proxy/dev authentication, embedded web app |
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
 | `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
@@ -287,6 +306,6 @@ In rough roadmap order (§16, §19): Salesforce Pub/Sub API change capture and B
 the Porter operator; an appliance build (§11);
 Debezium change capture in place of outbox polling; probabilistic identity
 resolution (Splink) and the data-steward queue; signed OPA bundles; the metadata
-graph and discovery; the A2A endpoint; direct OIDC sign-in for the
+graph and discovery; A2A streaming and push notifications; direct OIDC sign-in for the
 console and approving mapping fields from its review queue; the Wasm plugin host. The native Postgres and Salesforce connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

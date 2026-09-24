@@ -167,14 +167,37 @@ func (w AgentWrites) Submit(ctx context.Context, id string, in AgentWriteInput) 
 	} else if err != nil {
 		return AgentWriteStatus{}, err
 	}
-	wait := w.Wait
+	return w.await(ctx, id, run, w.Wait)
+}
+
+// ErrUnknownWrite is returned by Status for an ID no write was started under.
+var ErrUnknownWrite = errors.New("no agent write with this ID")
+
+// Status reports on a write already started, waiting at most a moment.
+func (w AgentWrites) Status(ctx context.Context, id string) (AgentWriteStatus, error) {
+	desc, err := w.Client.DescribeWorkflowExecution(ctx, id, "")
+	var nf *serviceerror.NotFound
+	if errors.As(err, &nf) {
+		return AgentWriteStatus{}, ErrUnknownWrite
+	}
+	if err != nil {
+		return AgentWriteStatus{}, err
+	}
+	if desc.GetWorkflowExecutionInfo().GetType().GetName() != AgentWriteWorkflowName {
+		return AgentWriteStatus{}, ErrUnknownWrite
+	}
+	return w.await(ctx, id, w.Client.GetWorkflow(ctx, id, ""), time.Second)
+}
+
+// await waits up to wait for a write to finish, then reports where it stands.
+func (w AgentWrites) await(ctx context.Context, id string, run client.WorkflowRun, wait time.Duration) (AgentWriteStatus, error) {
 	if wait <= 0 {
 		wait = 15 * time.Second
 	}
 	wctx, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
 	var res RunResult
-	err = run.Get(wctx, &res)
+	err := run.Get(wctx, &res)
 	if err != nil && ctx.Err() == nil && !isRunFailure(err) {
 		// The wait ended (Temporal may end its long poll a little before
 		// our deadline) or the call failed: ask whether the write is still

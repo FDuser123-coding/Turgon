@@ -22,6 +22,17 @@ type fakeWrites struct {
 	err    error
 }
 
+func (f *fakeWrites) Status(_ context.Context, id string) (engine.AgentWriteStatus, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, known := range f.ids {
+		if known == id {
+			return f.status, f.err
+		}
+	}
+	return engine.AgentWriteStatus{}, engine.ErrUnknownWrite
+}
+
 func (f *fakeWrites) Submit(_ context.Context, id string, in engine.AgentWriteInput) (engine.AgentWriteStatus, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

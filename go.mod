@@ -3,6 +3,7 @@ module github.com/fduser123-coding/turgon
 go 1.24.7
 
 require (
+	github.com/a2aproject/a2a-go v0.3.15
 	github.com/blues/jsonata-go v1.5.4
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/modelcontextprotocol/go-sdk v1.4.0

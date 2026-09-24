@@ -6,7 +6,8 @@ Console: service {{ include "porter.fullname" . }}-console:{{ .Values.console.se
          Approvers: members of {{ .Values.console.auth.approverGroup }}.
 {{- end }}
 {{- if .Values.agents.enabled }}
-Agents:  MCP through agentgateway at service {{ include "porter.fullname" . }}-agents:{{ .Values.agents.gateway.service.port }}, path /<spec>/mcp,
+Agents:  through agentgateway at service {{ include "porter.fullname" . }}-agents:{{ .Values.agents.gateway.service.port }}:
+         MCP at /<spec>/mcp, A2A at /<spec>/a2a,
          with a bearer token from {{ .Values.agents.gateway.issuer }}.
          Write tools: {{ if .Values.agents.writes }}{{ join ", " .Values.agents.writes }}{{ else }}none{{ end }}.
 {{- end }}

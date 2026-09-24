@@ -123,6 +123,10 @@ func TestGatewayAuthenticatesAndAllowsToolsByRiskTier(t *testing.T) {
 		`x-agent-roles: jwt.roles.join(",")`,
 		"fillInterval: 60s",
 		`mcp.tool.name in ["create_sales_order"] && "integration-operator" in jwt.roles`,
+		"pathPrefix: /shop/a2a",
+		"host: 127.0.0.1:8090",
+		"a2a: {}",
+		"prefix: /a2a",
 	} {
 		if !strings.Contains(strings.Join(strings.Fields(s), " "), want) {
 			t.Errorf("config lacks %q:\n%s", want, s)
