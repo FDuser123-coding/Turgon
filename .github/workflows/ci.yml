@@ -92,11 +92,11 @@ jobs:
       - name: Lint, render and validate the chart
         run: |
           set -o pipefail
-          args="--set database.cloudNativePG.enabled=true --set console.auth.trustedProxies={10.0.0.0/8}
+          args=(--set database.cloudNativePG.enabled=true --set 'console.auth.trustedProxies={10.0.0.0/8}'
                 --set console.auth.approverGroup=porter-approvers --set networkPolicy.allowAllEgress=false
-                --set-file specs.shop-orders-to-erp=/tmp/shop.json --set-file specs.salesforce-won-deals-to-erp=/tmp/sf.json"
-          helm lint deploy/helm/porter $args
-          helm template porter deploy/helm/porter --kube-version 1.31.0 $args > /tmp/rendered.yaml
+                --set-file specs.shop-orders-to-erp=/tmp/shop.json --set-file specs.salesforce-won-deals-to-erp=/tmp/sf.json)
+          helm lint deploy/helm/porter "${args[@]}"
+          helm template porter deploy/helm/porter --kube-version 1.31.0 "${args[@]}" > /tmp/rendered.yaml
           ~/go/bin/kubeconform -strict -summary -kubernetes-version 1.31.0 \
             -schema-location default \
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
