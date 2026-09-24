@@ -25,6 +25,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/connector/postgres"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce/sftest"
+	"github.com/fduser123-coding/turgon/pkg/policy"
 	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
 	"github.com/fduser123-coding/turgon/pkg/verifier"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
@@ -462,4 +463,44 @@ func TestApprovalMustMatchThePendingRequest(t *testing.T) {
 	if !strings.Contains(f.auditLog.String(), `"by":"porter/approval-timeout"`) && !strings.Contains(f.auditLog.String(), `"actor":"porter/approval-timeout"`) {
 		t.Error("timeout rejection not audited")
 	}
+}
+
+func TestPolicyDenialStopsBeforeAnyoneIsAsked(t *testing.T) {
+	f := newFixture(t)
+	// Rebuild the runtime with a freeze pack added to the recipe's policies.
+	spec := *f.rt.Spec
+	spec.Spec.Policies = append(append([]compiler.PolicyRef{}, spec.Spec.Policies...), compiler.PolicyRef{
+		Name: "erp-freeze", Rego: "package porter.writeback\ndeny contains \"ERP writes are frozen for the year-end close\" if input.recipe == \"shop-orders-to-erp\"",
+	})
+	spec.Spec.Workflows = append([]compiler.Workflow{}, spec.Spec.Workflows...)
+	spec.Spec.Workflows[0].Policies = append(append([]string{}, spec.Spec.Workflows[0].Policies...), "erp-freeze")
+	d, err := recipeDeciders(context.Background(), &spec, policy.WritebackDefault{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.rt.Activities.Guard = mustGuard(t, f, d)
+
+	f.publish(1007, "ada@example.com", "10.00")
+	_, err, pending := f.run(f.dispatch()[0], approve("03-write"))
+	if errType(err) != ErrTypeDenied || !strings.Contains(err.Error(), "denied") || len(pending) != 0 || f.orders("true") != 0 {
+		t.Fatalf("err = %v (%s), pending = %d, orders = %d", err, errType(err), len(pending), f.orders("true"))
+	}
+	if !strings.Contains(f.auditLog.String(), "frozen for the year-end close") {
+		t.Error("the denial reason is not in the audit log")
+	}
+}
+
+func mustGuard(t *testing.T, f *fixture, d policy.Decider) *writeguard.Guard {
+	t.Helper()
+	targets := map[string]writeguard.TargetConfig{}
+	for _, c := range f.rt.Spec.Spec.Connectors {
+		if inst, ok := f.rt.instances[c.Endpoint]; ok {
+			targets[c.Endpoint] = writeguard.TargetConfig{Target: inst, Limits: c.Limits, Metered: c.Metered}
+		}
+	}
+	g, err := writeguard.New(writeguard.Config{Targets: targets, Policy: d, Audit: audit.New(&syncWriter{w: f.auditLog}), Store: f.store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g
 }

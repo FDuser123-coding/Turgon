@@ -11,6 +11,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/policy"
+	"github.com/fduser123-coding/turgon/pkg/policy/opa"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
 )
 
@@ -76,8 +77,13 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Runtim
 			return nil, fmt.Errorf("workflow %s: endpoint %s cannot emit events", wf.Name, wf.Trigger.Endpoint)
 		}
 	}
+	decider, err := recipeDeciders(ctx, spec, opts.Policy)
+	if err != nil {
+		rt.Close()
+		return nil, err
+	}
 	guard, err := writeguard.New(writeguard.Config{
-		Targets: targets, Policy: opts.Policy, Audit: opts.Audit, Store: opts.Store,
+		Targets: targets, Policy: decider, Audit: opts.Audit, Store: opts.Store,
 	})
 	if err != nil {
 		rt.Close()
@@ -161,4 +167,40 @@ func (d *Dispatcher) Poll(ctx context.Context) (int, error) {
 		}
 	}
 	return started, errors.Join(errs...)
+}
+
+// recipeDeciders gives each workflow its own OPA decider built from the
+// policy packs compiled into the spec, so one recipe's packs never loosen
+// another's. Workflows whose packs do not define porter.writeback, and
+// requests from no recipe, use the fallback decider.
+func recipeDeciders(ctx context.Context, spec *compiler.RuntimeSpec, fallback policy.Decider) (policy.Decider, error) {
+	packs := map[string]opa.Module{}
+	for _, p := range spec.Spec.Policies {
+		packs[p.Name] = opa.Module{Name: p.Name, Source: p.Rego}
+	}
+	byRecipe := map[string]policy.Decider{}
+	for _, wf := range spec.Spec.Workflows {
+		var mods []opa.Module
+		for _, name := range wf.Policies {
+			m, ok := packs[name]
+			if !ok {
+				return nil, fmt.Errorf("workflow %s: policy pack %s is not in the spec", wf.Name, name)
+			}
+			mods = append(mods, m)
+		}
+		if !opa.DefinesWriteback(mods) {
+			continue
+		}
+		d, err := opa.New(ctx, mods)
+		if err != nil {
+			return nil, fmt.Errorf("workflow %s: policies: %w", wf.Name, err)
+		}
+		byRecipe[wf.Name] = d
+	}
+	return policy.DeciderFunc(func(ctx context.Context, in policy.Input) (policy.Decision, error) {
+		if d, ok := byRecipe[in.Recipe]; ok {
+			return d.Decide(ctx, in)
+		}
+		return fallback.Decide(ctx, in)
+	}), nil
 }

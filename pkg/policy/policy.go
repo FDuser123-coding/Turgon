@@ -19,6 +19,9 @@ const (
 
 // Input is the document a policy evaluates; field names match the Rego input.
 type Input struct {
+	// Recipe names the recipe making the write, if any; it selects the
+	// recipe's own policy packs.
+	Recipe   string   `json:"recipe,omitempty"`
 	Tool     Tool     `json:"tool"`
 	Subject  Subject  `json:"subject"`
 	Action   Action   `json:"action"`
@@ -61,9 +64,11 @@ type Approval struct {
 
 // Decision is a policy result.
 type Decision struct {
-	Allow           bool     `json:"allow"`
-	RequireApproval bool     `json:"requireApproval"`
-	Reasons         []string `json:"reasons,omitempty"`
+	Allow           bool `json:"allow"`
+	RequireApproval bool `json:"requireApproval"`
+	// Denied means no approval can make the write proceed.
+	Denied  bool     `json:"denied,omitempty"`
+	Reasons []string `json:"reasons,omitempty"`
 }
 
 // Decider evaluates policy.
@@ -114,7 +119,7 @@ func (p WritebackDefault) Decide(_ context.Context, in Input) (Decision, error) 
 		d.Reasons = append(d.Reasons, "amount above approval threshold")
 	}
 	if in.Approval.Status == ApprovalRejected {
-		d.Allow = false
+		d.Allow, d.Denied = false, true
 		d.Reasons = append(d.Reasons, "approval rejected")
 	}
 	return d, nil

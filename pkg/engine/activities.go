@@ -156,6 +156,7 @@ func buildRequest(in PrepareInput) (writeguard.Request, error) {
 	}
 	amount, _ := in.Doc["netValue"].(float64)
 	return writeguard.Request{
+		Recipe:          in.Workflow,
 		Target:          c.Endpoint,
 		Operation:       c.Operation,
 		Tool:            strings.ReplaceAll(c.Operation, "-", "_"),
