@@ -1,0 +1,38 @@
+apiVersion: porter.dev/v1alpha1
+kind: ConnectorManifest
+metadata:
+  name: stripe
+  version: 1.4.0
+spec:
+  system: "Stripe API 2026-06"
+  runtime: camel-java
+  auth:
+    methods: [restricted-api-key]
+    secretRef: openbao://stripe/restricted
+  interfaces:
+    read:
+      - kind: rest-api
+    write:
+      - kind: rest-api
+    events:
+      - kind: webhooks
+  entities: [Customer, Invoice]
+  events:
+    - name: Invoice.Paid
+      entity: Invoice
+      interface: webhooks
+  operations:
+    - name: create-invoice
+      entity: Invoice
+      direction: write
+      interface: rest-api
+      risk: low
+      compensation: void-invoice
+    - name: void-invoice
+      entity: Invoice
+      direction: write
+      interface: rest-api
+      risk: low
+  limits:
+    maxConcurrentCalls: 8
+    requestsPerSecond: 25

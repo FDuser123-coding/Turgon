@@ -1,0 +1,33 @@
+# Appendix C. pkg/policy.WritebackDefault is the built-in Go equivalent.
+apiVersion: porter.dev/v1alpha1
+kind: PolicyPack
+metadata: { name: writeback-default, version: 1.0.0 }
+spec:
+  rego: |
+    package porter.writeback
+
+    default allow := false
+
+    allow if {
+      input.tool.risk == "read"
+      some role in {"integration-operator", "integration-reader"}
+      role in input.subject.roles
+    }
+
+    allow if {
+      input.tool.risk == "low"
+      "integration-operator" in input.subject.roles
+    }
+
+    allow if {
+      input.tool.risk == "high"
+      input.approval.status == "approved"
+    }
+
+    require_approval if {
+      input.tool.risk == "high"
+    }
+
+    require_approval if {
+      input.action.amount > 50000
+    }

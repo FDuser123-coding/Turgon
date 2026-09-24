@@ -1,0 +1,15 @@
+# Architecture §18.5.
+apiVersion: porter.dev/v1alpha1
+kind: StackBlueprint
+metadata: { name: eu-distributor-core }
+spec:
+  model: ossie://porter/distribution@1
+  slots:
+    crm:       { plugin: salesforce,     version: "^3" }
+    erp:       { plugin: sap-ecc,        version: "^0.4" }
+    commerce:  { plugin: shopify,        version: "^2" }
+    billing:   { plugin: stripe,         version: "^1" }
+    analytics: { plugin: powerbi-export, version: "^1" }
+  extensions: [credit-check@1.2]
+  recipes: [salesforce-won-deals-to-sap-orders, shopify-orders-to-sap]
+  policies: [writeback-default, mask-personal-data]

@@ -1,0 +1,32 @@
+apiVersion: porter.dev/v1alpha1
+kind: ConnectorManifest
+metadata:
+  name: powerbi-export
+  version: 1.0.0
+spec:
+  system: "Power BI REST API (push datasets)"
+  runtime: camel-java
+  auth:
+    methods: [entra-service-principal]
+    secretRef: openbao://powerbi/service-principal
+  interfaces:
+    read:
+      - kind: rest-api
+    write:
+      - kind: push-dataset
+  entities: [Dataset]
+  operations:
+    - name: push-rows
+      entity: Dataset
+      direction: write
+      interface: push-dataset
+      risk: low
+      compensation: delete-rows
+    - name: delete-rows
+      entity: Dataset
+      direction: write
+      interface: push-dataset
+      risk: low
+  limits:
+    maxConcurrentCalls: 2
+    requestsPerSecond: 1

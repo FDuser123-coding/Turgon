@@ -1,0 +1,51 @@
+# Slot contracts for the distribution model (architecture §18.1). A tool fills
+# a slot when its connector provides every entity, event and action listed.
+apiVersion: porter.dev/v1alpha1
+kind: SlotContract
+metadata: { name: crm, version: 1.0.0 }
+spec:
+  model: ossie://porter/distribution@1
+  entities: [Customer, Opportunity]
+  events: [Opportunity.ClosedWon]
+  actions:
+    - { name: get-customer, entity: Customer, risk: read }
+---
+apiVersion: porter.dev/v1alpha1
+kind: SlotContract
+metadata: { name: erp, version: 1.0.0 }
+spec:
+  model: ossie://porter/distribution@1
+  entities: [Customer, SalesOrder]
+  actions:
+    - { name: get-customer, entity: Customer, risk: read }
+    - { name: create-sales-order, entity: SalesOrder, risk: high }
+    - { name: cancel-sales-order, entity: SalesOrder, risk: high }
+---
+apiVersion: porter.dev/v1alpha1
+kind: SlotContract
+metadata: { name: commerce, version: 1.0.0 }
+spec:
+  model: ossie://porter/distribution@1
+  entities: [Customer, Order]
+  events: [Order.Created]
+  actions:
+    - { name: get-order, entity: Order, risk: read }
+---
+apiVersion: porter.dev/v1alpha1
+kind: SlotContract
+metadata: { name: billing, version: 1.0.0 }
+spec:
+  model: ossie://porter/distribution@1
+  entities: [Customer, Invoice]
+  events: [Invoice.Paid]
+  actions:
+    - { name: create-invoice, entity: Invoice, risk: low }
+---
+apiVersion: porter.dev/v1alpha1
+kind: SlotContract
+metadata: { name: analytics, version: 1.0.0 }
+spec:
+  model: ossie://porter/distribution@1
+  entities: [Dataset]
+  actions:
+    - { name: push-rows, entity: Dataset, risk: low }

@@ -1,0 +1,28 @@
+# A slot-based recipe: it names the commerce and erp slots rather than tools,
+# so it keeps working when either tool is swapped. Verify it within a blueprint.
+apiVersion: porter.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: shopify-orders-to-sap
+  version: 1.0.0
+spec:
+  trigger:
+    source: commerce
+    event: Order.Created
+  steps:
+    - map:
+        from: commerce.Order
+        to: model.SalesOrder
+        mapping: shopify-order-to-order@1
+    - resolve:
+        entity: model.Customer
+        strategy: splink
+        autoMatchAbove: 0.92
+    - write:
+        target: erp
+        operation: create-sales-order
+        idempotencyKey: "{{ source.admin_graphql_api_id }}"
+        simulate: true
+  policies: [writeback-default, mask-personal-data]
+  slo:
+    p95Latency: 2s

@@ -1,0 +1,63 @@
+# Appendix A, extended with the entities, events and operations the verifier
+# checks recipes and slot contracts against.
+apiVersion: porter.dev/v1alpha1
+kind: ConnectorManifest
+metadata:
+  name: sap-ecc
+  version: 0.4.0
+spec:
+  system: "SAP ECC 6.0, EHP 6-8"
+  runtime: camel-java
+  auth:
+    methods: [rfc-user, snc-x509]
+    secretRef: openbao://sap/ecc/prod
+  discovery:
+    - kind: bapi-metadata
+    - kind: idoc-metadata
+  interfaces:
+    read:
+      - kind: bapi
+      - kind: table-extract
+      - kind: idoc-outbound
+    write:
+      - kind: bapi
+        simulation: testrun
+      - kind: idoc-inbound
+    events:
+      - kind: change-pointers
+      - kind: idoc-outbound
+    prohibited:
+      - kind: odp-rfc
+        reason: "SAP Note 3255746"
+      - kind: direct-database
+        reason: "runtime database license"
+  entities: [Customer, SalesOrder, Invoice]
+  events:
+    - name: SalesOrder.Created
+      entity: SalesOrder
+      interface: change-pointers
+  operations:
+    - name: get-customer
+      entity: Customer
+      direction: read
+      interface: bapi
+      risk: read
+    - name: create-sales-order
+      entity: SalesOrder
+      direction: write
+      interface: bapi
+      risk: high
+      compensation: cancel-sales-order
+    - name: cancel-sales-order
+      entity: SalesOrder
+      direction: write
+      interface: bapi
+      risk: high
+  limits:
+    maxConcurrentCalls: 4
+    requestsPerSecond: 10
+  metering:
+    sapDigitalAccess: true
+  semanticBindings:
+    - template: ossie://porter/distribution/sales-order@1
+    - template: ossie://porter/distribution/customer@1

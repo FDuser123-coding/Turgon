@@ -1,0 +1,51 @@
+# Connector plugins: each packages a connector manifest and declares the slot
+# contracts it satisfies.
+apiVersion: porter.dev/v1alpha1
+kind: Plugin
+metadata: { name: salesforce, publisher: porter, version: 3.1.0, certification: L0 }
+spec:
+  type: connector
+  runtime: container
+  connector: salesforce@^3
+  implements: [crm@1]
+  limits: { memoryMB: 512, timeoutMs: 30000 }
+---
+apiVersion: porter.dev/v1alpha1
+kind: Plugin
+metadata: { name: sap-ecc, publisher: porter, version: 0.4.0, certification: L0 }
+spec:
+  type: connector
+  runtime: container
+  connector: sap-ecc@^0.4
+  implements: [erp@1]
+  limits: { memoryMB: 1024, timeoutMs: 60000 }
+---
+apiVersion: porter.dev/v1alpha1
+kind: Plugin
+metadata: { name: shopify, publisher: porter, version: 2.0.3 }
+spec:
+  type: connector
+  runtime: container
+  connector: shopify@^2
+  implements: [commerce@1]
+  limits: { memoryMB: 256, timeoutMs: 30000 }
+---
+apiVersion: porter.dev/v1alpha1
+kind: Plugin
+metadata: { name: stripe, publisher: porter, version: 1.4.0 }
+spec:
+  type: connector
+  runtime: container
+  connector: stripe@^1
+  implements: [billing@1]
+  limits: { memoryMB: 256, timeoutMs: 30000 }
+---
+apiVersion: porter.dev/v1alpha1
+kind: Plugin
+metadata: { name: powerbi-export, publisher: porter, version: 1.0.0 }
+spec:
+  type: connector
+  runtime: container
+  connector: powerbi-export@^1
+  implements: [analytics@1]
+  limits: { memoryMB: 256, timeoutMs: 30000 }
