@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/fduser123-coding/turgon/api/v1alpha1"
+	"github.com/fduser123-coding/turgon/apis/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/semver"
 	"github.com/fduser123-coding/turgon/pkg/spec"
 )

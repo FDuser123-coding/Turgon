@@ -137,7 +137,7 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 
 | Path | Architecture | What it is |
 |---|---|---|
-| `api/v1alpha1` | §3, §7, §18, App. A–B | Object model: `ConnectorManifest`, `Recipe`, `Mapping`, `SlotContract`, `Plugin`, `StackBlueprint`, `PolicyPack`, with schema validation |
+| `apis/v1alpha1` | §3, §7, §18, App. A–B | Object model: `ConnectorManifest`, `Recipe`, `Mapping`, `SlotContract`, `Plugin`, `StackBlueprint`, `PolicyPack`, with schema validation |
 | `pkg/spec` | §2 "declarative everything" | Strict YAML/JSON loader (unknown fields are errors) |
 | `pkg/catalog` | §7.1 versioning | Index with semver resolution of refs like `sf-opportunity-to-order@3` |
 | `pkg/verifier` | §7.5, §18.1 | Verifier stages: schema, resolve, permitted interfaces, slot contracts, mappings/review queue, policy, capacity; computes L0–L3 |
