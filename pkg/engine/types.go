@@ -24,14 +24,14 @@ const (
 
 // Error types reported by activities. Temporal does not retry them.
 const (
-	ErrTypeDenied     = "PorterDenied"
-	ErrTypeRejected   = "PorterRejected"
-	ErrTypeInvalid    = "PorterInvalid"
-	ErrTypeUnresolved = "PorterUnresolved"
-	ErrTypeMapping    = "PorterMapping"
+	ErrTypeDenied     = "TurgonDenied"
+	ErrTypeRejected   = "TurgonRejected"
+	ErrTypeInvalid    = "TurgonInvalid"
+	ErrTypeUnresolved = "TurgonUnresolved"
+	ErrTypeMapping    = "TurgonMapping"
 	// ErrTypeCompensationFailed means a run failed and left writes that
 	// could not be undone; its cause is the original failure.
-	ErrTypeCompensationFailed = "PorterCompensationFailed"
+	ErrTypeCompensationFailed = "TurgonCompensationFailed"
 )
 
 // RunInput starts one workflow run for one source event. It carries the

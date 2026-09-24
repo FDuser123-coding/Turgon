@@ -10,7 +10,7 @@ export function Runs() {
     <section>
       <header className="page-head">
         <h1>Runs</h1>
-        <p className="muted">One run per source event. A failed run can be retried with <code>porter retry</code>.</p>
+        <p className="muted">One run per source event. A failed run can be retried.</p>
       </header>
       <ErrorBanner error={error} />
       {data && data.length === 0 && <Empty>No runs yet. Runs start when a source emits an event.</Empty>}

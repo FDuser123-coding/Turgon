@@ -53,7 +53,7 @@ func (s *Saga) Compensate(ctx context.Context) error {
 		}
 	}
 	s.done = nil
-	if _, err := s.g.cfg.Audit.Record("porter/saga", "saga.compensated", map[string]any{"saga": s.id, "errors": len(errs)}); err != nil {
+	if _, err := s.g.cfg.Audit.Record("turgon/saga", "saga.compensated", map[string]any{"saga": s.id, "errors": len(errs)}); err != nil {
 		errs = append(errs, err)
 	}
 	return errors.Join(errs...)

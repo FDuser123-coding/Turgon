@@ -40,7 +40,7 @@ spec:
 
     deny contains "approval rejected" if input.approval.status == "rejected"
 
-    operator := {"id": "porter/recipe/x", "roles": ["integration-operator"]}
+    operator := {"id": "turgon/recipe/x", "roles": ["integration-operator"]}
 
     test_low_risk_needs_the_operator_role if {
       allow with input as {"tool": {"risk": "low"}, "subject": operator, "action": {}, "approval": {}}

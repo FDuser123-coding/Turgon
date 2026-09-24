@@ -447,7 +447,7 @@ func (g *Guard) compensate(ctx context.Context, req Request, result json.RawMess
 	if prior != nil {
 		return nil
 	}
-	res, err := g.commit(ctx, t, "porter/saga", creq.Operation, creq.IdempotencyKey, creq)
+	res, err := g.commit(ctx, t, "turgon/saga", creq.Operation, creq.IdempotencyKey, creq)
 	if err != nil {
 		_ = g.cfg.Store.Abort(key)
 		return err

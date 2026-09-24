@@ -20,7 +20,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    document.title = waiting > 0 ? `(${waiting}) Porter console` : "Porter console";
+    document.title = waiting > 0 ? `(${waiting}) Turgon console` : "Turgon console";
   }, [waiting]);
 
   let page;
@@ -45,7 +45,7 @@ export function App() {
   return (
     <>
       <nav className="top">
-        <span className="brand">Porter</span>
+        <span className="brand">Turgon</span>
         {tab("/", "Approvals", waiting)}
         {tab("/runs", "Runs")}
         {tab("/audit", "Audit")}

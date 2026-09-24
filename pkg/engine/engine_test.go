@@ -460,7 +460,7 @@ func TestApprovalMustMatchThePendingRequest(t *testing.T) {
 	if len(pending) != 2 || errType(err) != ErrTypeRejected || f.orders("true") != 0 {
 		t.Fatalf("err = %v (%s), %d pending seen, %d orders", err, errType(err), len(pending), f.orders("true"))
 	}
-	if !strings.Contains(f.auditLog.String(), `"by":"porter/approval-timeout"`) && !strings.Contains(f.auditLog.String(), `"actor":"porter/approval-timeout"`) {
+	if !strings.Contains(f.auditLog.String(), `"by":"turgon/approval-timeout"`) && !strings.Contains(f.auditLog.String(), `"actor":"turgon/approval-timeout"`) {
 		t.Error("timeout rejection not audited")
 	}
 }

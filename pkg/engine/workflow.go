@@ -187,7 +187,7 @@ func awaitApproval(ctx workflow.Context, ch workflow.ReceiveChannel, p PendingAp
 			got = &policy.Approval{Status: status, By: sig.By, Note: sig.Note}
 		})
 		sel.AddFuture(timer, func(workflow.Future) {
-			got = &policy.Approval{Status: policy.ApprovalRejected, By: "porter/approval-timeout"}
+			got = &policy.Approval{Status: policy.ApprovalRejected, By: "turgon/approval-timeout"}
 		})
 		sel.Select(ctx)
 	}

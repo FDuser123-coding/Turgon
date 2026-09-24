@@ -8,7 +8,7 @@ export function createDemoApi() {
   const now = Date.now();
   const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
 
-  const recipe = (name: string) => ({ id: `porter/recipe/${name}`, roles: ["integration-operator"] });
+  const recipe = (name: string) => ({ id: `turgon/recipe/${name}`, roles: ["integration-operator"] });
 
   const erpOrder: PendingApproval = {
     step: "03-write",
@@ -79,7 +79,7 @@ export function createDemoApi() {
       ] },
       event: { id: "006000000000001AAA", position: 1790259000000, name: "Opportunity.ClosedWon", payload: { Id: "006000000000001AAA", Amount: 7800 } } },
     { id: "shop-orders-to-erp/2", runId: "r2", workflow: "shop-orders-to-erp", status: "failed", started: at(95), closed: at(94.9),
-      failure: "writeguard: simulation: write payload invalid: null value in column \"lines\" violates not-null constraint", failureType: "PorterInvalid",
+      failure: "writeguard: simulation: write payload invalid: null value in column \"lines\" violates not-null constraint", failureType: "TurgonInvalid",
       result: undefined, event: { id: "2", position: 2, name: "Order.Created", payload: { order_number: 2002, total: "99000", items: [] } } },
   ];
 
@@ -88,13 +88,13 @@ export function createDemoApi() {
     const seq = entries.length + 1;
     entries.push({ seq, time: at(minutesAgo), actor, action, data, prev: seq === 1 ? "0".repeat(64) : `demo${seq - 1}`, hash: `demo${seq}` });
   }
-  audit("porter/recipe/salesforce-won-deals-to-erp", "writeback.simulated", { target: "erp-db", operation: "create-sales-order" }, 58);
+  audit("turgon/recipe/salesforce-won-deals-to-erp", "writeback.simulated", { target: "erp-db", operation: "create-sales-order" }, 58);
   audit("controller@example.com", "writeback.approval", { target: "erp-db", operation: "create-sales-order", status: "approved", note: "Matches PO 4471", key: "006000000000001AAA" }, 57.9);
-  audit("porter/recipe/salesforce-won-deals-to-erp", "writeback.committed", { target: "erp-db", operation: "create-sales-order", key: "006000000000001AAA" }, 57.9);
-  audit("porter/recipe/salesforce-won-deals-to-erp", "writeback.committed", { target: "salesforce-prod", operation: "update-opportunity", key: "006000000000001AAA" }, 57.8);
-  audit("porter/recipe/shop-orders-to-erp", "writeback.simulated", { target: "erp-db", operation: "create-sales-order" }, 26);
+  audit("turgon/recipe/salesforce-won-deals-to-erp", "writeback.committed", { target: "erp-db", operation: "create-sales-order", key: "006000000000001AAA" }, 57.9);
+  audit("turgon/recipe/salesforce-won-deals-to-erp", "writeback.committed", { target: "salesforce-prod", operation: "update-opportunity", key: "006000000000001AAA" }, 57.8);
+  audit("turgon/recipe/shop-orders-to-erp", "writeback.simulated", { target: "erp-db", operation: "create-sales-order" }, 26);
   audit("controller@example.com", "writeback.approval", { target: "erp-db", operation: "create-sales-order", status: "approved", key: "SHOP-3001" }, 25.7);
-  audit("porter/recipe/shop-orders-to-erp", "writeback.committed", { target: "erp-db", operation: "create-sales-order", key: "SHOP-3001" }, 25.6);
+  audit("turgon/recipe/shop-orders-to-erp", "writeback.committed", { target: "erp-db", operation: "create-sales-order", key: "SHOP-3001" }, 25.6);
 
   const catalog: CatalogReport = {
     reports: [
@@ -135,7 +135,7 @@ export function createDemoApi() {
       return r ? delay(r) : Promise.reject(new Error("run not found"));
     },
     audit: (): Promise<AuditLog[]> =>
-      delay([{ file: "postgres: porter_audit (demo)", ok: true, count: entries.length, head: `demo${entries.length}`, entries: [...entries].reverse() }]),
+      delay([{ file: "Postgres audit log (demo)", ok: true, count: entries.length, head: `demo${entries.length}`, entries: [...entries].reverse() }]),
     catalog: () => delay(catalog),
     decide: (d: { runId: string; step: string; digest: string; decision: "approve" | "reject"; note?: string }) => {
       const r = runs.find((x) => x.id === d.runId);
@@ -150,7 +150,7 @@ export function createDemoApi() {
         done.result = { writes: [{ step: p.step, endpoint: p.request.target, operation: p.request.operation, status: "committed", result: p.preview }] };
       } else {
         done.status = "failed";
-        done.failureType = "PorterRejected";
+        done.failureType = "TurgonRejected";
         done.failure = "write rejected by approver";
       }
       runs = runs.map((x) => (x.id === r.id ? done : x));
