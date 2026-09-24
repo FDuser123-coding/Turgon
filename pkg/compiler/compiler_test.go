@@ -136,3 +136,14 @@ func TestConnectionConfigIsCompiledIn(t *testing.T) {
 		t.Fatalf("write = %+v", w)
 	}
 }
+
+func TestPoliciesAreCompiledIn(t *testing.T) {
+	cat, _ := catalog.Load("../../examples")
+	rt := compileNamed(t, cat, "shop-orders-to-erp")
+	if len(rt.Spec.Policies) != 1 || !strings.Contains(rt.Spec.Policies[0].Rego, "package porter.writeback") {
+		t.Fatalf("policies = %+v", rt.Spec.Policies)
+	}
+	if got := rt.Spec.Workflows[0].Policies; len(got) != 1 || got[0] != "writeback-default" {
+		t.Fatalf("workflow policies = %v", got)
+	}
+}

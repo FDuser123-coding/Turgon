@@ -1,6 +1,7 @@
 package verifier
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -8,6 +9,7 @@ import (
 	"github.com/fduser123-coding/turgon/api/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/catalog"
 	"github.com/fduser123-coding/turgon/pkg/mapping"
+	"github.com/fduser123-coding/turgon/pkg/policy/opa"
 )
 
 // Options tune verification policy.
@@ -186,6 +188,7 @@ func (v *Verifier) recipe(rec *v1alpha1.Recipe, bound map[string]*v1alpha1.Conne
 	if hasWrites && len(rec.Spec.Policies) == 0 {
 		r.add(StagePolicy, SeverityWarning, "spec.policies", "no policy packs referenced; writes fall back to the built-in write-back default")
 	}
+	checkPolicies(r, r.Resolution.Policies, hasWrites)
 
 	// Stage: capacity.
 	for i, s := range rec.Spec.Steps {
@@ -521,7 +524,43 @@ func (v *Verifier) Blueprint(b *v1alpha1.StackBlueprint) *Report {
 		}
 		r.Resolution.Policies = append(r.Resolution.Policies, p)
 	}
+	checkPolicies(r, r.Resolution.Policies, false)
 	return r
+}
+
+// PolicyModules turns policy packs into OPA modules.
+func PolicyModules(packs []*v1alpha1.PolicyPack) []opa.Module {
+	mods := make([]opa.Module, 0, len(packs))
+	for _, p := range packs {
+		mods = append(mods, opa.Module{Name: p.Metadata.Name, Source: p.Spec.Rego})
+	}
+	return mods
+}
+
+// checkPolicies compiles the packs together and runs their test_ rules.
+func checkPolicies(r *Report, packs []*v1alpha1.PolicyPack, hasWrites bool) {
+	if len(packs) == 0 {
+		return
+	}
+	mods := PolicyModules(packs)
+	if err := opa.Compile(mods); err != nil {
+		r.add(StagePolicy, SeverityError, "spec.policies", "policy packs do not compile: %v", err)
+		return
+	}
+	fails, n, err := opa.Test(context.Background(), mods)
+	if err != nil {
+		r.add(StagePolicy, SeverityError, "spec.policies", "policy tests could not run: %v", err)
+		return
+	}
+	for _, f := range fails {
+		r.add(StagePolicy, SeverityError, "spec.policies", "policy test %s: %s", f.Name, f.Message)
+	}
+	if n > 0 && len(fails) == 0 {
+		r.add(StagePolicy, SeverityInfo, "spec.policies", "%d policy test(s) passed", n)
+	}
+	if hasWrites && !opa.DefinesWriteback(mods) {
+		r.add(StagePolicy, SeverityWarning, "spec.policies", "no policy pack defines package %s; writes use the built-in write-back default", opa.WritebackPackage)
+	}
 }
 
 // checkExtension verifies that an extension only asks for entities and

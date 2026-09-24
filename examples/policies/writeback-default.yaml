@@ -1,7 +1,9 @@
-# Appendix C. pkg/policy.WritebackDefault is the built-in Go equivalent.
+# Appendix C. pkg/policy.WritebackDefault is the built-in Go equivalent, and
+# a test proves they decide identically. `porter verify` runs the test_
+# rules below; a failing test blocks deployment.
 apiVersion: porter.dev/v1alpha1
 kind: PolicyPack
-metadata: { name: writeback-default, version: 1.0.0 }
+metadata: { name: writeback-default, version: 1.1.0 }
 spec:
   rego: |
     package porter.writeback
@@ -24,10 +26,34 @@ spec:
       input.approval.status == "approved"
     }
 
-    require_approval if {
-      input.tool.risk == "high"
+    require_approval if input.tool.risk == "high"
+
+    require_approval if input.action.amount > 50000
+
+    reasons contains "high-risk tool" if input.tool.risk == "high"
+
+    reasons contains "amount above approval threshold" if input.action.amount > 50000
+
+    reasons contains sprintf("unknown risk tier %s", [input.tool.risk]) if {
+      not input.tool.risk in {"read", "low", "high"}
     }
 
-    require_approval if {
-      input.action.amount > 50000
+    deny contains "approval rejected" if input.approval.status == "rejected"
+
+    operator := {"id": "porter/recipe/x", "roles": ["integration-operator"]}
+
+    test_low_risk_needs_the_operator_role if {
+      allow with input as {"tool": {"risk": "low"}, "subject": operator, "action": {}, "approval": {}}
+      not allow with input as {"tool": {"risk": "low"}, "subject": {"roles": []}, "action": {}, "approval": {}}
+    }
+
+    test_high_risk_needs_approval if {
+      require_approval with input as {"tool": {"risk": "high"}, "subject": operator, "action": {}, "approval": {}}
+      not allow with input as {"tool": {"risk": "high"}, "subject": operator, "action": {}, "approval": {}}
+      allow with input as {"tool": {"risk": "high"}, "subject": operator, "action": {}, "approval": {"status": "approved"}}
+    }
+
+    test_large_amounts_need_approval if {
+      require_approval with input as {"tool": {"risk": "low"}, "subject": operator, "action": {"amount": 60000}, "approval": {}}
+      not require_approval with input as {"tool": {"risk": "low"}, "subject": operator, "action": {"amount": 100}, "approval": {}}
     }

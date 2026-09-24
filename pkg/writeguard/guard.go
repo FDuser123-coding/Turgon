@@ -101,6 +101,8 @@ type Request struct {
 	Amount         float64         `json:"amount,omitempty"`
 	Simulate       bool            `json:"simulate,omitempty"`
 	Compensation   string          `json:"compensation,omitempty"`
+	// Recipe names the recipe making the write, if any.
+	Recipe string `json:"recipe,omitempty"`
 	// RequireApproval asks a person even when policy would not.
 	RequireApproval bool   `json:"requireApproval,omitempty"`
 	Reason          string `json:"reason,omitempty"`
@@ -217,6 +219,7 @@ func (g *Guard) target(req Request) (*target, error) {
 
 func input(req Request) policy.Input {
 	return policy.Input{
+		Recipe:  req.Recipe,
 		Tool:    policy.Tool{Name: req.Tool, Risk: req.Risk},
 		Subject: req.Subject,
 		Action:  policy.Action{Entity: req.Entity, Amount: req.Amount},
@@ -258,8 +261,9 @@ func (g *Guard) Prepare(ctx context.Context, req Request) (Prepared, error) {
 	}
 	p := Prepared{Decision: dec, NeedsApproval: dec.RequireApproval || req.RequireApproval}
 	// A request that is denied and would not become allowed through approval
-	// stops here. High-risk writes are denied until approved.
-	if !dec.Allow && !p.NeedsApproval {
+	// stops here, before anyone is asked. High-risk writes are denied until
+	// approved; an explicit denial cannot be approved away.
+	if dec.Denied || (!dec.Allow && !p.NeedsApproval) {
 		return p, ErrDenied
 	}
 

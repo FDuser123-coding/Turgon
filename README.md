@@ -143,7 +143,7 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 | `pkg/verifier` | §7.5, §18.1 | Verifier stages: schema, resolve, permitted interfaces, slot contracts, mappings/review queue, policy, capacity; computes L0–L3 |
 | `pkg/compiler` | §7.5, AD-04 | Recipe/blueprint → `RuntimeSpec` (connectors, topics, workflows, plugins with grants, MCP tool descriptors, policies, monitors) |
 | `pkg/writeguard` | §8 | Idempotency, policy, validation, simulation-first, approval gates, rate governor, circuit breaker, read-your-writes, metering, sagas with compensation |
-| `pkg/policy` | §9, App. C | Policy decision interface and the built-in write-back default |
+| `pkg/policy` | §9, App. C | Policy decision interface and the built-in write-back default; `opa/` evaluates and tests Rego packs with Open Policy Agent |
 | `pkg/audit` | §9 | Append-only, hash-chained audit log with tamper detection |
 | `pkg/mapping` | §7.4 | JSONata evaluation of mapping sets |
 | `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher |
@@ -173,6 +173,12 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 - **Connections.** A `Connection` binds a connector to one system (pipeline stage 1). Generic
   connectors like Postgres get their entities, events and operations from it, but only
   through interfaces the connector's manifest permits.
+- **Policy is Rego, evaluated by OPA.** Each recipe's writes are decided by its own policy
+  packs (compiled into the runtime spec, so the digest covers them), combined in the package
+  `porter.writeback` through `allow`, `require_approval`, `reasons` and `deny`. A `deny` stops a
+  write before anyone is asked to approve it. `porter verify` compiles the packs and runs their
+  `test_` rules; a failing test blocks deployment. Recipes without a `porter.writeback` pack
+  use the built-in default, which a test keeps identical to `examples/policies/writeback-default.yaml`.
 - **Approvals bind to content.** A pending approval carries the SHA-256 of the write request;
   a decision must echo it and name the waiting step, so an early, stale or misdirected
   decision can never approve a write nobody looked at.
@@ -190,7 +196,7 @@ Integration tests use a real Postgres when `PORTER_TEST_DATABASE_URL` is set
 In rough roadmap order (§16, §19): Salesforce Pub/Sub API change capture and Bulk API reads;
 the Porter operator and signed releases (cosign, SBOMs); an appliance build (§11);
 Debezium change capture in place of outbox polling; probabilistic identity
-resolution (Splink) and the data-steward queue; OPA evaluation of `PolicyPack`s; the metadata
+resolution (Splink) and the data-steward queue; signed OPA bundles; the metadata
 graph and discovery; MCP server generation behind agentgateway; direct OIDC sign-in for the
 console and approving mapping fields from its review queue; the Wasm plugin host. The native Postgres and Salesforce connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

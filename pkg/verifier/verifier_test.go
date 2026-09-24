@@ -303,3 +303,35 @@ func TestInvalidJSONataIsRejected(t *testing.T) {
 		t.Fatalf("findings: %+v", rep.Findings)
 	}
 }
+
+func TestPolicyPacksMustCompileAndPassTheirTests(t *testing.T) {
+	cat := load(t)
+	add := func(name, rego string) {
+		t.Helper()
+		err := cat.Add(&v1alpha1.PolicyPack{
+			TypeMeta: v1alpha1.TypeMeta{APIVersion: v1alpha1.APIVersion, Kind: v1alpha1.KindPolicyPack},
+			Metadata: v1alpha1.ObjectMeta{Name: name, Version: "1.0.0"},
+			Spec:     v1alpha1.PolicyPackSpec{Rego: rego},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	add("broken-syntax", "package porter.writeback\nallow if {")
+	add("wrong-test", "package porter.writeback\nrequire_approval if input.action.amount > 10\ntest_small_amounts_skip_approval if { not require_approval with input as {\"action\": {\"amount\": 20}} }")
+
+	r := recipe(t, cat, "shop-orders-to-erp")
+	r.Spec.Policies = []string{"writeback-default", "broken-syntax"}
+	if rep := New(cat, Options{}).Recipe(r); rep.Deployable || len(findings(rep, SeverityError, "do not compile")) == 0 {
+		t.Fatalf("syntax error: %+v", rep.Findings)
+	}
+	r.Spec.Policies = []string{"writeback-default", "wrong-test"}
+	rep := New(cat, Options{}).Recipe(r)
+	if rep.Deployable || len(findings(rep, SeverityError, "test_small_amounts_skip_approval")) == 0 {
+		t.Fatalf("failing policy test: %+v", rep.Findings)
+	}
+	r.Spec.Policies = []string{"mask-personal-data"}
+	if rep := New(cat, Options{}).Recipe(r); len(findings(rep, SeverityWarning, "built-in write-back default")) == 0 {
+		t.Fatalf("no writeback pack: %+v", rep.Findings)
+	}
+}

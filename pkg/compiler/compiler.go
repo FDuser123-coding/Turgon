@@ -80,6 +80,8 @@ type Workflow struct {
 	Trigger WorkflowSource `json:"trigger"`
 	Steps   []WorkflowStep `json:"steps"`
 	SLO     *v1alpha1.SLO  `json:"slo,omitempty"`
+	// Policies names the packs that decide this workflow's writes.
+	Policies []string `json:"policies,omitempty"`
 }
 
 type WorkflowSource struct {
@@ -153,9 +155,12 @@ type Tool struct {
 	Entity      string `json:"entity,omitempty"`
 }
 
+// PolicyRef is a policy pack compiled into the spec, with its Rego source,
+// so the spec's digest covers exactly the policies workers evaluate.
 type PolicyRef struct {
 	Name    string `json:"name"`
 	Version string `json:"version,omitempty"`
+	Rego    string `json:"rego"`
 }
 
 type Monitor struct {
@@ -330,6 +335,10 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 			c.Connection, c.Config = conn.Metadata.Name, conn.Spec.Config
 		}
 	}
+	for _, p := range rep.Resolution.Policies {
+		wf.Policies = append(wf.Policies, p.Metadata.Name)
+	}
+	sort.Strings(wf.Policies)
 	b.body.Workflows = append(b.body.Workflows, wf)
 	if r.Spec.SLO != nil && r.Spec.SLO.P95Latency != "" {
 		b.body.Monitors = append(b.body.Monitors, Monitor{
@@ -337,7 +346,7 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 		})
 	}
 	for _, p := range rep.Resolution.Policies {
-		b.policies[p.Metadata.Name] = PolicyRef{Name: p.Metadata.Name, Version: p.Metadata.Version}
+		b.policies[p.Metadata.Name] = PolicyRef{Name: p.Metadata.Name, Version: p.Metadata.Version, Rego: p.Spec.Rego}
 	}
 }
 
@@ -372,7 +381,7 @@ func (b *builder) blueprint(rep *verifier.Report) {
 		}
 	}
 	for _, p := range rep.Resolution.Policies {
-		b.policies[p.Metadata.Name] = PolicyRef{Name: p.Metadata.Name, Version: p.Metadata.Version}
+		b.policies[p.Metadata.Name] = PolicyRef{Name: p.Metadata.Name, Version: p.Metadata.Version, Rego: p.Spec.Rego}
 	}
 }
 
