@@ -51,6 +51,14 @@ func (x *Activities) Map(_ context.Context, in MapInput) (map[string]any, error)
 		return nil, nonRetryable(ErrTypeMapping, err)
 	}
 	out, err := m.Apply(in.Doc)
+	var fe *mapping.FieldError
+	if errors.As(err, &fe) {
+		// The evaluation error can quote the record, so it goes in the
+		// details, which payload encryption covers; the message names the
+		// field only (local activity failures keep their message as is).
+		return nil, temporal.NewNonRetryableApplicationError(
+			fmt.Sprintf("mapping %s: field %s could not be computed", in.Config.Mapping, fe.Field), ErrTypeMapping, nil, fe.Err.Error())
+	}
 	if err != nil {
 		return nil, nonRetryable(ErrTypeMapping, err)
 	}
@@ -122,7 +130,9 @@ func (x *Activities) Resolve(ctx context.Context, in ResolveInput) (map[string]a
 		}
 		master, certain := identity.Decide(suggestions, in.Config.AutoMatchAbove)
 		if !certain || in.Config.Strategy != v1alpha1.StrategyProbabilistic {
-			msg := fmt.Sprintf("%s %q from %s has no master record; it needs a data steward", entity, ref, in.System)
+			// The record's reference stays in the details (encrypted with
+			// payload encryption); the message must not quote it.
+			msg := fmt.Sprintf("a %s from %s has no master record; it needs a data steward", entity, in.System)
 			return nil, temporal.NewNonRetryableApplicationError(msg, ErrTypeUnresolved, nil,
 				Unresolved{Entity: entity, System: in.System, Ref: ref, Attributes: attrs, Suggestions: suggestions})
 		}

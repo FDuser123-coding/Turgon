@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -37,20 +39,77 @@ import (
 
 type temporalFlags struct {
 	address, namespace, taskQueue string
+	tls                           bool
+	caFile, certFile, keyFile     string
+	serverName                    string
 }
 
 func (f *temporalFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.address, "temporal", envOr("TURGON_TEMPORAL_ADDRESS", "localhost:7233"), "Temporal frontend address")
 	cmd.Flags().StringVar(&f.namespace, "namespace", envOr("TURGON_TEMPORAL_NAMESPACE", "default"), "Temporal namespace")
 	cmd.Flags().StringVar(&f.taskQueue, "task-queue", "", "Temporal task queue (default: turgon-<spec name>)")
+	cmd.Flags().BoolVar(&f.tls, "temporal-tls", os.Getenv("TURGON_TEMPORAL_TLS") == "true", "connect to Temporal over TLS (implied by a client certificate or TURGON_TEMPORAL_API_KEY)")
+	cmd.Flags().StringVar(&f.caFile, "temporal-ca", os.Getenv("TURGON_TEMPORAL_CA"), "CA certificate file that signed Temporal's server certificate (default: the system's)")
+	cmd.Flags().StringVar(&f.certFile, "temporal-cert", os.Getenv("TURGON_TEMPORAL_CERT"), "client certificate file, for mutual TLS")
+	cmd.Flags().StringVar(&f.keyFile, "temporal-key", os.Getenv("TURGON_TEMPORAL_KEY"), "client key file, for mutual TLS")
+	cmd.Flags().StringVar(&f.serverName, "temporal-server-name", os.Getenv("TURGON_TEMPORAL_SERVER_NAME"), "server name to verify in Temporal's certificate (default: the address's host)")
 }
 
+// dial connects to Temporal. TURGON_TEMPORAL_API_KEY authenticates to
+// Temporal Cloud; TURGON_PAYLOAD_KEYS ("id:base64key,...", see
+// engine.NewCodec) encrypts everything Turgon stores in Temporal.
 func (f *temporalFlags) dial() (client.Client, error) {
-	return client.Dial(client.Options{
+	opts := client.Options{
 		HostPort:  f.address,
 		Namespace: f.namespace,
 		Logger:    tlog.NewStructuredLogger(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))),
-	})
+	}
+	apiKey := os.Getenv("TURGON_TEMPORAL_API_KEY")
+	if f.tls || f.certFile != "" || f.caFile != "" || apiKey != "" {
+		cfg, err := f.tlsConfig()
+		if err != nil {
+			return nil, err
+		}
+		opts.ConnectionOptions.TLS = cfg
+	}
+	if apiKey != "" {
+		opts.Credentials = client.NewAPIKeyStaticCredentials(apiKey)
+	}
+	if keys := os.Getenv("TURGON_PAYLOAD_KEYS"); keys != "" {
+		codec, err := engine.NewCodec(keys)
+		if err != nil {
+			return nil, err
+		}
+		engine.EncryptPayloads(codec)
+	}
+	opts.DataConverter = engine.DataConverter()
+	opts.FailureConverter = engine.FailureConverter()
+	return client.Dial(opts)
+}
+
+func (f *temporalFlags) tlsConfig() (*tls.Config, error) {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: f.serverName}
+	if f.caFile != "" {
+		pem, err := os.ReadFile(f.caFile)
+		if err != nil {
+			return nil, fmt.Errorf("--temporal-ca: %w", err)
+		}
+		cfg.RootCAs = x509.NewCertPool()
+		if !cfg.RootCAs.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("--temporal-ca %s: no PEM certificates", f.caFile)
+		}
+	}
+	if (f.certFile == "") != (f.keyFile == "") {
+		return nil, errors.New("--temporal-cert and --temporal-key go together")
+	}
+	if f.certFile != "" {
+		cert, err := tls.LoadX509KeyPair(f.certFile, f.keyFile)
+		if err != nil {
+			return nil, fmt.Errorf("temporal client certificate: %w", err)
+		}
+		cfg.Certificates = []tls.Certificate{cert}
+	}
+	return cfg, nil
 }
 
 // connectorRegistry lists the connectors built into this worker.
@@ -184,7 +243,7 @@ func runCmd() *cobra.Command {
 			}
 			wake := make(chan struct{}, 1)
 			if webhookAddr != "" {
-				srv := &http.Server{Addr: webhookAddr, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
+				srv := &http.Server{Addr: webhookAddr, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute,
 					Handler: engine.WebhookHandler(rt, store, func() {
 						select {
 						case wake <- struct{}{}:
@@ -463,7 +522,7 @@ func serveHealth(ctx context.Context, addr string, pool *pgxpool.Pool, logw io.W
 		}
 		fmt.Fprintln(w, "ready")
 	})
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: time.Minute}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()

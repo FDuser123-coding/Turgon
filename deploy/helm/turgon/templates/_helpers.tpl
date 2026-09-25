@@ -46,6 +46,61 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   value: {{ .Values.temporal.address | quote }}
 - name: TURGON_TEMPORAL_NAMESPACE
   value: {{ .Values.temporal.namespace | quote }}
+{{- with .Values.temporal.tls }}
+{{- if .enabled }}
+- name: TURGON_TEMPORAL_TLS
+  value: "true"
+{{- end }}
+{{- with .serverName }}
+- name: TURGON_TEMPORAL_SERVER_NAME
+  value: {{ . | quote }}
+{{- end }}
+{{- if .caKey }}
+- name: TURGON_TEMPORAL_CA
+  value: /etc/turgon/temporal-tls/ca
+{{- end }}
+{{- if .certKey }}
+- name: TURGON_TEMPORAL_CERT
+  value: /etc/turgon/temporal-tls/cert
+- name: TURGON_TEMPORAL_KEY
+  value: /etc/turgon/temporal-tls/key
+{{- end }}
+{{- end }}
+{{- with .Values.temporal.existingSecret }}
+- name: TURGON_TEMPORAL_API_KEY
+  valueFrom:
+    secretKeyRef: { name: {{ . }}, key: {{ $.Values.temporal.apiKeyKey }}, optional: true }
+- name: TURGON_PAYLOAD_KEYS
+  valueFrom:
+    secretKeyRef: { name: {{ . }}, key: {{ $.Values.temporal.payloadKeysKey }}, optional: true }
+{{- end }}
+{{- end -}}
+
+{{/* The Temporal TLS files, for containers that talk to Temporal. */}}
+{{- define "turgon.temporalTLSMount" -}}
+{{- with .Values.temporal.tls }}
+{{- if or .caKey .certKey }}
+- { name: temporal-tls, mountPath: /etc/turgon/temporal-tls, readOnly: true }
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{- define "turgon.temporalTLSVolume" -}}
+{{- with .Values.temporal.tls }}
+{{- if or .caKey .certKey }}
+- name: temporal-tls
+  secret:
+    secretName: {{ required "temporal.tls.existingSecret is required with temporal.tls.caKey or certKey" .existingSecret }}
+    items:
+      {{- with .caKey }}
+      - { key: {{ . }}, path: ca }
+      {{- end }}
+      {{- if .certKey }}
+      - { key: {{ .certKey }}, path: cert }
+      - { key: {{ required "temporal.tls.keyKey is required with temporal.tls.certKey" .keyKey }}, path: key }
+      {{- end }}
+{{- end }}
+{{- end }}
 {{- end -}}
 
 {{- define "turgon.podSettings" -}}

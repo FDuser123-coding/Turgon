@@ -8,7 +8,6 @@ import (
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/worker"
 	"go.temporal.io/sdk/workflow"
 
@@ -72,7 +71,7 @@ func (s TemporalStarter) Input(ctx context.Context, id string) (RunInput, error)
 		return RunInput{}, fmt.Errorf("run %s: first event is %s", id, ev.GetEventType())
 	}
 	var in RunInput
-	if err := converter.GetDefaultDataConverter().FromPayloads(attrs.GetInput(), &in); err != nil {
+	if err := DataConverter().FromPayloads(attrs.GetInput(), &in); err != nil {
 		return RunInput{}, err
 	}
 	return in, nil

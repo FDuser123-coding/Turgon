@@ -410,6 +410,30 @@ To receive webhooks, add the signing secrets to the connection secrets and
 --set workers.webhooks.ingress.host=hooks.example.com`; the ingress routes only
 `/webhooks/<endpoint>/<event>` for the events configured for webhooks.
 
+#### Temporal: TLS and encrypted payloads
+
+Everything Turgon passes through Temporal (events, mapped records, write requests and results,
+failures) is stored in Temporal's database and shown in its UI. Set `TURGON_PAYLOAD_KEYS` to
+encrypt it with AES-256-GCM before it leaves Turgon: a comma-separated list of `id:key`, each key
+32 random bytes in base64 (`head -c 32 /dev/urandom | base64`). The first key encrypts; every key
+listed decrypts, so to rotate put a new key first and drop an old one once no run you still need
+used it. Turgon's workers, console and MCP servers must share the keys. Temporal's own UI then
+shows ciphertext; the console decrypts. Failure messages are encrypted too, and the messages of
+map and resolve steps never quote a record (what they would quote is in the encrypted details).
+
+Connect to Temporal over TLS with `--temporal-tls`, a CA with `--temporal-ca`, mutual TLS with
+`--temporal-cert` and `--temporal-key`, and to Temporal Cloud with `TURGON_TEMPORAL_API_KEY`
+(each flag also reads `TURGON_TEMPORAL_*`). In the chart:
+
+```sh
+kubectl -n integrations create secret generic turgon-temporal \
+  --from-literal=payloadKeys="2026-09:$(head -c 32 /dev/urandom | base64)"   # and apiKey=... for Temporal Cloud
+helm upgrade turgon deploy/helm/turgon -n integrations --reuse-values \
+  --set temporal.existingSecret=turgon-temporal \
+  --set temporal.tls.enabled=true --set temporal.tls.existingSecret=temporal-mtls \
+  --set temporal.tls.caKey=ca.crt --set temporal.tls.certKey=tls.crt --set temporal.tls.keyKey=tls.key
+```
+
 #### Agents behind agentgateway
 
 With `agents.enabled`, the chart runs [agentgateway](https://agentgateway.dev) (v1.5.0) in front

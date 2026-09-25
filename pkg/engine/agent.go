@@ -11,7 +11,6 @@ import (
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/converter"
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
@@ -276,6 +275,6 @@ func (w AgentWrites) Input(ctx context.Context, id string) (AgentWriteInput, err
 	if attrs == nil {
 		return in, fmt.Errorf("agent write %s: first event is %s", id, ev.GetEventType())
 	}
-	err = converter.GetDefaultDataConverter().FromPayloads(attrs.GetInput(), &in)
+	err = DataConverter().FromPayloads(attrs.GetInput(), &in)
 	return in, err
 }

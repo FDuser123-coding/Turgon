@@ -1,6 +1,6 @@
 module github.com/fduser123-coding/turgon
 
-go 1.24.7
+go 1.25.14
 
 require (
 	github.com/a2aproject/a2a-go v0.3.15
