@@ -212,7 +212,7 @@ Workers tell people when a run needs them, so nobody has to watch the console:
 | Event | Who acts | Link |
 |---|---|---|
 | A write waits for approval (a recipe's, or one an agent asked for: the message names the agent and the user it acts for) | an approver, before the deadline shown | the run |
-| Nobody decided in time (the write was rejected) | an approver, who can retry the run | the run |
+| Nobody decided in time (the write was rejected) | an operator, who retries the run to ask again | the run |
 | A record matches no master record | a data steward | the steward queue |
 | A step failed and its earlier writes could not be undone | an operator, to reconcile | the run |
 
@@ -252,6 +252,12 @@ only from `--trusted-proxy` addresses, and only members of `--approver-group` ma
 A decision always refers to the exact request shown (by its SHA-256 digest), nobody can
 approve a write made on their own behalf, and cross-site requests are refused.
 For UI development, `cd console && npm run dev` proxies `/api` to a running console.
+
+**Retrying failed runs.** A failed run's page offers **Retry run** to operators
+(`--operator-group`): after an approval nobody answered in time, or once the cause of a failure
+is fixed. The reason is required and recorded as `run.retried` in the audit log before the run
+starts again from its event; writes it already made are not repeated, because it reuses their
+idempotency keys. Only failed, timed-out, terminated or cancelled runs can be retried.
 
 **Data-steward queue.** A run stops when a source record has no master record (a new customer's
 email, a Stripe customer ID), rather than guess. The console's Steward page lists each missing
@@ -460,7 +466,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/agent` | §7.7, §8 | MCP server and A2A agent: business read tools, and write tools that start approval-gated writes; gateway identity, per-call policy and audit; agentgateway configuration |
 | `pkg/notify` | §7.3, §8 | Notifications when a run needs a person: Slack, Microsoft Teams, or a signed JSON webhook, with console links |
 | `pkg/identity` | §7.3 | Record matching: normalized identifying attributes, Fellegi-Sunter scoring with Jaro-Winkler names, suggestions and the automatic-match decision |
-| `pkg/console` | §7.3, §12 | Console API (runs, approvals, the data-steward queue, audit, catalog), proxy/dev authentication, embedded web app |
+| `pkg/console` | §7.3, §12 | Console API (runs and retries, approvals, the data-steward queue, audit, catalog), proxy/dev authentication, embedded web app |
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
 | `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
 | `cmd/turgon` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check`, `mcp`, `gateway-config` |

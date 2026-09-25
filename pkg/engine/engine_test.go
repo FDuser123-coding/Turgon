@@ -302,7 +302,7 @@ func TestRejectedApprovalWritesNothing(t *testing.T) {
 	f := newFixture(t)
 	f.publish(1002, "ada@example.com", "99.00")
 	_, err, _ := f.run(f.dispatch()[0], ApprovalSignal{Step: "03-write", Status: "rejected", By: "controller@customer"})
-	if errType(err) != ErrTypeRejected || f.orders("true") != 0 {
+	if errType(err) != ErrTypeRejected || f.orders("true") != 0 || !strings.Contains(err.Error(), "write rejected by controller@customer") {
 		t.Fatalf("err = %v (%s), orders = %d", err, errType(err), f.orders("true"))
 	}
 }

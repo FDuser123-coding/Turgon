@@ -15,7 +15,7 @@ import (
 
 func consoleCmd() *cobra.Command {
 	var tf temporalFlags
-	var listen, authMode, devUser, approverGroup, stewardGroup, viewerGroup, dbURL string
+	var listen, authMode, devUser, approverGroup, stewardGroup, operatorGroup, viewerGroup, dbURL string
 	var catalogs, auditLogs, trusted []string
 	cmd := &cobra.Command{
 		Use:   "console",
@@ -25,7 +25,8 @@ func consoleCmd() *cobra.Command {
 			"and X-Auth-Request-Groups; the headers are only trusted from --trusted-proxy addresses.\n" +
 			"With --auth dev, every request is --dev-user and the console only listens on loopback.\n\n" +
 			"With --database-url, data stewards (--steward-group) link records the queue is waiting\n" +
-			"for to their master records; each link is audited and the waiting runs are retried.",
+			"for to their master records; each link is audited and the waiting runs are retried.\n" +
+			"Operators (--operator-group) retry failed runs, each retry audited with its reason.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var auth console.Authenticator
 			switch authMode {
@@ -38,7 +39,7 @@ func consoleCmd() *cobra.Command {
 				if len(trusted) == 0 || approverGroup == "" {
 					return errors.New("--auth proxy needs --trusted-proxy and --approver-group")
 				}
-				p := console.ProxyAuth{ApproverGroup: approverGroup, StewardGroup: stewardGroup, ViewerGroup: viewerGroup}
+				p := console.ProxyAuth{ApproverGroup: approverGroup, StewardGroup: stewardGroup, OperatorGroup: operatorGroup, ViewerGroup: viewerGroup}
 				for _, t := range trusted {
 					pfx, err := netip.ParsePrefix(t)
 					if err != nil {
@@ -68,6 +69,7 @@ func consoleCmd() *cobra.Command {
 				}
 				// Stewards write cross-references, audited in the shared log.
 				cfg.Xref, cfg.Recorder = pgstore.New(pool), pgstore.NewAuditLog(pool)
+				cfg.Retry = runs
 			}
 			for _, a := range auditLogs {
 				if a != "postgres" {
@@ -94,6 +96,7 @@ func consoleCmd() *cobra.Command {
 	cmd.Flags().StringSliceVar(&trusted, "trusted-proxy", nil, "CIDRs the authenticating proxy connects from")
 	cmd.Flags().StringVar(&approverGroup, "approver-group", "", "group whose members may approve writes")
 	cmd.Flags().StringVar(&stewardGroup, "steward-group", "", "group whose members resolve records in the data-steward queue")
+	cmd.Flags().StringVar(&operatorGroup, "operator-group", "", "group whose members retry failed runs")
 	cmd.Flags().StringVar(&viewerGroup, "viewer-group", "", "group required to view the console (default: any authenticated user)")
 	return cmd
 }

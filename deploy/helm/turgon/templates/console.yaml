@@ -36,6 +36,9 @@ spec:
             {{- with $auth.stewardGroup }}
             - --steward-group={{ . }}
             {{- end }}
+            {{- with $auth.operatorGroup }}
+            - --operator-group={{ . }}
+            {{- end }}
             {{- with $auth.viewerGroup }}
             - --viewer-group={{ . }}
             {{- end }}

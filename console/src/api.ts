@@ -38,6 +38,12 @@ const liveApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(d),
     }),
+  retry: (r: { id: string; note: string }) =>
+    request<{ retried: string }>("/api/runs/retry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(r),
+    }),
   steward: () => request<StewardItem[]>("/api/steward"),
   link: (l: { entity: string; system: string; ref: string; master: string; note?: string }) =>
     request<LinkResult>("/api/steward/links", {

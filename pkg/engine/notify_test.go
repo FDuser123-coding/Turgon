@@ -81,7 +81,8 @@ func TestApproversAreToldWhenNobodyDecided(t *testing.T) {
 	f, hs := newHubSpotFixture(t)
 	rec := f.listen()
 	hs.AddDeal(hubspotDeal("ada@lovelace-gmbh.example", "10"))
-	if _, err, _ := f.run(f.dispatch()[0]); errType(err) != ErrTypeRejected {
+	_, err, _ := f.run(f.dispatch()[0])
+	if errType(err) != ErrTypeRejected || !strings.Contains(err.Error(), "write rejected by turgon/approval-timeout: nobody decided within 72h0m0s") {
 		t.Fatalf("err = %v", err)
 	}
 	if rec.kinds() != notify.ApprovalPending+","+notify.ApprovalTimedOut {

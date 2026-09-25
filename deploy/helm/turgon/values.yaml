@@ -74,6 +74,8 @@ console:
     # Members resolve records in the data-steward queue (link a source
     # record to its master record and retry the runs waiting on it).
     stewardGroup: ""
+    # Members retry failed runs (each retry audited with its reason).
+    operatorGroup: ""
     viewerGroup: ""
   # Optional ConfigMap holding catalog specs to show verifier reports for.
   catalogConfigMap: ""

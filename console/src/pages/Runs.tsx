@@ -1,8 +1,12 @@
-import { useCallback } from "react";
+import { useCallback, useState } from "react";
 import { api } from "../api";
 import { Empty, ErrorBanner, Json, Link, Pill, Status } from "../components";
 import { ago, display, duration } from "../format";
-import { usePoll } from "../hooks";
+import { refreshAll, usePoll } from "../hooks";
+import type { User } from "../types";
+
+// Runs in these states can be started again (console.Retryable).
+export const retryable = (status: string) => ["failed", "timed_out", "terminated", "canceled"].includes(status);
 
 export function Runs() {
   const { data, error } = usePoll(api.runs);
@@ -48,9 +52,9 @@ export function Runs() {
   );
 }
 
-export function RunDetail({ id }: { id: string }) {
+export function RunDetail({ id, user }: { id: string; user: User }) {
   const load = useCallback(() => api.run(id), [id]);
-  const { data: run, error } = usePoll(load);
+  const { data: run, error, refresh } = usePoll(load);
   return (
     <section>
       <header className="page-head">
@@ -79,6 +83,7 @@ export function RunDetail({ id }: { id: string }) {
               <strong>{run.failureType ?? "Failed"}</strong>: {run.failure}
             </div>
           )}
+          {retryable(run.status) && <Retry id={id} user={user} onDone={refresh} />}
           <h2>Writes</h2>
           {run.result?.writes?.length ? (
             <div className="table-wrap">
@@ -141,5 +146,56 @@ export function RunDetail({ id }: { id: string }) {
         </>
       )}
     </section>
+  );
+}
+
+// Retry starts a failed run again from its event. Writes that already
+// happened are not repeated: the run reuses their idempotency keys.
+function Retry({ id, user, onDone }: { id: string; user: User; onDone: () => void }) {
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  if (!user.roles.includes("operator")) {
+    return <p className="muted small">Operators can retry this run.</p>;
+  }
+  async function retry() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.retry({ id, note: note.trim() });
+      setNote("");
+      onDone();
+      refreshAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    }
+    setBusy(false);
+  }
+  return (
+    <>
+      <ErrorBanner error={error} />
+      <form
+        className="decide"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void retry();
+        }}
+      >
+        <input
+          aria-label="Why retry"
+          placeholder="Why retry, e.g. the approver is back (recorded in the audit log)"
+          value={note}
+          onChange={(e) => setNote(e.target.value)}
+          maxLength={500}
+          required
+        />
+        <button className="btn btn-ok" type="submit" disabled={busy || note.trim() === ""}>
+          Retry run
+        </button>
+      </form>
+      <p className="muted small">
+        The run starts again from its event. Writes it already made are not repeated.
+      </p>
+    </>
   );
 }

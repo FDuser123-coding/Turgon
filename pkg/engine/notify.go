@@ -85,7 +85,7 @@ func approvalTimedOut(p PendingApproval) notify.Notification {
 	return notify.Notification{
 		Kind: notify.ApprovalTimedOut, Step: p.Step,
 		Title: fmt.Sprintf("Approval timed out: %s on %s", p.Request.Operation, p.Request.Target),
-		Text:  "Nobody decided in time, so the write was rejected and the run stopped. Retry the run to ask again.",
+		Text:  "Nobody decided in time, so the write was rejected and the run stopped. An operator can retry it from the console to ask again.",
 		Facts: notify.SortedFacts(map[string]string{"Step": p.Step, "Reference": p.Request.IdempotencyKey}),
 	}
 }

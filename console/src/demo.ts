@@ -167,7 +167,9 @@ export function createDemoApi() {
     ],
   };
 
-  const user: User = { id: "you@example.com (demo)", roles: ["viewer", "approver", "steward"] };
+  const user: User = { id: "you@example.com (demo)", roles: ["viewer", "approver", "steward", "operator"] };
+  // Approvals a person rejected, so a retry can ask again.
+  const rejected = new Map<string, NonNullable<RunDetail["pending"]>>();
   const delay = <T,>(v: T) => new Promise<T>((r) => setTimeout(() => r(structuredClone(v)), 120));
   const summary = ({ id, runId, workflow, status, started, closed, pending }: RunDetail): RunSummary => ({ id, runId, workflow, status, started, closed, pending });
 
@@ -212,6 +214,23 @@ export function createDemoApi() {
       );
       return delay({ retried: waiting.map((r) => r.id) });
     },
+    retry: (q: { id: string; note: string }) => {
+      const r = runs.find((x) => x.id === q.id);
+      if (!r) return Promise.reject(new Error("run not found"));
+      if (!["failed", "timed_out", "terminated", "canceled"].includes(r.status)) {
+        return Promise.reject(new Error(`only failed runs can be retried; this one is ${r.status}`));
+      }
+      audit(user.id, "run.retried", { runs: [r.id], reason: q.note, status: r.status, failure: r.failureType }, 0);
+      const again = rejected.get(r.id);
+      rejected.delete(r.id);
+      const now = new Date().toISOString();
+      // A rejected write is asked again; other failures recur until their cause is fixed.
+      const next: RunDetail = again
+        ? { ...r, status: "running", started: now, closed: undefined, failure: undefined, failureType: undefined, pending: { ...again, since: now } }
+        : { ...r, started: now, closed: now };
+      runs = runs.map((x) => (x.id === r.id ? next : x));
+      return delay({ retried: r.id });
+    },
     runs: () => delay(runs.map(summary)),
     run: (id: string) => {
       const r = runs.find((x) => x.id === id);
@@ -236,7 +255,8 @@ export function createDemoApi() {
       } else {
         done.status = "failed";
         done.failureType = "TurgonRejected";
-        done.failure = "write rejected by approver";
+        done.failure = `write rejected by ${user.id}${d.note ? `: ${d.note}` : ""}`;
+        rejected.set(r.id, p);
       }
       runs = runs.map((x) => (x.id === r.id ? done : x));
       return delay({ status: approved ? "approved" : "rejected" });

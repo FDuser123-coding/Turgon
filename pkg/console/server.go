@@ -43,6 +43,8 @@ type Config struct {
 	Steward  StewardRuns
 	Xref     XrefStore
 	Recorder audit.Recorder
+	// Retry lets operators start failed runs again (audited in Recorder).
+	Retry Retrier
 	// Assets overrides the embedded web app; for tests and development.
 	Assets fs.FS
 }
@@ -64,6 +66,7 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("GET /api/runs", s.listRuns)
 	s.mux.HandleFunc("GET /api/runs/{id...}", s.getRun)
 	s.mux.HandleFunc("POST /api/decisions", s.decide)
+	s.mux.HandleFunc("POST /api/runs/retry", s.retryRun)
 	s.mux.HandleFunc("GET /api/audit", s.audit)
 	s.mux.HandleFunc("GET /api/catalog", s.catalog)
 	s.mux.HandleFunc("GET /api/steward", s.stewardQueue)

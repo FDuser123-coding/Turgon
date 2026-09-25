@@ -202,7 +202,8 @@ func awaitApproval(ctx workflow.Context, ch workflow.ReceiveChannel, p PendingAp
 			got = &policy.Approval{Status: status, By: sig.By, Note: sig.Note}
 		})
 		sel.AddFuture(timer, func(workflow.Future) {
-			got = &policy.Approval{Status: policy.ApprovalRejected, By: approvalTimeoutActor}
+			got = &policy.Approval{Status: policy.ApprovalRejected, By: approvalTimeoutActor,
+				Note: fmt.Sprintf("nobody decided within %s", timeout)}
 		})
 		sel.Select(ctx)
 	}
