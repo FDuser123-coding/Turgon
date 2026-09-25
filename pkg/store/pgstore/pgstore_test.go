@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/fduser123-coding/turgon/internal/pgtest"
+	"github.com/fduser123-coding/turgon/pkg/identity"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
 )
 
@@ -172,5 +173,38 @@ func TestMigrateRenamesPorterTables(t *testing.T) {
 	}
 	if _, err := pool.Exec(ctx, `DELETE FROM turgon_audit`); err == nil {
 		t.Fatal("renamed audit table is not append-only")
+	}
+}
+
+func TestLinksKeepAttributesForMatching(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	ada := identity.Attributes{"email": "ada@lovelace-gmbh.example", "domain": "lovelace-gmbh.example", "name": "ada lovelace"}
+	if err := s.Link(ctx, "Customer", "shopify-store", "ada@lovelace-gmbh.example", "C-100", ada); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Link(ctx, "Customer", "stripe-billing", "cus_1", "C-100", identity.Attributes{"exact:vatId": "ATU123"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Link(ctx, "Customer", "shopify-store", "zed@other.example", "C-200", identity.Attributes{"email": "zed@other.example", "domain": "other.example", "name": "zed"}); err != nil {
+		t.Fatal(err)
+	}
+	// A colleague shares the domain; a record with the same VAT ID shares it.
+	got, err := s.Candidates(ctx, "Customer", identity.Attributes{"email": "grace@lovelace-gmbh.example", "domain": "lovelace-gmbh.example", "exact:vatId": "ATU123"})
+	if err != nil || len(got) != 2 || got[0].Master != "C-100" || got[1].Master != "C-100" {
+		t.Fatalf("candidates %+v %v", got, err)
+	}
+	if got, _ := s.Candidates(ctx, "Customer", identity.Attributes{"name": "adam"}); len(got) != 1 || got[0].Attributes["email"] != ada["email"] {
+		t.Fatalf("name block %+v", got)
+	}
+	if got, _ := s.Candidates(ctx, "Order", identity.Attributes{"domain": "lovelace-gmbh.example"}); len(got) != 0 {
+		t.Fatalf("other entity %+v", got)
+	}
+	// Re-linking without attributes keeps the ones already known.
+	if err := s.PutXref(ctx, "Customer", "shopify-store", "ada@lovelace-gmbh.example", "C-101"); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := s.Candidates(ctx, "Customer", identity.Attributes{"email": "ada@lovelace-gmbh.example"}); len(got) != 1 || got[0].Master != "C-101" || got[0].Attributes["name"] != "ada lovelace" {
+		t.Fatalf("after relink %+v", got)
 	}
 }

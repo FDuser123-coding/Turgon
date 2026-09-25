@@ -100,7 +100,7 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Runtim
 		rt.Close()
 		return nil, err
 	}
-	rt.Activities = &Activities{Guard: guard, Resolver: opts.Resolver}
+	rt.Activities = &Activities{Guard: guard, Resolver: opts.Resolver, Audit: opts.Audit}
 	return rt, nil
 }
 

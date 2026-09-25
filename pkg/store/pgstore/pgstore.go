@@ -9,11 +9,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/fduser123-coding/turgon/pkg/identity"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
 )
 
@@ -56,6 +58,12 @@ CREATE TABLE IF NOT EXISTS turgon_xref (
 	master_id text NOT NULL,
 	PRIMARY KEY (entity, system, source_id)
 );
+-- The source record's identifying attributes, which later records are
+-- matched against (pkg/identity).
+ALTER TABLE turgon_xref ADD COLUMN IF NOT EXISTS attributes jsonb NOT NULL DEFAULT '{}';
+CREATE INDEX IF NOT EXISTS turgon_xref_email ON turgon_xref (entity, (attributes->>'email'));
+CREATE INDEX IF NOT EXISTS turgon_xref_domain ON turgon_xref (entity, (attributes->>'domain'));
+CREATE INDEX IF NOT EXISTS turgon_xref_name ON turgon_xref (entity, left(attributes->>'name', 3));
 `
 
 // Migrate creates or upgrades Turgon's schema.
@@ -197,8 +205,65 @@ func (s *Store) Xref(ctx context.Context, entity, system, sourceID string) (stri
 
 // PutXref links a source record to a master ID.
 func (s *Store) PutXref(ctx context.Context, entity, system, sourceID, masterID string) error {
-	_, err := s.pool.Exec(ctx, `
-		INSERT INTO turgon_xref (entity, system, source_id, master_id) VALUES ($1, $2, $3, $4)
-		ON CONFLICT (entity, system, source_id) DO UPDATE SET master_id = $4`, entity, system, sourceID, masterID)
+	return s.Link(ctx, entity, system, sourceID, masterID, nil)
+}
+
+// Link links a source record to a master ID and keeps its identifying
+// attributes for matching later records. Attributes already known for the
+// record are kept unless new ones are given.
+func (s *Store) Link(ctx context.Context, entity, system, sourceID, masterID string, attrs identity.Attributes) error {
+	if attrs == nil {
+		attrs = identity.Attributes{}
+	}
+	b, err := json.Marshal(attrs)
+	if err != nil {
+		return err
+	}
+	_, err = s.pool.Exec(ctx, `
+		INSERT INTO turgon_xref (entity, system, source_id, master_id, attributes) VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (entity, system, source_id) DO UPDATE SET master_id = $4,
+			attributes = CASE WHEN $5::jsonb = '{}'::jsonb THEN turgon_xref.attributes ELSE $5::jsonb END`,
+		entity, system, sourceID, masterID, b)
 	return err
+}
+
+// Candidates returns linked records of an entity that share an email,
+// domain, name prefix or exact identifier with attrs (blocking, so a match
+// never scans every record).
+func (s *Store) Candidates(ctx context.Context, entity string, attrs identity.Attributes) ([]identity.Candidate, error) {
+	var exact []string
+	for k, v := range attrs {
+		if strings.HasPrefix(k, "exact:") {
+			exact = append(exact, k+"="+v)
+		}
+	}
+	name := attrs["name"]
+	if len([]rune(name)) > 3 {
+		name = string([]rune(name)[:3])
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT master_id, attributes FROM turgon_xref
+		WHERE entity = $1 AND (
+			($2 <> '' AND attributes->>'email' = $2) OR
+			($3 <> '' AND attributes->>'domain' = $3) OR
+			($4 <> '' AND left(attributes->>'name', 3) = $4) OR
+			EXISTS (SELECT 1 FROM jsonb_each_text(attributes) a WHERE a.key || '=' || a.value = ANY($5)))
+		LIMIT 500`, entity, attrs["email"], attrs["domain"], name, exact)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []identity.Candidate
+	for rows.Next() {
+		var c identity.Candidate
+		var raw []byte
+		if err := rows.Scan(&c.Master, &raw); err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(raw, &c.Attributes); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
 }

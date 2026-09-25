@@ -17,6 +17,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/audit"
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/engine"
+	"github.com/fduser123-coding/turgon/pkg/identity"
 )
 
 // The data-steward queue (architecture §7.3): runs that stopped because a
@@ -34,12 +35,24 @@ type UnresolvedRun struct {
 	Event    *connector.Event  `json:"event,omitempty"`
 }
 
-// StewardItem is one missing link and the runs waiting on it.
+// StewardItem is one missing link and the runs waiting on it, with the
+// newest run's identifying attributes and suggested master records.
 type StewardItem struct {
-	engine.Unresolved
-	Since time.Time       `json:"since"`
-	Runs  []UnresolvedRun `json:"runs"`
+	linkKey
+	Attributes  identity.Attributes   `json:"attributes,omitempty"`
+	Suggestions []identity.Suggestion `json:"suggestions,omitempty"`
+	Since       time.Time             `json:"since"`
+	Runs        []UnresolvedRun       `json:"runs"`
 }
+
+// linkKey names a source record.
+type linkKey struct {
+	Entity string `json:"entity"`
+	System string `json:"system"`
+	Ref    string `json:"ref"`
+}
+
+func keyOf(u engine.Unresolved) linkKey { return linkKey{u.Entity, u.System, u.Ref} }
 
 // StewardRuns is what the queue needs from the workflow engine.
 type StewardRuns interface {
@@ -50,9 +63,10 @@ type StewardRuns interface {
 	Retry(ctx context.Context, id string) error
 }
 
-// XrefStore stores identity cross-references.
+// XrefStore stores identity cross-references with the source record's
+// identifying attributes, which later records are matched against.
 type XrefStore interface {
-	PutXref(ctx context.Context, entity, system, sourceID, masterID string) error
+	Link(ctx context.Context, entity, system, sourceID, masterID string, attrs identity.Attributes) error
 }
 
 // Unresolved implements StewardRuns on Temporal.
@@ -114,16 +128,18 @@ func (t TemporalRuns) Retry(ctx context.Context, id string) error {
 	return err
 }
 
-// group collects runs by the link they wait for, oldest wait first.
+// group collects runs by the link they wait for, oldest wait first. Runs
+// arrive newest first, so each item carries its newest run's suggestions.
 func group(runs []UnresolvedRun) []StewardItem {
-	byLink := map[engine.Unresolved]*StewardItem{}
-	var order []engine.Unresolved
+	byLink := map[linkKey]*StewardItem{}
+	var order []linkKey
 	for _, r := range runs {
-		it, ok := byLink[r.Link]
+		k := keyOf(r.Link)
+		it, ok := byLink[k]
 		if !ok {
-			it = &StewardItem{Unresolved: r.Link, Since: r.Failed}
-			byLink[r.Link] = it
-			order = append(order, r.Link)
+			it = &StewardItem{linkKey: k, Attributes: r.Link.Attributes, Suggestions: r.Link.Suggestions, Since: r.Failed}
+			byLink[k] = it
+			order = append(order, k)
 		}
 		it.Runs = append(it.Runs, r)
 		if r.Failed.Before(it.Since) {
@@ -153,7 +169,7 @@ func (s *Server) stewardQueue(w http.ResponseWriter, r *http.Request) {
 
 // Link is a steward's decision.
 type Link struct {
-	engine.Unresolved
+	linkKey
 	Master string `json:"master"`
 	Note   string `json:"note,omitempty"`
 }
@@ -196,16 +212,22 @@ func (s *Server) stewardLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var waiting []string
+	var attrs identity.Attributes
 	for _, run := range runs {
-		if run.Link == l.Unresolved {
+		if keyOf(run.Link) == l.linkKey {
 			waiting = append(waiting, run.ID)
+			if attrs == nil {
+				attrs = run.Link.Attributes // the newest run's
+			}
 		}
 	}
 	if len(waiting) == 0 {
 		writeError(w, http.StatusConflict, "no run is waiting on this record any more; reload")
 		return
 	}
-	if err := s.cfg.Xref.PutXref(r.Context(), l.Entity, l.System, l.Ref, l.Master); err != nil {
+	// The record's attributes come from the run, not the request, so later
+	// matches learn from what the source system said.
+	if err := s.cfg.Xref.Link(r.Context(), l.Entity, l.System, l.Ref, l.Master, attrs); err != nil {
 		writeError(w, http.StatusBadGateway, "state database: "+err.Error())
 		return
 	}

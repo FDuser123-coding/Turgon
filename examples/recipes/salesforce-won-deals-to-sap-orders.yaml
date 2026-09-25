@@ -19,8 +19,10 @@ spec:
         mapping: sf-opportunity-to-order@3
     - resolve:
         entity: model.Customer
-        strategy: splink
-        autoMatchAbove: 0.92
+        # Salesforce names the account by its ID: only a known
+        # cross-reference links it.
+        strategy: exact
+        autoMatchAbove: 1.0
     - write:
         target: sap-ecc
         operation: create-sales-order

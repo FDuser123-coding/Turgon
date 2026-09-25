@@ -12,6 +12,7 @@ import (
 
 	"github.com/fduser123-coding/turgon/pkg/audit"
 	"github.com/fduser123-coding/turgon/pkg/engine"
+	"github.com/fduser123-coding/turgon/pkg/identity"
 )
 
 type fakeSteward struct {
@@ -44,14 +45,17 @@ func (f *fakeSteward) Retry(_ context.Context, id string) error {
 
 type fakeXref map[string]string
 
-func (x fakeXref) PutXref(_ context.Context, entity, system, source, master string) error {
+func (x fakeXref) Link(_ context.Context, entity, system, source, master string, attrs identity.Attributes) error {
 	x[entity+"/"+system+"/"+source] = master
+	x[entity+"/"+system+"/"+source+"#email"] = attrs["email"]
 	return nil
 }
 
 func unresolvedRuns() *fakeSteward {
 	now := time.Now()
-	nobody := engine.Unresolved{Entity: "Customer", System: "shopify-store", Ref: "nobody@example.com"}
+	nobody := engine.Unresolved{Entity: "Customer", System: "shopify-store", Ref: "nobody@example.com",
+		Attributes:  identity.Attributes{"email": "nobody@example.com"},
+		Suggestions: []identity.Suggestion{{Master: "C-100", Score: 0.62, Reasons: []string{"same company email domain"}}}}
 	return &fakeSteward{runs: []UnresolvedRun{
 		{ID: "shopify-store-orders-to-erp/2", Workflow: "shopify-store-orders-to-erp", Failed: now, Link: nobody},
 		{ID: "shopify-store-orders-to-erp/1", Workflow: "shopify-store-orders-to-erp", Failed: now.Add(-time.Hour), Link: nobody},
@@ -74,7 +78,8 @@ func TestStewardQueueGroupsRunsByMissingLink(t *testing.T) {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 	// Oldest wait first; the two Shopify runs wait on one link.
-	if len(items) != 2 || items[0].Ref != "nobody@example.com" || len(items[0].Runs) != 2 || items[1].Ref != "cus_new" {
+	if len(items) != 2 || items[0].Ref != "nobody@example.com" || len(items[0].Runs) != 2 || items[1].Ref != "cus_new" ||
+		len(items[0].Suggestions) != 1 || items[0].Suggestions[0].Master != "C-100" {
 		t.Fatalf("items %+v", items)
 	}
 }
@@ -107,7 +112,8 @@ func TestStewardLinksAndRetries(t *testing.T) {
 	rec := do(t, s, "POST", "/api/steward/links", link, as("sam@example.com", "turgon-stewards"))
 	var res LinkResult
 	_ = json.Unmarshal(rec.Body.Bytes(), &res)
-	if rec.Code != 200 || len(res.Retried) != 2 || xref["Customer/shopify-store/nobody@example.com"] != "C-100" {
+	if rec.Code != 200 || len(res.Retried) != 2 || xref["Customer/shopify-store/nobody@example.com"] != "C-100" ||
+		xref["Customer/shopify-store/nobody@example.com#email"] != "nobody@example.com" {
 		t.Fatalf("link: %d %s, xref %v", rec.Code, rec.Body, xref)
 	}
 	entries := log.String()

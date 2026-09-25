@@ -169,6 +169,30 @@ Only links the queue is waiting for can be made, so the page cannot rewrite othe
 The queue needs Turgon's state database (`--database-url` or `TURGON_DATABASE_URL`);
 `turgon xref set` does the same from the command line.
 
+**Identity matching** (§7.3). A resolve step names the fields that identify a record and how to
+compare them: `email` (the same address), `domain` (the same company email domain; free mail
+providers say nothing), `name` (similar names, Jaro-Winkler) or `exact` (e.g. a VAT ID). Every
+cross-reference keeps its record's attributes, and a new record is scored against the records
+already linked with a Fellegi-Sunter model, as record-linkage tools such as Splink do:
+
+```yaml
+- resolve:
+    entity: model.Customer
+    strategy: probabilistic      # or exact: never links on its own, but stewards get suggestions
+    autoMatchAbove: 0.95
+    match:
+      - { field: customerRef, kind: email }
+      - { field: customerRef, kind: domain }
+```
+
+With `probabilistic`, a match at or above `autoMatchAbove` whose runner-up is below 0.5 is linked
+and audited as `xref.matched` (score and reasons); anything else goes to the steward queue with
+the best suggestions, such as "C-100, 88%, same company email domain", one click to use. Each
+link a steward confirms keeps the record's attributes, so the next order from that buyer links
+at once. `turgon xref set --email --name` seeds known contacts. The model's weights are
+conservative defaults for customer data, not trained per deployment; an external Splink
+service (`strategy: splink`) is not wired in, and records resolved that way go to the steward.
+
 ### Tools for AI agents (MCP)
 
 `turgon mcp` serves a spec's read-only tools to AI agents over MCP (streamable HTTP). Tools are
@@ -336,6 +360,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references |
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
 | `pkg/agent` | §7.7, §8 | MCP server and A2A agent: business read tools, and write tools that start approval-gated writes; gateway identity, per-call policy and audit; agentgateway configuration |
+| `pkg/identity` | §7.3 | Record matching: normalized identifying attributes, Fellegi-Sunter scoring with Jaro-Winkler names, suggestions and the automatic-match decision |
 | `pkg/console` | §7.3, §12 | Console API (runs, approvals, the data-steward queue, audit, catalog), proxy/dev authentication, embedded web app |
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
 | `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
@@ -380,8 +405,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 In rough roadmap order (§16, §19): Salesforce Pub/Sub API change capture and Bulk API reads;
 the Turgon operator; an appliance build (§11);
-Debezium change capture in place of outbox polling; probabilistic identity
-resolution (Splink); signed OPA bundles; the metadata
+Debezium change capture in place of outbox polling; training identity-matching weights per deployment, and an external Splink service; signed OPA bundles; the metadata
 graph and discovery; A2A streaming and push notifications; direct OIDC sign-in for the
 console and approving mapping fields from its review queue; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

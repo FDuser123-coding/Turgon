@@ -167,8 +167,12 @@ func (v *Verifier) recipe(rec *v1alpha1.Recipe, bound map[string]*v1alpha1.Conne
 			v.mapStep(r, path, s.Map, threshold)
 		}
 		if s.Resolve != nil {
-			if s.Resolve.Strategy != "splink" && s.Resolve.Strategy != "exact" {
-				r.add(StageMapping, SeverityError, path+".resolve.strategy", "unknown identity-resolution strategy %q (want splink or exact)", s.Resolve.Strategy)
+			switch s.Resolve.Strategy {
+			case v1alpha1.StrategyExact, v1alpha1.StrategyProbabilistic:
+			case v1alpha1.StrategySplink:
+				r.add(StageMapping, SeverityWarning, path+".resolve.strategy", "the splink strategy needs an external Splink service this runtime does not have; unmatched records go to a data steward (use probabilistic for the built-in matcher)")
+			default:
+				r.add(StageMapping, SeverityError, path+".resolve.strategy", "unknown identity-resolution strategy %q (want exact, probabilistic or splink)", s.Resolve.Strategy)
 			}
 			if s.Resolve.AutoMatchAbove < 0.8 {
 				r.add(StageMapping, SeverityWarning, path+".resolve.autoMatchAbove", "auto-matching above %.2f risks merging distinct records; ambiguous matches should go to a data steward", s.Resolve.AutoMatchAbove)

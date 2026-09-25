@@ -99,12 +99,12 @@ export function createDemoApi() {
     failureType: "TurgonUnresolved", failure: `${link.entity} "${link.ref}" from ${link.system} has no master record; it needs a data steward`,
     event: { id: id.slice(id.lastIndexOf("/") + 1), position: 1, name: link.system === "stripe-billing" ? "Invoice.Paid" : "Order.Created", payload },
   });
-  const grace = { entity: "Customer", system: "shopify-store", ref: "grace@example.com" };
+  const grace = { entity: "Customer", system: "shopify-store", ref: "grace@lovelace-gmbh.example" };
   const cusNew = { entity: "Customer", system: "stripe-billing", ref: "cus_Q8newCustomer" };
 
   let runs: RunDetail[] = [
-    unresolved("shopify-store-orders-to-erp/450789481", 7, grace, { id: 450789481, name: "#1012", email: "Grace@Example.com", subtotal_price: "129.00", currency: "EUR" }),
-    unresolved("shopify-store-orders-to-erp/450789477", 19, grace, { id: 450789477, name: "#1008", email: "Grace@Example.com", subtotal_price: "54.50", currency: "EUR" }),
+    unresolved("shopify-store-orders-to-erp/450789481", 7, grace, { id: 450789481, name: "#1012", email: "Grace@Lovelace-GmbH.example", subtotal_price: "129.00", currency: "EUR" }),
+    unresolved("shopify-store-orders-to-erp/450789477", 19, grace, { id: 450789477, name: "#1008", email: "Grace@Lovelace-GmbH.example", subtotal_price: "54.50", currency: "EUR" }),
     unresolved("stripe-payments-to-erp/evt_0042", 33, cusNew, { id: "evt_0042", type: "invoice.paid", data: { object: { id: "in_0042", customer: "cus_Q8newCustomer", amount_paid: 49000, currency: "eur" } } }),
 
     { id: "create_sales_order/claude:quote-4471", runId: "r7", workflow: "create_sales_order", status: "running", started: at(2),
@@ -175,13 +175,17 @@ export function createDemoApi() {
     const m = r.failureType === "TurgonUnresolved" ? /^(\S+) "(.+)" from (\S+) has no master record/.exec(r.failure ?? "") : null;
     return m ? { entity: m[1] ?? "", ref: m[2] ?? "", system: m[3] ?? "" } : null;
   };
+  // What the matcher would suggest: the demo store's company domain is known.
+  const suggestionsFor = (l: Link) =>
+    l.ref.endsWith("@lovelace-gmbh.example") ? [{ master: "C-100", score: 0.877, reasons: ["same company email domain"] }] : [];
+
   function stewardItems(): StewardItem[] {
     const items = new Map<string, StewardItem>();
     for (const r of runs) {
       const link = linkOf(r);
       if (!link || r.status !== "failed") continue;
       const key = `${link.entity}/${link.system}/${link.ref}`;
-      const it: StewardItem = items.get(key) ?? { ...link, since: r.closed ?? r.started, runs: [] };
+      const it: StewardItem = items.get(key) ?? { ...link, suggestions: suggestionsFor(link), since: r.closed ?? r.started, runs: [] };
       it.runs.push({ id: r.id, workflow: r.workflow, started: r.started, failed: r.closed ?? r.started, link, event: r.event });
       if ((r.closed ?? r.started) < it.since) it.since = r.closed ?? r.started;
       items.set(key, it);

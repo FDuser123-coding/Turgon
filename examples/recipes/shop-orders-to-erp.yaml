@@ -17,6 +17,9 @@ spec:
     - resolve:
         entity: model.Customer
         strategy: exact
+        match:
+          - { field: customerRef, kind: email }
+          - { field: customerRef, kind: domain }
         autoMatchAbove: 1.0
     - write:
         target: erp-db

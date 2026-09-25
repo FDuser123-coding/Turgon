@@ -118,16 +118,24 @@ export interface Link {
   ref: string;
 }
 
+export interface Suggestion {
+  master: string;
+  score: number;
+  reasons: string[];
+}
+
 export interface UnresolvedRun {
   id: string;
   workflow: string;
   started: string;
   failed: string;
-  link: Link;
+  link: Link & { attributes?: Record<string, string>; suggestions?: Suggestion[] };
   event?: { id: string; position: number; name: string; payload: unknown };
 }
 
 export interface StewardItem extends Link {
+  attributes?: Record<string, string>;
+  suggestions?: Suggestion[];
   since: string;
   runs: UnresolvedRun[];
 }

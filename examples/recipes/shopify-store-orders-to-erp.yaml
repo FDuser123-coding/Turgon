@@ -15,10 +15,16 @@ spec:
         from: shopify-store.Order
         to: model.SalesOrder
         mapping: shopify-rest-order-to-order@1
+    # A known buyer's address links at once; a new buyer at a known company
+    # goes to a data steward with the company suggested, and once confirmed
+    # the address is known.
     - resolve:
         entity: model.Customer
-        strategy: exact
-        autoMatchAbove: 1.0
+        strategy: probabilistic
+        autoMatchAbove: 0.95
+        match:
+          - { field: customerRef, kind: email }
+          - { field: customerRef, kind: domain }
     - write:
         target: erp-db
         operation: create-sales-order

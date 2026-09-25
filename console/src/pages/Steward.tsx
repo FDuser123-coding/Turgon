@@ -76,6 +76,25 @@ function StewardCard({ item, user, onDone }: { item: StewardItem; user: User; on
           ))}
         </dd>
       </dl>
+      {item.suggestions && item.suggestions.length > 0 && (
+        <div className="suggestions">
+          <div className="muted small">Likely the same {item.entity.toLowerCase()} as:</div>
+          {item.suggestions.map((sg) => (
+            <button
+              key={sg.master}
+              type="button"
+              className={master === sg.master ? "suggestion chosen" : "suggestion"}
+              disabled={!canLink || !!done}
+              onClick={() => setMaster(sg.master)}
+              title="Use this master record"
+            >
+              <span className="mono">{sg.master}</span>
+              <span className="score">{Math.round(sg.score * 100)}%</span>
+              <span className="muted small">{sg.reasons.join(", ")}</span>
+            </button>
+          ))}
+        </div>
+      )}
       {sample && (
         <details>
           <summary>Source record ({sample.name})</summary>
