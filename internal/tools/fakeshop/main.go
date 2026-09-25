@@ -23,6 +23,9 @@ func main() {
 	token := flag.String("token", "shpat_demo", "access token the store accepts")
 	flag.Parse()
 	shop := shoptest.NewShop(*token)
+	// Order IDs keep increasing across restarts, as in a real store, so a
+	// demo never re-reads an order an earlier demo already handled.
+	shop.StartIDsAt(time.Now().Unix() * 1000)
 	go func() { log.Fatal(http.ListenAndServe(*addr, shop)) }()
 	fmt.Fprintf(os.Stderr, "fake Shopify at http://%s/admin/api/%s (token %s)\n", *addr, shoptest.Version, *token)
 

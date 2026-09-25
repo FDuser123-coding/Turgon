@@ -143,7 +143,7 @@ specs can share a cluster.
 
 `turgon console` serves the web console: the approval queue (each pending write with its
 dry-run preview, the reasons policy asked for a person, and approve/reject with a note that
-goes into the audit log), runs with their writes and failures, the audit logs with live chain
+goes into the audit log), the data-steward queue, runs with their writes and failures, the audit logs with live chain
 verification, and verifier reports for the catalog including the mapping review queue.
 
 ```sh
@@ -159,6 +159,15 @@ only from `--trusted-proxy` addresses, and only members of `--approver-group` ma
 A decision always refers to the exact request shown (by its SHA-256 digest), nobody can
 approve a write made on their own behalf, and cross-site requests are refused.
 For UI development, `cd console && npm run dev` proxies `/api` to a running console.
+
+**Data-steward queue.** A run stops when a source record has no master record (a new customer's
+email, a Stripe customer ID), rather than guess. The console's Steward page lists each missing
+link once, with the runs waiting on it and the source record. A steward (`--steward-group`)
+enters the master record's ID: the console stores the cross-reference, records `xref.linked`
+under the steward's name in the audit log, and starts every waiting run again (`run.retried`).
+Only links the queue is waiting for can be made, so the page cannot rewrite other references.
+The queue needs Turgon's state database (`--database-url` or `TURGON_DATABASE_URL`);
+`turgon xref set` does the same from the command line.
 
 ### Tools for AI agents (MCP)
 
@@ -327,7 +336,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references |
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
 | `pkg/agent` | §7.7, §8 | MCP server and A2A agent: business read tools, and write tools that start approval-gated writes; gateway identity, per-call policy and audit; agentgateway configuration |
-| `pkg/console` | §12 | Console API (runs, approvals, audit, catalog), proxy/dev authentication, embedded web app |
+| `pkg/console` | §7.3, §12 | Console API (runs, approvals, the data-steward queue, audit, catalog), proxy/dev authentication, embedded web app |
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
 | `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
 | `cmd/turgon` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check`, `mcp`, `gateway-config` |
@@ -372,7 +381,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 In rough roadmap order (§16, §19): Salesforce Pub/Sub API change capture and Bulk API reads;
 the Turgon operator; an appliance build (§11);
 Debezium change capture in place of outbox polling; probabilistic identity
-resolution (Splink) and the data-steward queue; signed OPA bundles; the metadata
+resolution (Splink); signed OPA bundles; the metadata
 graph and discovery; A2A streaming and push notifications; direct OIDC sign-in for the
 console and approving mapping fields from its review queue; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

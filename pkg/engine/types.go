@@ -34,6 +34,15 @@ const (
 	ErrTypeCompensationFailed = "TurgonCompensationFailed"
 )
 
+// Unresolved is the detail of an ErrTypeUnresolved failure: the source
+// record a data steward must link to a master record before the run is
+// retried.
+type Unresolved struct {
+	Entity string `json:"entity"`
+	System string `json:"system"`
+	Ref    string `json:"ref"`
+}
+
 // RunInput starts one workflow run for one source event. It carries the
 // workflow definition itself, so a run keeps executing the spec it started
 // with even if a newer spec is deployed meanwhile.

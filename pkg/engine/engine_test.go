@@ -303,6 +303,12 @@ func TestUnknownCustomerGoesToSteward(t *testing.T) {
 	if errType(err) != ErrTypeUnresolved || !strings.Contains(err.Error(), "data steward") || f.orders("true") != 0 {
 		t.Fatalf("err = %v", err)
 	}
+	// The failure names what the steward must link.
+	var app *temporal.ApplicationError
+	var u Unresolved
+	if !errors.As(err, &app) || app.Details(&u) != nil || u != (Unresolved{Entity: "Customer", System: "shop-db", Ref: "grace@example.com"}) {
+		t.Fatalf("details = %+v", u)
+	}
 }
 
 func TestLaterFailureCompensatesEarlierWrite(t *testing.T) {

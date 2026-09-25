@@ -6,6 +6,7 @@ import { Approvals } from "./pages/Approvals";
 import { Audit } from "./pages/Audit";
 import { Catalog } from "./pages/Catalog";
 import { RunDetail, Runs } from "./pages/Runs";
+import { Steward } from "./pages/Steward";
 import type { User } from "./types";
 
 export function App() {
@@ -14,6 +15,8 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const runs = usePoll(api.runs);
   const waiting = (runs.data ?? []).filter((r) => r.pending).length;
+  const steward = usePoll(api.steward);
+  const unlinked = (steward.data ?? []).length;
 
   useEffect(() => {
     api.me().then(setUser, (e: Error) => setError(e.message));
@@ -26,6 +29,7 @@ export function App() {
   let page;
   if (!user) page = <ErrorBanner error={error} />;
   else if (path === "/" || path === "/approvals") page = <Approvals user={user} />;
+  else if (path === "/steward") page = <Steward user={user} />;
   else if (path === "/runs") page = <Runs />;
   else if (path.startsWith("/runs/")) page = <RunDetail id={decodeURIComponent(path.slice("/runs/".length))} />;
   else if (path === "/audit") page = <Audit />;
@@ -47,6 +51,7 @@ export function App() {
       <nav className="top">
         <span className="brand">Turgon</span>
         {tab("/", "Approvals", waiting)}
+        {tab("/steward", "Steward", unlinked)}
         {tab("/runs", "Runs")}
         {tab("/audit", "Audit")}
         {tab("/catalog", "Catalog")}

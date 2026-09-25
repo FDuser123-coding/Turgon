@@ -50,6 +50,9 @@ console:
     mode: proxy
     trustedProxies: []     # CIDRs the proxy connects from; required
     approverGroup: ""      # required
+    # Members resolve records in the data-steward queue (link a source
+    # record to its master record and retry the runs waiting on it).
+    stewardGroup: ""
     viewerGroup: ""
   # Optional ConfigMap holding catalog specs to show verifier reports for.
   catalogConfigMap: ""

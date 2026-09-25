@@ -92,7 +92,9 @@ func (x *Activities) Resolve(ctx context.Context, in ResolveInput) (map[string]a
 		return nil, err // transient: retry
 	}
 	if !found {
-		return nil, nonRetryable(ErrTypeUnresolved, fmt.Errorf("%s %q from %s has no master record; it needs a data steward", entity, ref, in.System))
+		msg := fmt.Sprintf("%s %q from %s has no master record; it needs a data steward", entity, ref, in.System)
+		return nil, temporal.NewNonRetryableApplicationError(msg, ErrTypeUnresolved, nil,
+			Unresolved{Entity: entity, System: in.System, Ref: ref})
 	}
 	out := make(map[string]any, len(in.Doc)+1)
 	for k, v := range in.Doc {

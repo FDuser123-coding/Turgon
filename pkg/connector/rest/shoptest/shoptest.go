@@ -47,6 +47,14 @@ func NewShop(token string) *Shop {
 	return &Shop{Token: token, orders: map[int64]map[string]any{}, customers: map[int64]map[string]any{}, nextID: 450789469, Requests: map[string]int{}}
 }
 
+// StartIDsAt makes the next order's ID first+1; demos use it so orders
+// from different runs of the fake never share an ID.
+func (s *Shop) StartIDsAt(first int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nextID = first
+}
+
 // URL is the Admin API base URL for the connection's config.
 func (s *Shop) URL() string { return s.srv.URL + "/admin/api/" + Version }
 

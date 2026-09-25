@@ -1,6 +1,6 @@
 // Sample data for the demo build (Vercel). It mirrors what the real API
 // returns for the example recipes, and keeps decisions in memory only.
-import type { AuditEntry, AuditLog, CatalogReport, PendingApproval, RunDetail, RunSummary, User } from "./types";
+import type { AuditEntry, AuditLog, CatalogReport, Link, LinkResult, PendingApproval, RunDetail, RunSummary, StewardItem, User } from "./types";
 
 // createDemoApi builds the sample state. Only the demo build calls it, so
 // production bundles drop it entirely.
@@ -94,7 +94,19 @@ export function createDemoApi() {
     },
   };
 
+  const unresolved = (id: string, minutesAgo: number, link: StewardItem["runs"][number]["link"], payload: unknown): RunDetail => ({
+    id, runId: `u-${id}`, workflow: id.slice(0, id.lastIndexOf("/")), status: "failed", started: at(minutesAgo), closed: at(minutesAgo - 0.1),
+    failureType: "TurgonUnresolved", failure: `${link.entity} "${link.ref}" from ${link.system} has no master record; it needs a data steward`,
+    event: { id: id.slice(id.lastIndexOf("/") + 1), position: 1, name: link.system === "stripe-billing" ? "Invoice.Paid" : "Order.Created", payload },
+  });
+  const grace = { entity: "Customer", system: "shopify-store", ref: "grace@example.com" };
+  const cusNew = { entity: "Customer", system: "stripe-billing", ref: "cus_Q8newCustomer" };
+
   let runs: RunDetail[] = [
+    unresolved("shopify-store-orders-to-erp/450789481", 7, grace, { id: 450789481, name: "#1012", email: "Grace@Example.com", subtotal_price: "129.00", currency: "EUR" }),
+    unresolved("shopify-store-orders-to-erp/450789477", 19, grace, { id: 450789477, name: "#1008", email: "Grace@Example.com", subtotal_price: "54.50", currency: "EUR" }),
+    unresolved("stripe-payments-to-erp/evt_0042", 33, cusNew, { id: "evt_0042", type: "invoice.paid", data: { object: { id: "in_0042", customer: "cus_Q8newCustomer", amount_paid: 49000, currency: "eur" } } }),
+
     { id: "create_sales_order/claude:quote-4471", runId: "r7", workflow: "create_sales_order", status: "running", started: at(2),
       pending: agentOrder, request: agentOrder.request },
     { id: "shop-orders-to-erp/6", runId: "r6", workflow: "shop-orders-to-erp", status: "running", started: at(4), pending: erpOrder,
@@ -155,12 +167,47 @@ export function createDemoApi() {
     ],
   };
 
-  const user: User = { id: "you@example.com (demo)", roles: ["viewer", "approver"] };
+  const user: User = { id: "you@example.com (demo)", roles: ["viewer", "approver", "steward"] };
   const delay = <T,>(v: T) => new Promise<T>((r) => setTimeout(() => r(structuredClone(v)), 120));
   const summary = ({ id, runId, workflow, status, started, closed, pending }: RunDetail): RunSummary => ({ id, runId, workflow, status, started, closed, pending });
 
+  const linkOf = (r: RunDetail): Link | null => {
+    const m = r.failureType === "TurgonUnresolved" ? /^(\S+) "(.+)" from (\S+) has no master record/.exec(r.failure ?? "") : null;
+    return m ? { entity: m[1] ?? "", ref: m[2] ?? "", system: m[3] ?? "" } : null;
+  };
+  function stewardItems(): StewardItem[] {
+    const items = new Map<string, StewardItem>();
+    for (const r of runs) {
+      const link = linkOf(r);
+      if (!link || r.status !== "failed") continue;
+      const key = `${link.entity}/${link.system}/${link.ref}`;
+      const it: StewardItem = items.get(key) ?? { ...link, since: r.closed ?? r.started, runs: [] };
+      it.runs.push({ id: r.id, workflow: r.workflow, started: r.started, failed: r.closed ?? r.started, link, event: r.event });
+      if ((r.closed ?? r.started) < it.since) it.since = r.closed ?? r.started;
+      items.set(key, it);
+    }
+    return [...items.values()].sort((a, b) => a.since.localeCompare(b.since));
+  }
+
   return {
     me: () => delay(user),
+    steward: () => delay(stewardItems()),
+    link: (l: { entity: string; system: string; ref: string; master: string; note?: string }): Promise<LinkResult> => {
+      const waiting = runs.filter((r) => {
+        const k = linkOf(r);
+        return r.status === "failed" && k && k.entity === l.entity && k.system === l.system && k.ref === l.ref;
+      });
+      if (waiting.length === 0) return Promise.reject(new Error("no run is waiting on this record any more; reload"));
+      audit(user.id, "xref.linked", { ...l, runs: waiting.map((r) => r.id) }, 0);
+      audit(user.id, "run.retried", { runs: waiting.map((r) => r.id), reason: `linked ${l.ref} to ${l.master}` }, 0);
+      runs = runs.map((r) =>
+        waiting.includes(r)
+          ? { ...r, status: "completed", closed: new Date().toISOString(), failure: undefined, failureType: undefined,
+              result: { writes: [{ step: "03-write", endpoint: "erp-db", operation: r.workflow.startsWith("stripe") ? "record-payment" : "create-sales-order", status: "committed", result: { customer_id: l.master } }] } }
+          : r,
+      );
+      return delay({ retried: waiting.map((r) => r.id) });
+    },
     runs: () => delay(runs.map(summary)),
     run: (id: string) => {
       const r = runs.find((x) => x.id === id);
