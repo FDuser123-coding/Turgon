@@ -3,6 +3,8 @@
 export interface User {
   id: string;
   roles: string[];
+  // Where to sign out, when the console signs people in itself (OIDC).
+  logout?: string;
 }
 
 export interface Subject {

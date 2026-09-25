@@ -61,6 +61,11 @@ export function App() {
             {user.id}
           </span>
         )}
+        {user?.logout && (
+          <a className="muted small signout" href={user.logout}>
+            Sign out
+          </a>
+        )}
       </nav>
       {demo && (
         <div className="demo-banner" role="note">

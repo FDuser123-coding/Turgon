@@ -47,10 +47,25 @@
         "auth": {
           "type": "object",
           "properties": {
-            "mode": { "const": "proxy" },
+            "mode": { "enum": ["proxy", "oidc"] },
             "trustedProxies": { "type": "array", "items": { "type": "string" } },
             "approverGroup": { "type": "string" },
-            "stewardGroup": { "type": "string" }
+            "stewardGroup": { "type": "string" },
+            "operatorGroup": { "type": "string" },
+            "viewerGroup": { "type": "string" },
+            "oidc": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "issuer": { "type": "string" },
+                "clientID": { "type": "string" },
+                "url": { "type": "string" },
+                "scopes": { "type": "array", "items": { "type": "string" } },
+                "groupsClaim": { "type": "string" },
+                "sessionTTL": { "type": "string", "pattern": "^[0-9]+(h|m)$" },
+                "existingSecret": { "type": "string" }
+              }
+            }
           }
         }
       }

@@ -38,6 +38,15 @@ type Authenticator interface {
 	Authenticate(r *http.Request) (User, error)
 }
 
+// Interactive authenticators sign people in themselves (OIDCAuth): they
+// serve /auth/ and send browsers without a session to their login URL.
+type Interactive interface {
+	Authenticator
+	ServeAuth(w http.ResponseWriter, r *http.Request)
+	LoginURL(next string) string
+	LogoutURL() string
+}
+
 // ErrUnauthenticated is returned when a request carries no valid identity.
 var ErrUnauthenticated = errors.New("not authenticated")
 

@@ -89,9 +89,25 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-Content-Type-Options", "nosniff")
 	h.Set("Referrer-Policy", "no-referrer")
 	h.Set("Cache-Control", "no-store")
+	interactive, _ := s.cfg.Auth.(Interactive)
+	if interactive != nil && strings.HasPrefix(r.URL.Path, "/auth/") {
+		interactive.ServeAuth(w, r)
+		return
+	}
 	user, err := s.cfg.Auth.Authenticate(r)
-	if err != nil || !user.Has(RoleViewer) {
+	switch {
+	case err != nil && interactive != nil && r.Method == http.MethodGet && !strings.HasPrefix(r.URL.Path, "/api/"):
+		// A page load without a session: sign in, then come back here.
+		http.Redirect(w, r, interactive.LoginURL(r.URL.RequestURI()), http.StatusFound)
+		return
+	case err != nil && interactive != nil:
+		writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "your session ended; sign in again", "login": interactive.LoginURL("/")})
+		return
+	case err != nil:
 		writeError(w, http.StatusUnauthorized, "sign in through your identity provider to use the console")
+		return
+	case !user.Has(RoleViewer):
+		writeError(w, http.StatusForbidden, "your account may not use this console")
 		return
 	}
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -145,8 +161,19 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
+// Me is the signed-in user, with the sign-out URL when the console signs
+// people in itself.
+type Me struct {
+	User
+	Logout string `json:"logout,omitempty"`
+}
+
 func (s *Server) me(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, userFrom(r))
+	m := Me{User: userFrom(r)}
+	if i, ok := s.cfg.Auth.(Interactive); ok {
+		m.Logout = i.LogoutURL()
+	}
+	writeJSON(w, http.StatusOK, m)
 }
 
 func (s *Server) listRuns(w http.ResponseWriter, r *http.Request) {

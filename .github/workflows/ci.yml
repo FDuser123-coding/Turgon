@@ -108,10 +108,15 @@ jobs:
                 --set workers.consoleURL=https://turgon.example.com)
           helm lint deploy/helm/turgon "${args[@]}"
           helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" > /tmp/rendered.yaml
+          # The console signing people in itself, instead of behind a proxy.
+          helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" --set console.auth.mode=oidc \
+            --set console.auth.oidc.issuer=https://login.example.com --set console.auth.oidc.clientID=turgon \
+            --set console.auth.oidc.url=https://turgon.example.com --set console.auth.oidc.existingSecret=turgon-console-oidc \
+            > /tmp/rendered-oidc.yaml
           ~/go/bin/kubeconform -strict -summary -kubernetes-version 1.31.0 \
             -schema-location default \
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-            /tmp/rendered.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
+            /tmp/rendered.yaml /tmp/rendered-oidc.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
       - name: Lint the Dockerfile
         run: hadolint Dockerfile
 

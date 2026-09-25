@@ -246,9 +246,20 @@ bin/turgon console -c examples --audit-log turgon-audit.jsonl --dev-user you@exa
 ```
 
 `--auth dev` treats every request as `--dev-user` and only listens on loopback. In production
-use `--auth proxy` behind an authenticating reverse proxy such as oauth2-proxy with the
-customer's identity provider: it trusts `X-Auth-Request-Email` and `X-Auth-Request-Groups`
-only from `--trusted-proxy` addresses, and only members of `--approver-group` may decide.
+the console signs people in with the customer's identity provider, in one of two ways:
+
+- **`--auth oidc`**: the console is an OpenID Connect client itself (Microsoft Entra ID, Okta,
+  Keycloak, Google...). It uses the authorization code flow with PKCE, checks the ID token's
+  signature, issuer, audience, expiry and nonce, and keeps the user in an HttpOnly,
+  SameSite=Lax session cookie signed with `TURGON_CONSOLE_SESSION_KEY` (the same on every
+  replica); the client secret is read from `TURGON_OIDC_CLIENT_SECRET`. Roles come from the
+  groups claim (`--oidc-groups-claim`) at sign-in and last for `--session-ttl` (8 hours).
+  Register `<--url>/auth/callback` as the app's redirect URI. A page opened without a session,
+  such as a link from a notification, goes through sign-in and comes back to that page.
+- **`--auth proxy`**: behind an authenticating reverse proxy such as oauth2-proxy, trusting
+  `X-Auth-Request-Email` and `X-Auth-Request-Groups` only from `--trusted-proxy` addresses.
+
+Either way, only members of `--approver-group` may decide.
 A decision always refers to the exact request shown (by its SHA-256 digest), nobody can
 approve a write made on their own behalf, and cross-site requests are refused.
 For UI development, `cd console && npm run dev` proxies `/api` to a running console.
@@ -369,6 +380,10 @@ helm install turgon deploy/helm/turgon -n integrations \
 helm test turgon -n integrations                        # runs `turgon check` for every spec
 ```
 
+To have the console sign people in itself instead of running oauth2-proxy, create a Secret
+with `TURGON_OIDC_CLIENT_SECRET` and `TURGON_CONSOLE_SESSION_KEY` and set
+`console.auth.mode=oidc` with `console.auth.oidc.{issuer,clientID,url,existingSecret}`.
+
 To receive webhooks, add the signing secrets to the connection secrets and
 `--set workers.webhooks.enabled=true --set workers.webhooks.ingress.enabled=true
 --set workers.webhooks.ingress.host=hooks.example.com`; the ingress routes only
@@ -466,7 +481,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/agent` | §7.7, §8 | MCP server and A2A agent: business read tools, and write tools that start approval-gated writes; gateway identity, per-call policy and audit; agentgateway configuration |
 | `pkg/notify` | §7.3, §8 | Notifications when a run needs a person: Slack, Microsoft Teams, or a signed JSON webhook, with console links |
 | `pkg/identity` | §7.3 | Record matching: normalized identifying attributes, Fellegi-Sunter scoring with Jaro-Winkler names, suggestions and the automatic-match decision |
-| `pkg/console` | §7.3, §12 | Console API (runs and retries, approvals, the data-steward queue, audit, catalog), proxy/dev authentication, embedded web app |
+| `pkg/console` | §7.3, §12 | Console API (runs and retries, approvals, the data-steward queue, audit, catalog), OpenID Connect sign-in or proxy authentication, embedded web app |
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
 | `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
 | `cmd/turgon` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check`, `mcp`, `gateway-config` |
@@ -511,6 +526,5 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 In rough roadmap order (§16, §19): Salesforce Pub/Sub API change capture and Bulk API reads;
 the Turgon operator; an appliance build (§11);
 Debezium change capture in place of outbox polling; training identity-matching weights per deployment, and an external Splink service; signed OPA bundles; the metadata
-graph and discovery; A2A streaming and push notifications; direct OIDC sign-in for the
-console and approving mapping fields from its review queue; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
+graph and discovery; A2A streaming and push notifications; approving mapping fields from the console's review queue; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.
