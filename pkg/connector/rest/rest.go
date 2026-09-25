@@ -570,7 +570,9 @@ func render(tmpl string, vars map[string]any) (string, map[string]any, error) {
 		name := varRE.FindStringSubmatch(m)[1]
 		v := lookup(vars, name)
 		s := scalar(v)
-		if s == "" {
+		if s == "" || s == "." || s == ".." {
+			// Escaping leaves dot segments as they are, and servers resolve
+			// them: an ID of ".." would address the parent resource.
 			missing = append(missing, name)
 			return ""
 		}
@@ -578,7 +580,7 @@ func render(tmpl string, vars map[string]any) (string, map[string]any, error) {
 		return url.PathEscape(s)
 	})
 	if len(missing) > 0 {
-		return "", nil, fmt.Errorf("%w: path %s needs %s", writeguard.ErrInvalid, tmpl, strings.Join(missing, ", "))
+		return "", nil, fmt.Errorf("%w: path %s needs %s (not empty, \".\" or \"..\")", writeguard.ErrInvalid, tmpl, strings.Join(missing, ", "))
 	}
 	return out, used, nil
 }

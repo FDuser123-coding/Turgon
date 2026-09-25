@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -36,20 +39,77 @@ import (
 
 type temporalFlags struct {
 	address, namespace, taskQueue string
+	tls                           bool
+	caFile, certFile, keyFile     string
+	serverName                    string
 }
 
 func (f *temporalFlags) register(cmd *cobra.Command) {
 	cmd.Flags().StringVar(&f.address, "temporal", envOr("TURGON_TEMPORAL_ADDRESS", "localhost:7233"), "Temporal frontend address")
 	cmd.Flags().StringVar(&f.namespace, "namespace", envOr("TURGON_TEMPORAL_NAMESPACE", "default"), "Temporal namespace")
 	cmd.Flags().StringVar(&f.taskQueue, "task-queue", "", "Temporal task queue (default: turgon-<spec name>)")
+	cmd.Flags().BoolVar(&f.tls, "temporal-tls", os.Getenv("TURGON_TEMPORAL_TLS") == "true", "connect to Temporal over TLS (implied by a client certificate or TURGON_TEMPORAL_API_KEY)")
+	cmd.Flags().StringVar(&f.caFile, "temporal-ca", os.Getenv("TURGON_TEMPORAL_CA"), "CA certificate file that signed Temporal's server certificate (default: the system's)")
+	cmd.Flags().StringVar(&f.certFile, "temporal-cert", os.Getenv("TURGON_TEMPORAL_CERT"), "client certificate file, for mutual TLS")
+	cmd.Flags().StringVar(&f.keyFile, "temporal-key", os.Getenv("TURGON_TEMPORAL_KEY"), "client key file, for mutual TLS")
+	cmd.Flags().StringVar(&f.serverName, "temporal-server-name", os.Getenv("TURGON_TEMPORAL_SERVER_NAME"), "server name to verify in Temporal's certificate (default: the address's host)")
 }
 
+// dial connects to Temporal. TURGON_TEMPORAL_API_KEY authenticates to
+// Temporal Cloud; TURGON_PAYLOAD_KEYS ("id:base64key,...", see
+// engine.NewCodec) encrypts everything Turgon stores in Temporal.
 func (f *temporalFlags) dial() (client.Client, error) {
-	return client.Dial(client.Options{
+	opts := client.Options{
 		HostPort:  f.address,
 		Namespace: f.namespace,
 		Logger:    tlog.NewStructuredLogger(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelWarn}))),
-	})
+	}
+	apiKey := os.Getenv("TURGON_TEMPORAL_API_KEY")
+	if f.tls || f.certFile != "" || f.caFile != "" || apiKey != "" {
+		cfg, err := f.tlsConfig()
+		if err != nil {
+			return nil, err
+		}
+		opts.ConnectionOptions.TLS = cfg
+	}
+	if apiKey != "" {
+		opts.Credentials = client.NewAPIKeyStaticCredentials(apiKey)
+	}
+	if keys := os.Getenv("TURGON_PAYLOAD_KEYS"); keys != "" {
+		codec, err := engine.NewCodec(keys)
+		if err != nil {
+			return nil, err
+		}
+		engine.EncryptPayloads(codec)
+	}
+	opts.DataConverter = engine.DataConverter()
+	opts.FailureConverter = engine.FailureConverter()
+	return client.Dial(opts)
+}
+
+func (f *temporalFlags) tlsConfig() (*tls.Config, error) {
+	cfg := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: f.serverName}
+	if f.caFile != "" {
+		pem, err := os.ReadFile(f.caFile)
+		if err != nil {
+			return nil, fmt.Errorf("--temporal-ca: %w", err)
+		}
+		cfg.RootCAs = x509.NewCertPool()
+		if !cfg.RootCAs.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("--temporal-ca %s: no PEM certificates", f.caFile)
+		}
+	}
+	if (f.certFile == "") != (f.keyFile == "") {
+		return nil, errors.New("--temporal-cert and --temporal-key go together")
+	}
+	if f.certFile != "" {
+		cert, err := tls.LoadX509KeyPair(f.certFile, f.keyFile)
+		if err != nil {
+			return nil, fmt.Errorf("temporal client certificate: %w", err)
+		}
+		cfg.Certificates = []tls.Certificate{cert}
+	}
+	return cfg, nil
 }
 
 // connectorRegistry lists the connectors built into this worker.
@@ -88,7 +148,7 @@ func runCmd() *cobra.Command {
 	var tf temporalFlags
 	var specPath, dbURL, auditPath string
 	var poll, approvalTimeout, reconcile time.Duration
-	var healthAddr, webhookAddr, consoleURL string
+	var healthAddr, webhookAddr, consoleURL, pollers string
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run a compiled runtime spec: Temporal worker plus event dispatcher",
@@ -155,7 +215,11 @@ func runCmd() *cobra.Command {
 			if tf.taskQueue == "" {
 				tf.taskQueue = engine.TaskQueueFor(spec)
 			}
-			w := worker.New(c, tf.taskQueue, worker.Options{})
+			wopts, err := workerOptions(pollers)
+			if err != nil {
+				return err
+			}
+			w := worker.New(c, tf.taskQueue, wopts)
 			engine.Register(w, rt.Activities)
 			if err := w.Start(); err != nil {
 				return err
@@ -179,7 +243,7 @@ func runCmd() *cobra.Command {
 			}
 			wake := make(chan struct{}, 1)
 			if webhookAddr != "" {
-				srv := &http.Server{Addr: webhookAddr, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
+				srv := &http.Server{Addr: webhookAddr, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute,
 					Handler: engine.WebhookHandler(rt, store, func() {
 						select {
 						case wake <- struct{}{}:
@@ -235,10 +299,29 @@ func runCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&poll, "poll", 2*time.Second, "event source poll interval")
 	cmd.Flags().StringVar(&healthAddr, "health-listen", "", "serve /healthz and /readyz on this address, e.g. :8081")
 	cmd.Flags().StringVar(&webhookAddr, "webhook-listen", "", "receive events configured for webhooks on this address, e.g. :8082 (POST /webhooks/<endpoint>/<event>)")
+	cmd.Flags().StringVar(&pollers, "pollers", "auto", `task queue pollers per kind: "auto" scales them with the load (5 to 100), or a fixed number`)
 	cmd.Flags().StringVar(&consoleURL, "console-url", os.Getenv("TURGON_CONSOLE_URL"), "the console's URL, linked from notifications, e.g. https://turgon.example.com")
 	cmd.Flags().DurationVar(&reconcile, "reconcile", engine.DefaultReconcile, "how often events received by webhook are also polled, for missed deliveries")
 	cmd.Flags().DurationVar(&approvalTimeout, "approval-timeout", engine.DefaultApprovalTimeout, "reject approvals nobody answers within this time")
 	return cmd
+}
+
+// workerOptions sets how many requests the worker keeps open to Temporal
+// for workflow and activity tasks. Each run is a dozen or more tasks, so
+// the SDK's default of two pollers each caps a worker at a few runs a
+// second however fast the systems are; "auto" lets the SDK scale them.
+func workerOptions(pollers string) (worker.Options, error) {
+	var b worker.PollerBehavior
+	if pollers == "auto" {
+		b = worker.NewPollerBehaviorAutoscaling(worker.PollerBehaviorAutoscalingOptions{})
+	} else {
+		n, err := strconv.Atoi(pollers)
+		if err != nil || n < 1 || n > 500 {
+			return worker.Options{}, fmt.Errorf(`--pollers must be "auto" or a number from 1 to 500, not %q`, pollers)
+		}
+		b = worker.NewPollerBehaviorSimpleMaximum(worker.PollerBehaviorSimpleMaximumOptions{MaximumNumberOfPollers: n})
+	}
+	return worker.Options{WorkflowTaskPollerBehavior: b, ActivityTaskPollerBehavior: b}, nil
 }
 
 // inboxRetention keeps webhook deliveries long enough to drop every
@@ -439,7 +522,7 @@ func serveHealth(ctx context.Context, addr string, pool *pgxpool.Pool, logw io.W
 		}
 		fmt.Fprintln(w, "ready")
 	})
-	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: time.Minute}
 	go func() {
 		<-ctx.Done()
 		_ = srv.Close()

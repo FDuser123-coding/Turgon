@@ -3,6 +3,7 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -12,7 +13,7 @@ import (
 
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/workflowservice/v1"
-	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/temporal"
 
 	"github.com/fduser123-coding/turgon/pkg/audit"
 	"github.com/fduser123-coding/turgon/pkg/connector"
@@ -79,7 +80,6 @@ func (t TemporalRuns) Unresolved(ctx context.Context, limit int) ([]UnresolvedRu
 	if err != nil {
 		return nil, err
 	}
-	dc := converter.GetDefaultDataConverter()
 	seen := map[string]bool{}
 	var out []UnresolvedRun
 	for _, e := range resp.Executions {
@@ -103,9 +103,12 @@ func (t TemporalRuns) Unresolved(ctx context.Context, limit int) ([]UnresolvedRu
 				break
 			}
 			a := ev.GetWorkflowExecutionFailedEventAttributes()
-			for c := a.GetFailure(); c != nil && !found; c = c.GetCause() {
-				app := c.GetApplicationFailureInfo()
-				if app.GetType() == engine.ErrTypeUnresolved && dc.FromPayloads(app.GetDetails(), &run.Link) == nil && run.Link.Ref != "" {
+			if a == nil {
+				continue
+			}
+			for e := engine.FailureConverter().FailureToError(a.GetFailure()); e != nil && !found; e = errors.Unwrap(e) {
+				var app *temporal.ApplicationError
+				if errors.As(e, &app) && app.Type() == engine.ErrTypeUnresolved && app.Details(&run.Link) == nil && run.Link.Ref != "" {
 					found = true
 				}
 			}

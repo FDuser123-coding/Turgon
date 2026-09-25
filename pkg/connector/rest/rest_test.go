@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/shoptest"
+	"github.com/fduser123-coding/turgon/pkg/connector/rest/stripetest"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
 )
 
@@ -295,5 +296,28 @@ func TestTimestampCursorNeverSplitsASecond(t *testing.T) {
 	// The page is full and b and c share a timestamp: only a is taken now.
 	if len(evs) != 1 || evs[0].ID != "a" || gotSince != "1970-01-01T00:00:00.000Z" {
 		t.Fatalf("events %+v, since %q", evs, gotSince)
+	}
+}
+
+// Values from records and agents fill paths; a dot segment would move the
+// request to another resource once the server resolves it.
+func TestPathValuesCannotClimb(t *testing.T) {
+	for _, v := range []string{"..", ".", ""} {
+		if _, _, err := render("/v1/invoices/{{id}}", map[string]any{"id": v}); !errors.Is(err, writeguard.ErrInvalid) {
+			t.Errorf("%q: %v", v, err)
+		}
+	}
+	got, _, err := render("/v1/invoices/{{id}}", map[string]any{"id": "../admin?x=1#y"})
+	if err != nil || got != "/v1/invoices/..%2Fadmin%3Fx=1%23y" {
+		t.Fatalf("%q %v", got, err)
+	}
+	s := stripetest.New("sk")
+	defer s.Close()
+	c, _ := New(stripeConfig(s.URL()), "sk", http.DefaultClient)
+	if _, err := c.Read(context.Background(), "get-invoice", ".."); !errors.Is(err, writeguard.ErrNotFound) {
+		t.Fatalf("read ..: %v", err)
+	}
+	if s.Requests["GET /v1"] != 0 || s.Requests["GET /v1/"] != 0 {
+		t.Fatalf("requested the parent: %v", s.Requests)
 	}
 }

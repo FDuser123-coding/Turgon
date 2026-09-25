@@ -11,6 +11,20 @@ imagePullSecrets: []
 temporal:
   address: temporal-frontend:7233
   namespace: default
+  # TLS to the Temporal frontend (implied by a client certificate or an API key).
+  tls:
+    enabled: false
+    serverName: ""         # name in Temporal's certificate (default: the address's host)
+    existingSecret: ""     # Secret holding the files below
+    caKey: ""              # CA that signed Temporal's certificate (default: the system's)
+    certKey: ""            # client certificate and key, for mutual TLS
+    keyKey: ""
+  # A Secret with Temporal Cloud's API key and the keys that encrypt what
+  # Turgon stores in Temporal: "id:base64(32 bytes),...", newest first;
+  # older keys stay listed to read older runs. Missing keys are not used.
+  existingSecret: ""
+  apiKeyKey: apiKey
+  payloadKeysKey: payloadKeys
 
 # Turgon's own state: idempotency records, cursors, cross-references and the
 # shared audit log. Use an existing database, or let the chart create a
@@ -33,6 +47,9 @@ specs: {}
 workers:
   replicas: 1
   pollInterval: 2s
+  # Requests each worker keeps open to Temporal per task kind: "auto"
+  # scales them with the load, or a fixed number.
+  pollers: auto
   approvalTimeout: 72h
   # Secrets whose keys become environment variables. Connection secrets are
   # read from TURGON_SECRET_* variables (see `turgon secrets <spec>`), and

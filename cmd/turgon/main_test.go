@@ -47,3 +47,16 @@ func TestVerifyBlockedExitsNonZero(t *testing.T) {
 		t.Fatalf("err=%v\n%s", err, out)
 	}
 }
+
+func TestWorkerPollers(t *testing.T) {
+	for _, ok := range []string{"auto", "1", "32", "500"} {
+		if o, err := workerOptions(ok); err != nil || o.WorkflowTaskPollerBehavior == nil || o.ActivityTaskPollerBehavior == nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"", "0", "501", "fast", "-3"} {
+		if _, err := workerOptions(bad); err == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+}

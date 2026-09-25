@@ -290,7 +290,7 @@ func (s *Server) Serve(addr string) error {
 			return fmt.Errorf("dev authentication only listens on loopback addresses, not %s", addr)
 		}
 	}
-	srv := &http.Server{Addr: addr, Handler: s, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: addr, Handler: s, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
 	return srv.ListenAndServe()
 }
 
