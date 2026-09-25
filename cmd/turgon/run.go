@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -88,7 +89,7 @@ func runCmd() *cobra.Command {
 	var tf temporalFlags
 	var specPath, dbURL, auditPath string
 	var poll, approvalTimeout, reconcile time.Duration
-	var healthAddr, webhookAddr, consoleURL string
+	var healthAddr, webhookAddr, consoleURL, pollers string
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run a compiled runtime spec: Temporal worker plus event dispatcher",
@@ -155,7 +156,11 @@ func runCmd() *cobra.Command {
 			if tf.taskQueue == "" {
 				tf.taskQueue = engine.TaskQueueFor(spec)
 			}
-			w := worker.New(c, tf.taskQueue, worker.Options{})
+			wopts, err := workerOptions(pollers)
+			if err != nil {
+				return err
+			}
+			w := worker.New(c, tf.taskQueue, wopts)
 			engine.Register(w, rt.Activities)
 			if err := w.Start(); err != nil {
 				return err
@@ -235,10 +240,29 @@ func runCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&poll, "poll", 2*time.Second, "event source poll interval")
 	cmd.Flags().StringVar(&healthAddr, "health-listen", "", "serve /healthz and /readyz on this address, e.g. :8081")
 	cmd.Flags().StringVar(&webhookAddr, "webhook-listen", "", "receive events configured for webhooks on this address, e.g. :8082 (POST /webhooks/<endpoint>/<event>)")
+	cmd.Flags().StringVar(&pollers, "pollers", "auto", `task queue pollers per kind: "auto" scales them with the load (5 to 100), or a fixed number`)
 	cmd.Flags().StringVar(&consoleURL, "console-url", os.Getenv("TURGON_CONSOLE_URL"), "the console's URL, linked from notifications, e.g. https://turgon.example.com")
 	cmd.Flags().DurationVar(&reconcile, "reconcile", engine.DefaultReconcile, "how often events received by webhook are also polled, for missed deliveries")
 	cmd.Flags().DurationVar(&approvalTimeout, "approval-timeout", engine.DefaultApprovalTimeout, "reject approvals nobody answers within this time")
 	return cmd
+}
+
+// workerOptions sets how many requests the worker keeps open to Temporal
+// for workflow and activity tasks. Each run is a dozen or more tasks, so
+// the SDK's default of two pollers each caps a worker at a few runs a
+// second however fast the systems are; "auto" lets the SDK scale them.
+func workerOptions(pollers string) (worker.Options, error) {
+	var b worker.PollerBehavior
+	if pollers == "auto" {
+		b = worker.NewPollerBehaviorAutoscaling(worker.PollerBehaviorAutoscalingOptions{})
+	} else {
+		n, err := strconv.Atoi(pollers)
+		if err != nil || n < 1 || n > 500 {
+			return worker.Options{}, fmt.Errorf(`--pollers must be "auto" or a number from 1 to 500, not %q`, pollers)
+		}
+		b = worker.NewPollerBehaviorSimpleMaximum(worker.PollerBehaviorSimpleMaximumOptions{MaximumNumberOfPollers: n})
+	}
+	return worker.Options{WorkflowTaskPollerBehavior: b, ActivityTaskPollerBehavior: b}, nil
 }
 
 // inboxRetention keeps webhook deliveries long enough to drop every

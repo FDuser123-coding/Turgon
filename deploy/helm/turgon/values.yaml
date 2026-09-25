@@ -33,6 +33,9 @@ specs: {}
 workers:
   replicas: 1
   pollInterval: 2s
+  # Requests each worker keeps open to Temporal per task kind: "auto"
+  # scales them with the load, or a fixed number.
+  pollers: auto
   approvalTimeout: 72h
   # Secrets whose keys become environment variables. Connection secrets are
   # read from TURGON_SECRET_* variables (see `turgon secrets <spec>`), and

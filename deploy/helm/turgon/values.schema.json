@@ -36,6 +36,7 @@
     "workers": {
       "type": "object",
       "properties": {
+        "pollers": { "anyOf": [{ "const": "auto" }, { "type": "integer", "minimum": 1, "maximum": 500 }] },
         "replicas": { "type": "integer", "minimum": 0 },
         "secretEnvFrom": { "type": "array", "items": { "type": "string" } }
       }
