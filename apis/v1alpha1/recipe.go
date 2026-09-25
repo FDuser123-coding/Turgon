@@ -2,6 +2,7 @@ package v1alpha1
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -62,10 +63,41 @@ type MapStep struct {
 }
 
 type ResolveStep struct {
-	Entity         string  `json:"entity"`
+	Entity string `json:"entity"`
+	// Strategy is exact (a known cross-reference, else a data steward),
+	// probabilistic (the built-in matcher: link automatically when the
+	// match is certain enough, else a steward with suggestions), or splink
+	// (reserved for an external Splink service).
 	Strategy       string  `json:"strategy"`
 	AutoMatchAbove float64 `json:"autoMatchAbove"`
+	// Match names the document fields that identify a record and how to
+	// compare them. Required for probabilistic; with exact they only feed
+	// the suggestions a steward sees.
+	Match []MatchField `json:"match,omitempty"`
 }
+
+// MatchField is one identifying field of a record.
+type MatchField struct {
+	Field string `json:"field"`
+	// Kind is email (the same address), domain (the same company email
+	// domain, read from an email field; free mail providers say nothing),
+	// name (similar names), or exact (equal values, e.g. a VAT ID). Match
+	// a company by domain, a person by email and name.
+	Kind string `json:"kind"`
+}
+
+var fieldNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// Identity-resolution strategies and match kinds.
+const (
+	StrategyExact         = "exact"
+	StrategyProbabilistic = "probabilistic"
+	StrategySplink        = "splink"
+	MatchEmail            = "email"
+	MatchDomain           = "domain"
+	MatchName             = "name"
+	MatchExact            = "exact"
+)
 
 // Approval modes for write steps.
 const (
@@ -145,6 +177,17 @@ func (r *Recipe) Validate() FieldErrors {
 			}
 			if s.Resolve.AutoMatchAbove <= 0 || s.Resolve.AutoMatchAbove > 1 {
 				es.add(path+".resolve.autoMatchAbove", "must be in (0, 1], got %v", s.Resolve.AutoMatchAbove)
+			}
+			for j, m := range s.Resolve.Match {
+				if !fieldNameRE.MatchString(m.Field) {
+					es.add(fmt.Sprintf("%s.resolve.match[%d].field", path, j), "must be a document field name, got %q", m.Field)
+				}
+				if m.Kind != MatchEmail && m.Kind != MatchDomain && m.Kind != MatchName && m.Kind != MatchExact {
+					es.add(fmt.Sprintf("%s.resolve.match[%d].kind", path, j), "must be email, domain, name or exact, got %q", m.Kind)
+				}
+			}
+			if s.Resolve.Strategy == StrategyProbabilistic && len(s.Resolve.Match) == 0 {
+				es.add(path+".resolve.match", "the probabilistic strategy needs the fields to match on")
 			}
 		case "write":
 			w := s.Write

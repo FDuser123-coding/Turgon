@@ -8,6 +8,8 @@ spec:
   connector: rest@^1
   secretRef: openbao://shopify-store/token
   entities: [Order, Customer]
+  # The REST Admin API allows 2 requests per second per store.
+  limits: { maxConcurrentCalls: 2, requestsPerSecond: 2 }
   events:
     - { name: Order.Created, entity: Order, interface: polling }
   operations:

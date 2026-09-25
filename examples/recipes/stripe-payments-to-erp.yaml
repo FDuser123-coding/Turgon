@@ -1,0 +1,43 @@
+# Cash application: every paid Stripe invoice is recorded as a payment in
+# the ERP, and the ERP payment ID is written into the invoice's metadata.
+# Payments are low risk, so they flow without a person unless policy says
+# otherwise (amounts above the approval threshold). If Stripe rejects the
+# metadata, the ERP payment is voided.
+apiVersion: turgon.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: stripe-payments-to-erp
+  version: 1.0.0
+spec:
+  trigger:
+    source: stripe-billing
+    event: Invoice.Paid
+  steps:
+    - map:
+        from: stripe-billing.Invoice
+        to: model.Payment
+        mapping: stripe-invoice-to-payment@1
+    - resolve:
+        entity: model.Customer
+        strategy: exact
+        autoMatchAbove: 1.0
+    - write:
+        target: erp-db
+        operation: record-payment
+        idempotencyKey: "{{ source.data.object.id }}"
+        simulate: true
+        output: erpPayment
+    - map:
+        from: model.Payment
+        to: model.Invoice
+        mapping: payment-to-stripe-link@1
+    - write:
+        target: stripe-billing
+        operation: link-invoice
+        idempotencyKey: "{{ source.data.object.id }}"
+        simulate: true
+  policies: [writeback-default]
+  capacity:
+    peakPerSecond: 5
+  slo:
+    p95Latency: 10s

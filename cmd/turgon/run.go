@@ -19,6 +19,7 @@ import (
 	tlog "go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/worker"
 
+	"github.com/fduser123-coding/turgon/apis/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/audit"
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
@@ -26,6 +27,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/connector/rest"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce"
 	"github.com/fduser123-coding/turgon/pkg/engine"
+	"github.com/fduser123-coding/turgon/pkg/identity"
 	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
 )
 
@@ -297,11 +299,14 @@ func retryCmd() *cobra.Command {
 }
 
 func xrefCmd() *cobra.Command {
-	var dbURL, entity, system, source, master string
+	var dbURL, entity, system, source, master, email, name string
 	cmd := &cobra.Command{Use: "xref", Short: "Manage identity cross-references"}
 	set := &cobra.Command{
 		Use:   "set",
 		Short: "Link a source record to a master record",
+		Long: "Link a source record to a master record. With --email and --name, the record's\n" +
+			"contact is kept for matching: later records with the same address, company email\n" +
+			"domain or name are suggested to stewards, or linked by the probabilistic strategy.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			ctx := cmd.Context()
 			pool, err := pgxpool.New(ctx, dbURL)
@@ -312,7 +317,10 @@ func xrefCmd() *cobra.Command {
 			if err := pgstore.Migrate(ctx, pool); err != nil {
 				return err
 			}
-			return pgstore.New(pool).PutXref(ctx, entity, system, source, master)
+			attrs := identity.Extract(map[string]any{"email": email, "name": name}, []v1alpha1.MatchField{
+				{Field: "email", Kind: v1alpha1.MatchEmail}, {Field: "email", Kind: v1alpha1.MatchDomain}, {Field: "name", Kind: v1alpha1.MatchName},
+			})
+			return pgstore.New(pool).Link(ctx, entity, system, source, master, attrs)
 		},
 	}
 	set.Flags().StringVar(&dbURL, "database-url", os.Getenv("TURGON_DATABASE_URL"), "Postgres URL for Turgon's state")
@@ -320,6 +328,8 @@ func xrefCmd() *cobra.Command {
 	set.Flags().StringVar(&system, "system", "", "source endpoint, e.g. shop-db")
 	set.Flags().StringVar(&source, "source", "", "record ID in the source system")
 	set.Flags().StringVar(&master, "master", "", "master record ID")
+	set.Flags().StringVar(&email, "email", "", "the record's email address, kept for matching")
+	set.Flags().StringVar(&name, "name", "", "the record's name, kept for matching")
 	for _, f := range []string{"entity", "system", "source", "master"} {
 		_ = set.MarkFlagRequired(f)
 	}

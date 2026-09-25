@@ -33,6 +33,9 @@ spec:
             - --auth=proxy
             - --trusted-proxy={{ join "," $auth.trustedProxies }}
             - --approver-group={{ $auth.approverGroup }}
+            {{- with $auth.stewardGroup }}
+            - --steward-group={{ . }}
+            {{- end }}
             {{- with $auth.viewerGroup }}
             - --viewer-group={{ . }}
             {{- end }}

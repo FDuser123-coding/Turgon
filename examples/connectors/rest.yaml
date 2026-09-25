@@ -25,7 +25,6 @@ spec:
       # created[gt], updated_at_min).
       - kind: polling
   limits:
-    # Shared by every connection on this connector; the strictest common
-    # API (Shopify's REST Admin API: 2 requests per second) sets it.
+    # Conservative defaults; each connection sets its API's own limits.
     maxConcurrentCalls: 2
     requestsPerSecond: 2

@@ -25,8 +25,10 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/connector/postgres"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/shoptest"
+	"github.com/fduser123-coding/turgon/pkg/connector/rest/stripetest"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce/sftest"
+	"github.com/fduser123-coding/turgon/pkg/identity"
 	"github.com/fduser123-coding/turgon/pkg/policy"
 	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
 	"github.com/fduser123-coding/turgon/pkg/verifier"
@@ -301,6 +303,12 @@ func TestUnknownCustomerGoesToSteward(t *testing.T) {
 	_, err, _ := f.run(f.dispatch()[0])
 	if errType(err) != ErrTypeUnresolved || !strings.Contains(err.Error(), "data steward") || f.orders("true") != 0 {
 		t.Fatalf("err = %v", err)
+	}
+	// The failure names what the steward must link.
+	var app *temporal.ApplicationError
+	var u Unresolved
+	if !errors.As(err, &app) || app.Details(&u) != nil || u.Entity != "Customer" || u.System != "shop-db" || u.Ref != "grace@example.com" {
+		t.Fatalf("details = %+v", u)
 	}
 }
 
@@ -582,5 +590,174 @@ func TestShopifyRejectionCancelsTheERPOrder(t *testing.T) {
 	}
 	if shop.Order(id)["note"] != nil {
 		t.Fatal("Shopify order changed")
+	}
+}
+
+// newStripeFixture runs the stripe-payments-to-erp recipe against the fake
+// Stripe account and Postgres.
+func newStripeFixture(t *testing.T) (*fixture, *stripetest.Stripe) {
+	t.Helper()
+	st := stripetest.New("rk_test_turgon")
+	t.Cleanup(st.Close)
+	f := newFixtureFor(t, "stripe-payments-to-erp", connector.StaticSecrets{"openbao://stripe-billing/restricted-key": "rk_test_turgon"},
+		func(cfg string) string { return strings.ReplaceAll(cfg, "https://api.stripe.com", st.URL()) })
+	if err := f.store.PutXref(context.Background(), "Customer", "stripe-billing", "cus_ada", "C-100"); err != nil {
+		t.Fatal(err)
+	}
+	return f, st
+}
+
+func (f *fixture) payments(where string) int {
+	f.t.Helper()
+	var n int
+	if err := f.pool.QueryRow(context.Background(), "SELECT count(*) FROM "+f.schema+"_erp.payments WHERE "+where).Scan(&n); err != nil {
+		f.t.Fatal(err)
+	}
+	return n
+}
+
+func TestStripePaymentsAreRecordedWithoutAPerson(t *testing.T) {
+	f, st := newStripeFixture(t)
+	a := st.PayInvoice("cus_ada", 123450, "eur")
+	b := st.PayInvoice("cus_ada", 9900, "eur")
+	runs := f.dispatch()
+	if len(runs) != 2 {
+		t.Fatalf("runs = %d", len(runs))
+	}
+	for _, in := range runs {
+		res, err, pending := f.run(in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Low-risk writes under the threshold need no approval.
+		if len(pending) != 0 || len(res.Writes) != 2 || res.Writes[1].Status != writeguard.StatusCommitted {
+			t.Fatalf("writes = %+v, pending = %d", res.Writes, len(pending))
+		}
+	}
+	if f.payments(`external_id = '`+a+`' AND customer_id = 'C-100' AND amount = 1234.50 AND currency = 'EUR'
+		AND paid_on = '2026-09-25' AND invoice_ref = 'TURGON-0001'`) != 1 || f.payments("true") != 2 {
+		t.Fatal("ERP payments missing or mis-mapped")
+	}
+	var id int64
+	_ = f.pool.QueryRow(context.Background(), "SELECT id FROM "+f.schema+"_erp.payments WHERE external_id = $1", b).Scan(&id)
+	if md := st.Invoice(b)["metadata"].(map[string]any); md["erp_payment_id"] != fmt.Sprint(id) {
+		t.Fatalf("invoice metadata %v, want ERP payment %d", md, id)
+	}
+	if again := f.dispatch(); len(again) != 0 {
+		t.Fatalf("re-dispatched %d", len(again))
+	}
+}
+
+func TestLargePaymentsWaitForApproval(t *testing.T) {
+	f, st := newStripeFixture(t)
+	st.PayInvoice("cus_ada", 6_000_000, "eur") // 60,000.00: above the approval threshold
+	_, err, pending := f.run(f.dispatch()[0], approve("03-write"))
+	if err != nil || len(pending) != 1 || !strings.Contains(strings.Join(pending[0].Reasons, ","), "amount above approval threshold") {
+		t.Fatalf("err %v, pending %+v", err, pending)
+	}
+}
+
+func TestStripeRejectionVoidsTheERPPayment(t *testing.T) {
+	f, st := newStripeFixture(t)
+	id := st.PayInvoice("cus_ada", 5000, "eur")
+	st.FailUpdates = true
+	_, err, _ := f.run(f.dispatch()[0])
+	if errType(err) != ErrTypeInvalid || !strings.Contains(err.Error(), "locked for accounting review") {
+		t.Fatalf("err = %v (%s)", err, errType(err))
+	}
+	if f.payments(`external_id = '`+id+`' AND status = 'voided'`) != 1 {
+		t.Fatal("ERP payment was not voided after Stripe rejected the link")
+	}
+}
+
+func (f *fixture) runFor(shop *shoptest.Shop, email string) (RunResult, error, []PendingApproval) {
+	f.t.Helper()
+	id := shop.AddOrder(map[string]any{
+		"name": "#2001", "email": email, "created_at": "2026-09-25T09:00:00Z",
+		"subtotal_price": "80.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-2", "quantity": 1}},
+	})
+	for _, in := range f.dispatch() {
+		if in.Event.ID == fmt.Sprint(id) {
+			return f.run(in, approve("03-write"))
+		}
+	}
+	f.t.Fatalf("no run for order %d", id)
+	return RunResult{}, nil, nil
+}
+
+// An address already linked in another system is the same customer: the
+// probabilistic strategy links it without a person, and audits the match.
+func TestKnownAddressIsMatchedAutomatically(t *testing.T) {
+	f, shop, _ := newShopifyFixture(t)
+	ctx := context.Background()
+	if err := f.store.Link(ctx, "Customer", "shop-db", "grace@lovelace-gmbh.example", "C-100",
+		identity.Attributes{"email": "grace@lovelace-gmbh.example", "domain": "lovelace-gmbh.example"}); err != nil {
+		t.Fatal(err)
+	}
+	res, err, _ := f.runFor(shop, "Grace@Lovelace-GmbH.example")
+	if err != nil || res.Writes[0].Status != writeguard.StatusCommitted {
+		t.Fatalf("err %v, writes %+v", err, res.Writes)
+	}
+	if f.orders(`customer_id = 'C-100' AND external_id LIKE 'SHOPIFY-%' AND net_value = 80`) != 1 {
+		t.Fatal("order not booked to the matched customer")
+	}
+	log := f.auditLog.String()
+	if !strings.Contains(log, `"actor":"turgon/resolver","action":"xref.matched"`) || !strings.Contains(log, "same email address") {
+		t.Fatalf("match not audited:\n%s", log)
+	}
+	if id, ok, _ := f.store.Xref(ctx, "Customer", "shopify-store", "grace@lovelace-gmbh.example"); !ok || id != "C-100" {
+		t.Fatal("the match was not kept")
+	}
+}
+
+// A new buyer at a known company is not certain enough: a steward decides,
+// with the company suggested, and the link is learned.
+func TestNewBuyerAtKnownCompanyIsSuggestedThenLearned(t *testing.T) {
+	f, shop, _ := newShopifyFixture(t)
+	ctx := context.Background()
+	if err := f.store.Link(ctx, "Customer", "shop-db", "ada@lovelace-gmbh.example", "C-100",
+		identity.Attributes{"email": "ada@lovelace-gmbh.example", "domain": "lovelace-gmbh.example"}); err != nil {
+		t.Fatal(err)
+	}
+	_, err, _ := f.runFor(shop, "edsger@lovelace-gmbh.example")
+	var app *temporal.ApplicationError
+	var u Unresolved
+	if errType(err) != ErrTypeUnresolved || !errors.As(err, &app) || app.Details(&u) != nil {
+		t.Fatalf("err %v", err)
+	}
+	if len(u.Suggestions) != 1 || u.Suggestions[0].Master != "C-100" || u.Suggestions[0].Score < 0.5 || u.Suggestions[0].Score >= 0.95 ||
+		u.Suggestions[0].Reasons[0] != "same company email domain" || u.Attributes["domain"] != "lovelace-gmbh.example" {
+		t.Fatalf("details %+v", u)
+	}
+	// The steward confirms the suggestion (as the console does, with the
+	// run's attributes); the buyer's next order goes straight through.
+	if err := f.store.Link(ctx, u.Entity, u.System, u.Ref, "C-100", u.Attributes); err != nil {
+		t.Fatal(err)
+	}
+	if _, err, _ := f.runFor(shop, "edsger@lovelace-gmbh.example"); err != nil {
+		t.Fatalf("after the steward's link: %v", err)
+	}
+	if f.orders(`customer_id = 'C-100' AND external_id LIKE 'SHOPIFY-%' AND net_value = 80`) != 1 {
+		t.Fatal("order not booked")
+	}
+}
+
+// Two master records share a domain: no automatic match, both suggested.
+func TestAmbiguousMatchesGoToAPerson(t *testing.T) {
+	f, shop, _ := newShopifyFixture(t)
+	ctx := context.Background()
+	if _, err := f.pool.Exec(ctx, "INSERT INTO "+f.schema+"_erp.customers (id, name) VALUES ('C-101', 'Lovelace Holding')"); err != nil {
+		t.Fatal(err)
+	}
+	for master, email := range map[string]string{"C-100": "ada@lovelace.example", "C-101": "cfo@lovelace.example"} {
+		if err := f.store.Link(ctx, "Customer", "shop-db", email, master, identity.Attributes{"email": email, "domain": "lovelace.example"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, err, _ := f.runFor(shop, "new@lovelace.example")
+	var app *temporal.ApplicationError
+	var u Unresolved
+	if !errors.As(err, &app) || app.Details(&u) != nil || len(u.Suggestions) != 2 {
+		t.Fatalf("err %v, details %+v", err, u)
 	}
 }

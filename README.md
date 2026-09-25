@@ -78,9 +78,12 @@ configuration only: each Connection declares its events, reads and writes as HTT
 
 - **Events** are list requests polled with a cursor the API understands (`since_id`,
   `created[gt]`, `updated_at_min`); timestamp cursors never split a group of equal timestamps.
+  Newest-first lists (Stripe) are paged back to the cursor with `starting_after` / `has_more`,
+  so a burst of new items is read oldest first across polls and never skipped.
 - **Reads** fetch one record by ID and return business field names; they become agent tools.
 - **Writes** are one request each: a method, a path templated from the payload (values escaped as
-  path segments), and a body built from mapped fields, optionally wrapped (`{"order": {...}}`).
+  path segments), and a body built from mapped fields, optionally wrapped (`{"order": {...}}`),
+  as JSON or form-encoded (`metadata[erp_payment_id]=42`, as Stripe takes it).
   Where the API takes one, the idempotency key is sent as a header (`Idempotency-Key`).
 - **Updates can capture** the fields they change first. That previews the change for the approver
   (current and proposed values), confirms it by reading it back, and lets a `restore` operation
@@ -89,6 +92,9 @@ configuration only: each Connection declares its events, reads and writes as HTT
 - **Auth**: a bearer token, an API-key header, basic, or OAuth 2.0 client credentials (refreshed
   before expiry and after a 401), always from the connection's secret.
 - Client errors fail the step at once; rate limits and server errors are retried.
+- **Limits**: each connection declares its API's own rate and concurrency limits
+  (`spec.limits`), which the verifier checks the recipe's peak load against and the rate governor
+  enforces. A connector with its own operations (such as SAP) can only have them lowered.
 
 `shopify-store-orders-to-erp` is a saga: each new Shopify order becomes an ERP sales order (a
 person approves it), then the ERP order number is written into the Shopify order's note. If
@@ -109,6 +115,27 @@ echo "ada@example.com 310.00" >> shop.cmds                      # an order is pl
 
 Approve it in the console (or with `turgon approve`); the fake prints the order's new note.
 
+### Stripe to ERP: cash application
+
+`stripe-payments-to-erp` records every paid Stripe invoice as an ERP payment and writes the ERP
+payment ID into the invoice's metadata; if Stripe rejects that, the ERP payment is voided.
+Payments are low risk, so they flow without a person, except amounts above the approval
+threshold (50,000 by default), which wait for approval like any other write.
+
+```sh
+go build -o bin/fakestripe ./internal/tools/fakestripe
+touch stripe.cmds && (tail -f stripe.cmds | bin/fakestripe &)  # http://127.0.0.1:9400, key rk_test_demo
+cp -r examples my-catalog && sed -i 's|https://api.stripe.com|http://127.0.0.1:9400|' \
+  my-catalog/connections/stripe-billing.yaml
+bin/turgon compile -c my-catalog stripe-payments-to-erp -o stripe.json
+export TURGON_SECRET_STRIPE_BILLING_RESTRICTED_KEY=rk_test_demo
+bin/turgon check -s stripe.json
+bin/turgon xref set --entity Customer --system stripe-billing --source cus_ada --master C-100
+bin/turgon run -s stripe.json &
+echo "cus_ada 49.90" >> stripe.cmds                              # recorded at once
+echo "cus_ada 75000" >> stripe.cmds                              # waits for approval
+```
+
 Each spec runs on its own Temporal task queue (`turgon-<spec name>`), so workers for different
 specs can share a cluster.
 
@@ -116,7 +143,7 @@ specs can share a cluster.
 
 `turgon console` serves the web console: the approval queue (each pending write with its
 dry-run preview, the reasons policy asked for a person, and approve/reject with a note that
-goes into the audit log), runs with their writes and failures, the audit logs with live chain
+goes into the audit log), the data-steward queue, runs with their writes and failures, the audit logs with live chain
 verification, and verifier reports for the catalog including the mapping review queue.
 
 ```sh
@@ -132,6 +159,39 @@ only from `--trusted-proxy` addresses, and only members of `--approver-group` ma
 A decision always refers to the exact request shown (by its SHA-256 digest), nobody can
 approve a write made on their own behalf, and cross-site requests are refused.
 For UI development, `cd console && npm run dev` proxies `/api` to a running console.
+
+**Data-steward queue.** A run stops when a source record has no master record (a new customer's
+email, a Stripe customer ID), rather than guess. The console's Steward page lists each missing
+link once, with the runs waiting on it and the source record. A steward (`--steward-group`)
+enters the master record's ID: the console stores the cross-reference, records `xref.linked`
+under the steward's name in the audit log, and starts every waiting run again (`run.retried`).
+Only links the queue is waiting for can be made, so the page cannot rewrite other references.
+The queue needs Turgon's state database (`--database-url` or `TURGON_DATABASE_URL`);
+`turgon xref set` does the same from the command line.
+
+**Identity matching** (§7.3). A resolve step names the fields that identify a record and how to
+compare them: `email` (the same address), `domain` (the same company email domain; free mail
+providers say nothing), `name` (similar names, Jaro-Winkler) or `exact` (e.g. a VAT ID). Every
+cross-reference keeps its record's attributes, and a new record is scored against the records
+already linked with a Fellegi-Sunter model, as record-linkage tools such as Splink do:
+
+```yaml
+- resolve:
+    entity: model.Customer
+    strategy: probabilistic      # or exact: never links on its own, but stewards get suggestions
+    autoMatchAbove: 0.95
+    match:
+      - { field: customerRef, kind: email }
+      - { field: customerRef, kind: domain }
+```
+
+With `probabilistic`, a match at or above `autoMatchAbove` whose runner-up is below 0.5 is linked
+and audited as `xref.matched` (score and reasons); anything else goes to the steward queue with
+the best suggestions, such as "C-100, 88%, same company email domain", one click to use. Each
+link a steward confirms keeps the record's attributes, so the next order from that buyer links
+at once. `turgon xref set --email --name` seeds known contacts. The model's weights are
+conservative defaults for customer data, not trained per deployment; an external Splink
+service (`strategy: splink`) is not wired in, and records resolved that way go to the steward.
 
 ### Tools for AI agents (MCP)
 
@@ -295,12 +355,13 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/mapping` | §7.4 | JSONata evaluation of mapping sets |
 | `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow, and one for agent writes; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher |
 | `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox events, rollback dry-runs, idempotent writes) |
-| `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled events, reads, templated writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/` is a fake Shopify Admin API |
+| `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled events (ascending, or newest-first paged back to the cursor), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/` and `stripetest/` fake the Shopify Admin and Stripe APIs |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references |
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
 | `pkg/agent` | §7.7, §8 | MCP server and A2A agent: business read tools, and write tools that start approval-gated writes; gateway identity, per-call policy and audit; agentgateway configuration |
-| `pkg/console` | §12 | Console API (runs, approvals, audit, catalog), proxy/dev authentication, embedded web app |
+| `pkg/identity` | §7.3 | Record matching: normalized identifying attributes, Fellegi-Sunter scoring with Jaro-Winkler names, suggestions and the automatic-match decision |
+| `pkg/console` | §7.3, §12 | Console API (runs, approvals, the data-steward queue, audit, catalog), proxy/dev authentication, embedded web app |
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
 | `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
 | `cmd/turgon` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check`, `mcp`, `gateway-config` |
@@ -344,8 +405,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 In rough roadmap order (§16, §19): Salesforce Pub/Sub API change capture and Bulk API reads;
 the Turgon operator; an appliance build (§11);
-Debezium change capture in place of outbox polling; probabilistic identity
-resolution (Splink) and the data-steward queue; signed OPA bundles; the metadata
+Debezium change capture in place of outbox polling; training identity-matching weights per deployment, and an external Splink service; signed OPA bundles; the metadata
 graph and discovery; A2A streaming and push notifications; direct OIDC sign-in for the
 console and approving mapping fields from its review queue; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

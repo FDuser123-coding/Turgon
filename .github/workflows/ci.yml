@@ -44,6 +44,7 @@ jobs:
           go run ./cmd/turgon compile -c examples shop-orders-to-erp -o /dev/null
           go run ./cmd/turgon compile -c examples salesforce-won-deals-to-erp -o /dev/null
           go run ./cmd/turgon compile -c examples shopify-store-orders-to-erp -o /dev/null
+          go run ./cmd/turgon compile -c examples stripe-payments-to-erp -o /dev/null
 
   console:
     runs-on: ubuntu-latest
@@ -94,7 +95,7 @@ jobs:
         run: |
           set -o pipefail
           args=(--set database.cloudNativePG.enabled=true --set 'console.auth.trustedProxies={10.0.0.0/8}'
-                --set console.auth.approverGroup=turgon-approvers --set networkPolicy.allowAllEgress=false
+                --set console.auth.approverGroup=turgon-approvers --set console.auth.stewardGroup=turgon-stewards --set networkPolicy.allowAllEgress=false
                 --set-file specs.shop-orders-to-erp=/tmp/shop.json --set-file specs.salesforce-won-deals-to-erp=/tmp/sf.json
                 --set agents.enabled=true --set 'agents.writes={shop-orders-to-erp}' --set agents.gateway.rateLimit=100/1m
                 --set agents.gateway.issuer=https://login.example.com --set agents.gateway.jwksURL=https://login.example.com/jwks

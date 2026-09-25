@@ -109,9 +109,10 @@ type MapConfig struct {
 }
 
 type ResolveConfig struct {
-	Entity         string  `json:"entity"`
-	Strategy       string  `json:"strategy"`
-	AutoMatchAbove float64 `json:"autoMatchAbove"`
+	Entity         string                `json:"entity"`
+	Strategy       string                `json:"strategy"`
+	AutoMatchAbove float64               `json:"autoMatchAbove"`
+	Match          []v1alpha1.MatchField `json:"match,omitempty"`
 }
 
 type WriteConfig struct {
@@ -311,7 +312,7 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 			}
 			step.Map = &MapConfig{Mapping: ref(m.Metadata), From: s.Map.From, To: s.Map.To, Fields: fields}
 		case s.Resolve != nil:
-			step.Resolve = &ResolveConfig{Entity: s.Resolve.Entity, Strategy: s.Resolve.Strategy, AutoMatchAbove: s.Resolve.AutoMatchAbove}
+			step.Resolve = &ResolveConfig{Entity: s.Resolve.Entity, Strategy: s.Resolve.Strategy, AutoMatchAbove: s.Resolve.AutoMatchAbove, Match: s.Resolve.Match}
 			if doc != nil {
 				// The resolve activity adds <entity>Id.
 				doc[lowerFirst(strings.TrimPrefix(s.Resolve.Entity, "model."))+"Id"] = true

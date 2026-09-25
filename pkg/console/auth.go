@@ -12,6 +12,8 @@ import (
 const (
 	RoleViewer   = "viewer"
 	RoleApprover = "approver"
+	// RoleSteward links source records to master records.
+	RoleSteward = "steward"
 )
 
 // User is an authenticated console user.
@@ -42,7 +44,7 @@ var ErrUnauthenticated = errors.New("not authenticated")
 type DevAuth struct{ User string }
 
 func (d DevAuth) Authenticate(*http.Request) (User, error) {
-	return User{ID: d.User, Roles: []string{RoleViewer, RoleApprover}}, nil
+	return User{ID: d.User, Roles: []string{RoleViewer, RoleApprover, RoleSteward}}, nil
 }
 
 // ProxyAuth trusts identity headers set by an authenticating reverse proxy
@@ -53,6 +55,8 @@ type ProxyAuth struct {
 	GroupsHeader  string // default X-Auth-Request-Groups, comma-separated
 	Trusted       []netip.Prefix
 	ApproverGroup string
+	// StewardGroup's members resolve records in the data-steward queue.
+	StewardGroup string
 	// ViewerGroup, if set, is required to see anything; otherwise every
 	// authenticated user may view.
 	ViewerGroup string
@@ -97,6 +101,9 @@ func (p ProxyAuth) Authenticate(r *http.Request) (User, error) {
 	}
 	if p.ApproverGroup != "" && groups[p.ApproverGroup] {
 		u.Roles = append(u.Roles, RoleApprover)
+	}
+	if p.StewardGroup != "" && groups[p.StewardGroup] {
+		u.Roles = append(u.Roles, RoleSteward)
 	}
 	return u, nil
 }

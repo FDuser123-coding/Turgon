@@ -140,10 +140,7 @@ func (s *Server) submit(ctx context.Context, t compiler.Tool, id Identity, raw j
 	if err != nil {
 		return writeCall{}, errors.New("unreadable record")
 	}
-	var amount float64
-	if n, ok := args.Record["netValue"].(json.Number); ok {
-		amount, _ = n.Float64()
-	}
+	amount := engine.AmountOf(args.Record)
 	// The audit log and the approver see who asked; the reason is the
 	// agent's own words.
 	reason := strings.TrimSpace(args.Reason)

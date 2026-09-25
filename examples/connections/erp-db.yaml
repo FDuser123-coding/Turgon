@@ -5,12 +5,15 @@ metadata: { name: erp-db }
 spec:
   connector: postgres@^1
   secretRef: openbao://erp-db/dsn
-  entities: [Customer, SalesOrder]
+  entities: [Customer, SalesOrder, Payment]
   operations:
     - { name: create-sales-order, entity: SalesOrder, direction: write, interface: jdbc, risk: high, compensation: cancel-sales-order }
     - { name: cancel-sales-order, entity: SalesOrder, direction: write, interface: jdbc, risk: high }
     - { name: get-customer, entity: Customer, direction: read, interface: jdbc, risk: read }
     - { name: get-sales-order, entity: SalesOrder, direction: read, interface: jdbc, risk: read }
+    - { name: record-payment, entity: Payment, direction: write, interface: jdbc, risk: low, compensation: void-payment }
+    - { name: void-payment, entity: Payment, direction: write, interface: jdbc, risk: low }
+    - { name: get-payment, entity: Payment, direction: read, interface: jdbc, risk: read }
   config:
     operations:
       create-sales-order:
@@ -32,3 +35,18 @@ spec:
         action: select
         key: external_id
         columns: [external_id, customer_id, order_date, net_value, currency, lines, status]
+      record-payment:
+        table: erp.payments
+        action: insert
+        key: external_id
+        columns: [external_id, invoice_ref, customer_id, amount, currency, paid_on]
+      void-payment:
+        table: erp.payments
+        action: update
+        key: external_id
+        set: { status: voided }
+      get-payment:
+        table: erp.payments
+        action: select
+        key: external_id
+        columns: [external_id, invoice_ref, customer_id, amount, currency, paid_on, status]

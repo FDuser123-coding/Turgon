@@ -122,6 +122,15 @@ details { margin: 12px 0; }
 summary { cursor: pointer; color: var(--muted); }
 
 .decide { display: flex; gap: 8px; margin-top: 14px; }
+.suggestions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+.suggestions > .muted { flex-basis: 100%; }
+.suggestion {
+  display: inline-flex; gap: 8px; align-items: baseline; padding: 6px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text); font: inherit; cursor: pointer;
+}
+.suggestion:disabled { cursor: default; opacity: 0.7; }
+.suggestion.chosen { border-color: var(--ok); box-shadow: 0 0 0 1px var(--ok); }
+.suggestion .score { font-weight: 600; }
 .decide input {
   flex: 1; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px;
   background: var(--bg); color: var(--text); font: inherit;

@@ -37,6 +37,12 @@ type Config struct {
 	Auth     Authenticator
 	Catalogs []string
 	Audit    []AuditSource
+	// Steward, Xref and Recorder enable the data-steward queue: failed runs
+	// waiting for a master record, the cross-reference store stewards
+	// write to, and the audit log that records each link.
+	Steward  StewardRuns
+	Xref     XrefStore
+	Recorder audit.Recorder
 	// Assets overrides the embedded web app; for tests and development.
 	Assets fs.FS
 }
@@ -60,6 +66,8 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("POST /api/decisions", s.decide)
 	s.mux.HandleFunc("GET /api/audit", s.audit)
 	s.mux.HandleFunc("GET /api/catalog", s.catalog)
+	s.mux.HandleFunc("GET /api/steward", s.stewardQueue)
+	s.mux.HandleFunc("POST /api/steward/links", s.stewardLink)
 	s.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such endpoint")
 	})

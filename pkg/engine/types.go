@@ -11,6 +11,7 @@ import (
 
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
+	"github.com/fduser123-coding/turgon/pkg/identity"
 	"github.com/fduser123-coding/turgon/pkg/policy"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
 )
@@ -33,6 +34,20 @@ const (
 	// could not be undone; its cause is the original failure.
 	ErrTypeCompensationFailed = "TurgonCompensationFailed"
 )
+
+// Unresolved is the detail of an ErrTypeUnresolved failure: the source
+// record a data steward must link to a master record before the run is
+// retried.
+type Unresolved struct {
+	Entity string `json:"entity"`
+	System string `json:"system"`
+	Ref    string `json:"ref"`
+	// Attributes are the record's identifying values; a steward's link
+	// keeps them for matching later records.
+	Attributes identity.Attributes `json:"attributes,omitempty"`
+	// Suggestions are the master records it most likely is.
+	Suggestions []identity.Suggestion `json:"suggestions,omitempty"`
+}
 
 // RunInput starts one workflow run for one source event. It carries the
 // workflow definition itself, so a run keeps executing the spec it started

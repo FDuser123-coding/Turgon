@@ -335,3 +335,29 @@ func TestPolicyPacksMustCompileAndPassTheirTests(t *testing.T) {
 		t.Fatalf("no writeback pack: %+v", rep.Findings)
 	}
 }
+
+// A generic connector takes each connection's own limits; a connector that
+// declares its operations can only have its limits lowered.
+func TestConnectionLimits(t *testing.T) {
+	cat := load(t)
+	rep := New(cat, Options{}).Recipe(recipe(t, cat, "stripe-payments-to-erp"))
+	if !rep.Deployable || rep.Resolution.Connectors["stripe-billing"].Spec.Limits.RequestsPerSecond != 20 {
+		t.Fatalf("stripe limits not applied: %+v", rep.Errors())
+	}
+
+	sap, err := cat.Connector("sap-ecc", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := &v1alpha1.Connection{Spec: v1alpha1.ConnectionSpec{Connector: "sap-ecc", Limits: &v1alpha1.Limits{MaxConcurrentCalls: 1, RequestsPerSecond: sap.Spec.Limits.RequestsPerSecond * 10}}}
+	c.Metadata.Name = "greedy-sap"
+	if errs := c.ValidateEffective(sap); len(errs) == 0 || !strings.Contains(errs[len(errs)-1].Message, "can only lower") {
+		t.Fatalf("raising SAP's limits was accepted: %v", errs)
+	}
+	c.Spec.Limits.RequestsPerSecond = sap.Spec.Limits.RequestsPerSecond / 2
+	for _, e := range c.ValidateEffective(sap) {
+		if strings.Contains(e.Message, "can only lower") {
+			t.Fatalf("lowering SAP's limits was refused: %v", e)
+		}
+	}
+}

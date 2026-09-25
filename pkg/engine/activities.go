@@ -11,7 +11,10 @@ import (
 
 	"go.temporal.io/sdk/temporal"
 
+	"github.com/fduser123-coding/turgon/apis/v1alpha1"
+	"github.com/fduser123-coding/turgon/pkg/audit"
 	"github.com/fduser123-coding/turgon/pkg/compiler"
+	"github.com/fduser123-coding/turgon/pkg/identity"
 	"github.com/fduser123-coding/turgon/pkg/mapping"
 	"github.com/fduser123-coding/turgon/pkg/policy"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
@@ -27,6 +30,8 @@ type Resolver interface {
 type Activities struct {
 	Guard    *writeguard.Guard
 	Resolver Resolver
+	// Audit records automatic identity matches.
+	Audit audit.Recorder
 
 	mu      sync.Mutex
 	mappers map[string]*mapping.Mapper
@@ -68,15 +73,25 @@ func (x *Activities) mapper(cfg compiler.MapConfig) (*mapping.Mapper, error) {
 	return m, nil
 }
 
+// Matcher finds master records a source record may be, and links it with
+// its identifying attributes (implemented by pgstore).
+type Matcher interface {
+	Candidates(ctx context.Context, entity string, attrs identity.Attributes) ([]identity.Candidate, error)
+	Link(ctx context.Context, entity, system, sourceID, masterID string, attrs identity.Attributes) error
+}
+
 // Resolve links the document to a master record. The document names the
 // source record in <entity>Ref (customerRef) and gains <entity>Id.
+//
+// A known cross-reference is used as it is. Otherwise the record is scored
+// against records already linked (pkg/identity). With the probabilistic
+// strategy a certain, unambiguous match is linked and audited; anything
+// else goes to a data steward with the best suggestions.
 func (x *Activities) Resolve(ctx context.Context, in ResolveInput) (map[string]any, error) {
 	entity := strings.TrimPrefix(in.Config.Entity, "model.")
 	field := lowerFirst(entity)
 	switch in.Config.Strategy {
-	case "exact":
-	case "splink":
-		return nil, nonRetryable(ErrTypeUnresolved, errors.New("probabilistic (splink) identity resolution is not available in this runtime yet; use the exact strategy"))
+	case v1alpha1.StrategyExact, v1alpha1.StrategyProbabilistic, v1alpha1.StrategySplink:
 	default:
 		return nil, nonRetryable(ErrTypeUnresolved, fmt.Errorf("unknown strategy %q", in.Config.Strategy))
 	}
@@ -92,7 +107,34 @@ func (x *Activities) Resolve(ctx context.Context, in ResolveInput) (map[string]a
 		return nil, err // transient: retry
 	}
 	if !found {
-		return nil, nonRetryable(ErrTypeUnresolved, fmt.Errorf("%s %q from %s has no master record; it needs a data steward", entity, ref, in.System))
+		attrs := identity.Extract(in.Doc, in.Config.Match)
+		var suggestions []identity.Suggestion
+		m, canMatch := x.Resolver.(Matcher)
+		if canMatch && len(attrs) > 0 {
+			candidates, err := m.Candidates(ctx, entity, attrs)
+			if err != nil {
+				return nil, err // transient: retry
+			}
+			suggestions = identity.Suggest(attrs, candidates, 3)
+		}
+		master, certain := identity.Decide(suggestions, in.Config.AutoMatchAbove)
+		if !certain || in.Config.Strategy != v1alpha1.StrategyProbabilistic {
+			msg := fmt.Sprintf("%s %q from %s has no master record; it needs a data steward", entity, ref, in.System)
+			return nil, temporal.NewNonRetryableApplicationError(msg, ErrTypeUnresolved, nil,
+				Unresolved{Entity: entity, System: in.System, Ref: ref, Attributes: attrs, Suggestions: suggestions})
+		}
+		if err := m.Link(ctx, entity, in.System, ref, master, attrs); err != nil {
+			return nil, err
+		}
+		if x.Audit != nil {
+			if _, err := x.Audit.Record("turgon/resolver", "xref.matched", map[string]any{
+				"entity": entity, "system": in.System, "ref": ref, "master": master,
+				"score": suggestions[0].Score, "reasons": suggestions[0].Reasons, "threshold": in.Config.AutoMatchAbove,
+			}); err != nil {
+				return nil, err
+			}
+		}
+		id = master
 	}
 	out := make(map[string]any, len(in.Doc)+1)
 	for k, v := range in.Doc {
@@ -154,7 +196,7 @@ func buildRequest(in PrepareInput) (writeguard.Request, error) {
 	if err != nil {
 		return writeguard.Request{}, err
 	}
-	amount, _ := in.Doc["netValue"].(float64)
+	amount := AmountOf(in.Doc)
 	return writeguard.Request{
 		Recipe:          in.Workflow,
 		Target:          c.Endpoint,
@@ -171,6 +213,24 @@ func buildRequest(in PrepareInput) (writeguard.Request, error) {
 		RequireApproval: c.Approval == "required",
 		Reason:          fmt.Sprintf("recipe %s step %s", in.Workflow, in.Step),
 	}, nil
+}
+
+// amountFields name a document's monetary amount, in order of preference;
+// policy compares it with approval thresholds.
+var amountFields = []string{"netValue", "amount", "totalAmount"}
+
+// AmountOf returns a document's monetary amount, or 0 if it has none.
+func AmountOf(doc map[string]any) float64 {
+	for _, f := range amountFields {
+		switch v := doc[f].(type) {
+		case float64:
+			return v
+		case json.Number:
+			n, _ := v.Float64()
+			return n
+		}
+	}
+	return 0
 }
 
 func lowerFirst(s string) string {

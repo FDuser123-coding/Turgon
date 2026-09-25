@@ -1,5 +1,5 @@
 import { createDemoApi } from "./demo";
-import type { AuditLog, CatalogReport, RunDetail, RunSummary, User } from "./types";
+import type { AuditLog, CatalogReport, LinkResult, RunDetail, RunSummary, StewardItem, User } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -37,6 +37,13 @@ const liveApi = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(d),
+    }),
+  steward: () => request<StewardItem[]>("/api/steward"),
+  link: (l: { entity: string; system: string; ref: string; master: string; note?: string }) =>
+    request<LinkResult>("/api/steward/links", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(l),
     }),
 };
 

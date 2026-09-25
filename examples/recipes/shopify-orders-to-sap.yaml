@@ -16,8 +16,11 @@ spec:
         mapping: shopify-order-to-order@1
     - resolve:
         entity: model.Customer
-        strategy: splink
+        strategy: probabilistic
         autoMatchAbove: 0.92
+        match:
+          - { field: customerRef, kind: email }
+          - { field: customerRef, kind: domain }
     - write:
         target: erp
         operation: create-sales-order
