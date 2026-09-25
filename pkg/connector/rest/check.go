@@ -46,7 +46,22 @@ func (c *Conn) Check(ctx context.Context) []connector.CheckResult {
 				"Check the event's path, params and items in the connection's config against the API's list response.")))
 			continue
 		}
-		out = append(out, connector.Pass("event "+n, fmt.Sprintf("GET %s answers (%d item(s) in a first page of 1)", c.cfg.Events[n].Path, len(events))))
+		e := c.cfg.Events[n]
+		out = append(out, connector.Pass("event "+n, fmt.Sprintf("%s %s answers (%d item(s) in a first page of 1)", or(e.Method, http.MethodGet), e.Path, len(events))))
+	}
+	for _, n := range names {
+		w := c.cfg.Events[n].Webhook
+		if w == nil {
+			continue
+		}
+		if _, err := c.Webhook(n); err != nil {
+			// Only workers that listen for webhooks need the secret; they
+			// refuse to start without it.
+			out = append(out, connector.Pass("webhook "+n, fmt.Sprintf("no signing secret (%v): workers poll only. "+
+				"To receive webhooks, put the provider's signing secret in %s and start workers with --webhook-listen", err, w.SecretRef)))
+			continue
+		}
+		out = append(out, connector.Pass("webhook "+n, fmt.Sprintf("%s signing secret present; the provider posts to /webhooks/%s/%s on workers started with --webhook-listen", w.Signature, c.endpoint, n)))
 	}
 	return out
 }

@@ -24,6 +24,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/connector/postgres"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest"
+	"github.com/fduser123-coding/turgon/pkg/connector/rest/hubspottest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/shoptest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/stripetest"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce"
@@ -61,6 +62,12 @@ func newFixture(t *testing.T) *fixture {
 // newFixtureFor compiles the named example recipe and connects it: Postgres
 // endpoints to the test database, others through extra secrets.
 func newFixtureFor(t *testing.T, recipe string, extra connector.StaticSecrets, rewrites ...func(string) string) *fixture {
+	t.Helper()
+	return newFixtureWith(t, recipe, extra, false, rewrites...)
+}
+
+// newFixtureWith also receives webhooks when webhooks is set.
+func newFixtureWith(t *testing.T, recipe string, extra connector.StaticSecrets, webhooks bool, rewrites ...func(string) string) *fixture {
 	t.Helper()
 	pool, schema := pgtest.Pool(t)
 	ctx := context.Background()
@@ -112,6 +119,7 @@ func newFixtureFor(t *testing.T, recipe string, extra connector.StaticSecrets, r
 		Store:    store,
 		Resolver: store,
 		Audit:    audit.New(&syncWriter{w: &buf}),
+		Webhooks: webhooks,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -156,11 +164,13 @@ func (f *fixture) orders(where string) int {
 
 // recorder is a Starter that remembers runs instead of starting them.
 type recorder struct {
-	runs map[string]RunInput
-	ids  []string
+	runs  map[string]RunInput
+	ids   []string
+	calls int // including starts of IDs already started
 }
 
 func (r *recorder) Start(_ context.Context, id string, in RunInput) error {
+	r.calls++
 	if r.runs == nil {
 		r.runs = map[string]RunInput{}
 	}
@@ -759,5 +769,93 @@ func TestAmbiguousMatchesGoToAPerson(t *testing.T) {
 	var u Unresolved
 	if !errors.As(err, &app) || app.Details(&u) != nil || len(u.Suggestions) != 2 {
 		t.Fatalf("err %v, details %+v", err, u)
+	}
+}
+
+// newHubSpotFixture runs the hubspot-won-deals-to-erp recipe against the
+// fake HubSpot account and Postgres. The buyer's address is known from the
+// web shop, so the probabilistic match links it.
+func newHubSpotFixture(t *testing.T) (*fixture, *hubspottest.HubSpot) {
+	t.Helper()
+	hs := hubspottest.New("pat-eu1-turgon")
+	t.Cleanup(hs.Close)
+	f := newFixtureFor(t, "hubspot-won-deals-to-erp", connector.StaticSecrets{"openbao://hubspot-crm/private-app-token": "pat-eu1-turgon"},
+		func(cfg string) string { return strings.ReplaceAll(cfg, "https://api.hubapi.com", hs.URL()) })
+	if err := f.store.Link(context.Background(), "Customer", "shop-db", "ada@lovelace-gmbh.example", "C-100",
+		identity.Attributes{"email": "ada@lovelace-gmbh.example", "domain": "lovelace-gmbh.example"}); err != nil {
+		t.Fatal(err)
+	}
+	return f, hs
+}
+
+func hubspotDeal(email, amount string) map[string]string {
+	return map[string]string{"dealname": "Lovelace rollout", "customer_email": email, "amount": amount,
+		"deal_currency_code": "eur", "dealstage": "closedwon", "closedate": "2026-09-24T15:00:00.000Z"}
+}
+
+func TestHubSpotWonDealBecomesERPOrderAndIsLinkedBack(t *testing.T) {
+	f, hs := newHubSpotFixture(t)
+	id := hs.AddDeal(hubspotDeal("Ada@Lovelace-GmbH.example", "1500.50"))
+	open := hs.AddDeal(map[string]string{"dealname": "Turing pilot", "dealstage": "qualifiedtobuy", "customer_email": "alan@turing.example"})
+	runs := f.dispatch()
+	if len(runs) != 1 || runs[0].Event.ID != id {
+		t.Fatalf("runs = %+v", runs)
+	}
+	res, err, pending := f.run(runs[0], approve("03-write"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The sales order waited for approval; the deal update did not.
+	if len(res.Writes) != 2 || res.Writes[1].Status != writeguard.StatusCommitted || len(pending) != 1 || pending[0].Step != "03-write" {
+		t.Fatalf("writes = %+v, pending = %+v", res.Writes, pending)
+	}
+	if f.orders(`external_id = 'HUBSPOT-`+id+`' AND customer_id = 'C-100' AND net_value = 1500.50 AND currency = 'EUR'
+		AND order_date = '2026-09-24'`) != 1 {
+		t.Fatal("ERP order missing or mis-mapped")
+	}
+	var erpID int64
+	_ = f.pool.QueryRow(context.Background(), "SELECT id FROM "+f.schema+"_erp.sales_orders").Scan(&erpID)
+	if got := hs.Deal(id)["erp_order_number"]; got != fmt.Sprint(erpID) {
+		t.Fatalf("deal erp_order_number = %q, want %d", got, erpID)
+	}
+	log := f.auditLog.String()
+	if !strings.Contains(log, `"action":"xref.matched"`) || !strings.Contains(log, `"previous":{"properties.erp_order_number":null}`) {
+		t.Fatalf("match or write-back not audited:\n%s", log)
+	}
+	// The update changed the deal, but a linked deal is no longer searched,
+	// so it does not start a second run. A deal won later does.
+	if again := f.dispatch(); len(again) != 0 {
+		t.Fatalf("re-dispatched %+v", again)
+	}
+	hs.SetStage(open, "closedwon")
+	if later := f.dispatch(); len(later) != 1 || later[0].Event.ID != open {
+		t.Fatalf("later = %+v", later)
+	}
+}
+
+func TestHubSpotRejectionCancelsTheERPOrder(t *testing.T) {
+	f, hs := newHubSpotFixture(t)
+	id := hs.AddDeal(hubspotDeal("ada@lovelace-gmbh.example", "99"))
+	hs.FailUpdates = true
+	_, err, _ := f.run(f.dispatch()[0], approve("03-write"))
+	if errType(err) != ErrTypeInvalid || !strings.Contains(err.Error(), "read-only in this portal") {
+		t.Fatalf("err = %v (%s)", err, errType(err))
+	}
+	if f.orders(`external_id = 'HUBSPOT-`+id+`' AND status = 'cancelled'`) != 1 {
+		t.Fatal("ERP order was not cancelled after HubSpot rejected the update")
+	}
+	if _, ok := hs.Deal(id)["erp_order_number"]; ok {
+		t.Fatal("deal changed")
+	}
+}
+
+// A buyer nobody knows stops the run for a steward before anything is
+// written, and the deal stays in the search for won deals.
+func TestHubSpotUnknownBuyerWaitsForASteward(t *testing.T) {
+	f, hs := newHubSpotFixture(t)
+	hs.AddDeal(hubspotDeal("someone@elsewhere.example", "10"))
+	_, err, _ := f.run(f.dispatch()[0])
+	if errType(err) != ErrTypeUnresolved || f.orders("true") != 0 {
+		t.Fatalf("err = %v (%s)", err, errType(err))
 	}
 }

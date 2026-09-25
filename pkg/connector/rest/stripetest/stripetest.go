@@ -6,6 +6,10 @@
 package stripetest
 
 import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -32,8 +36,55 @@ type Stripe struct {
 	FailUpdates bool
 	// Requests counts requests by "METHOD path".
 	Requests map[string]int
+	// DropWebhooks skips webhook deliveries, as when Stripe gives up on an
+	// endpoint that was down.
+	DropWebhooks bool
+	// Deliveries records each webhook delivery's HTTP status.
+	Deliveries []int
+
+	webhookURL, webhookSecret string
 
 	srv *httptest.Server
+}
+
+// SendWebhooks makes the account post every new event to url, signed with
+// secret the way Stripe signs webhooks (Stripe-Signature: t=…,v1=…).
+func (s *Stripe) SendWebhooks(url, secret string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.webhookURL, s.webhookSecret = url, secret
+}
+
+// Sign returns a Stripe-Signature header for body at time t.
+func Sign(secret string, t time.Time, body []byte) string {
+	ts := strconv.FormatInt(t.Unix(), 10)
+	m := hmac.New(sha256.New, []byte(secret))
+	m.Write([]byte(ts + "."))
+	m.Write(body)
+	return "t=" + ts + ",v1=" + hex.EncodeToString(m.Sum(nil))
+}
+
+// deliver posts an event to the webhook endpoint, if any.
+func (s *Stripe) deliver(event map[string]any) {
+	s.mu.Lock()
+	url, secret, drop := s.webhookURL, s.webhookSecret, s.DropWebhooks
+	s.mu.Unlock()
+	if url == "" || drop {
+		return
+	}
+	body, _ := json.Marshal(event)
+	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	req.Header.Set("User-Agent", "Stripe/1.0 (+https://stripe.com/docs/webhooks)")
+	req.Header.Set("Stripe-Signature", Sign(secret, time.Now(), body))
+	status := 0
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		status = resp.StatusCode
+		resp.Body.Close()
+	}
+	s.mu.Lock()
+	s.Deliveries = append(s.Deliveries, status)
+	s.mu.Unlock()
 }
 
 // New starts a fake account on a local port.
@@ -49,6 +100,15 @@ func NewStripe(key string) *Stripe {
 		clock: time.Date(2026, 9, 25, 8, 0, 0, 0, time.UTC).Unix()}
 }
 
+// StartAt numbers the next invoice first+1 and sets the account's clock;
+// demos use it so invoices and events from different runs of the fake
+// never share an ID and are always newer than an earlier run's cursor.
+func (s *Stripe) StartAt(first int, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.n, s.clock = first, now.Unix()
+}
+
 // URL is the API base URL for the connection's config.
 func (s *Stripe) URL() string { return s.srv.URL }
 
@@ -58,6 +118,12 @@ func (s *Stripe) Close() { s.srv.Close() }
 // event, and returns the invoice ID. Amounts are in cents. Each call is one
 // second after the previous, unless sameSecond is set.
 func (s *Stripe) PayInvoice(customer string, cents int64, currency string, sameSecond ...bool) string {
+	id, event := s.pay(customer, cents, currency, sameSecond...)
+	s.deliver(event)
+	return id
+}
+
+func (s *Stripe) pay(customer string, cents int64, currency string, sameSecond ...bool) (string, map[string]any) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(sameSecond) == 0 || !sameSecond[0] {
@@ -71,11 +137,12 @@ func (s *Stripe) PayInvoice(customer string, cents int64, currency string, sameS
 		"status_transitions": map[string]any{"paid_at": s.clock}, "metadata": map[string]any{}, "created": s.clock - 60,
 	}
 	s.invoices[id] = inv
-	s.events = append(s.events, map[string]any{
+	event := map[string]any{
 		"id": fmt.Sprintf("evt_%04d", s.n), "object": "event", "type": "invoice.paid", "created": s.clock,
 		"data": map[string]any{"object": clone(inv)},
-	})
-	return id
+	}
+	s.events = append(s.events, event)
+	return id, clone(event)
 }
 
 // Invoice returns a copy of an invoice, or nil.

@@ -21,8 +21,13 @@ import (
 func main() {
 	addr := flag.String("listen", "127.0.0.1:9300", "address to listen on")
 	token := flag.String("token", "shpat_demo", "access token the store accepts")
+	hookURL := flag.String("webhook-url", "", "also post each new order to this orders/create webhook endpoint, e.g. http://127.0.0.1:8082/webhooks/shopify-store/Order.Created")
+	hookSecret := flag.String("webhook-secret", "shpss_demo", "the app's client secret, which signs webhooks")
 	flag.Parse()
 	shop := shoptest.NewShop(*token)
+	if *hookURL != "" {
+		shop.SendWebhooks(*hookURL, *hookSecret)
+	}
 	// Order IDs keep increasing across restarts, as in a real store, so a
 	// demo never re-reads an order an earlier demo already handled.
 	shop.StartIDsAt(time.Now().Unix() * 1000)
@@ -64,6 +69,9 @@ func main() {
 		notes[id] = nil
 		mu.Unlock()
 		fmt.Fprintf(os.Stderr, "order %d (#%d) for %s: %s EUR\n", id, n, f[0], f[1])
+		if *hookURL != "" {
+			fmt.Fprintf(os.Stderr, "orders/create webhook: HTTP %d\n", shop.Deliveries[len(shop.Deliveries)-1])
+		}
 	}
 	select {}
 }

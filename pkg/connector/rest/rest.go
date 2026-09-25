@@ -5,7 +5,7 @@
 // a new API needs configuration, not code.
 //
 //   - Events are polled with a cursor the API understands (since_id,
-//     created[gt], updated_at_min), in position order.
+//     created[gt], updated_at_min, or a search body), in position order.
 //   - Reads fetch one record by ID and rename its fields to business names.
 //   - Writes send one request per operation: a method, a path templated
 //     from the payload, and a body built from it. An update can capture
@@ -55,11 +55,18 @@ type Config struct {
 
 // Event defines an event as the items a list request returns.
 type Event struct {
-	Path string `json:"path"`
+	// Method is GET (default) or POST, for search APIs such as HubSpot's
+	// that take the query as a JSON body.
+	Method string `json:"method,omitempty"`
+	Path   string `json:"path"`
 	// Params are query parameters. Values may use {{position}}, the last
-	// position read (formatted as PositionFormat), and {{limit}}. The API
-	// must return items after the position, oldest first.
+	// position read (formatted as PositionFormat), {{positionMillis}}, a
+	// time position as Unix milliseconds, and {{limit}}. The API must
+	// return items after the position, oldest first.
 	Params map[string]string `json:"params,omitempty"`
+	// Body is a POST request's JSON body. Its strings may use the same
+	// variables; a string that is only {{limit}} becomes a number.
+	Body any `json:"body,omitempty"`
 	// Items is the dotted path of the item array in the response; empty
 	// when the response is the array.
 	Items string `json:"items,omitempty"`
@@ -75,6 +82,10 @@ type Event struct {
 	Order string `json:"order,omitempty"`
 	// Pagination pages a list by the last item's ID.
 	Pagination *Pagination `json:"pagination,omitempty"`
+	// Webhook lets the event also arrive pushed by the API, to a worker
+	// that listens for webhooks; the list request then reconciles what was
+	// not delivered.
+	Webhook *WebhookConfig `json:"webhook,omitempty"`
 }
 
 // Pagination is cursor paging by the last item: the next page is
@@ -116,6 +127,9 @@ type Operation struct {
 	// Restore undoes a captured update: it sends the previous values from
 	// the update's result, to the path templated from the update's params.
 	Restore bool `json:"restore,omitempty"`
+	// NullValue is sent in a JSON body in place of null, for APIs that
+	// clear a field with another value (HubSpot clears a property with "").
+	NullValue *string `json:"nullValue,omitempty"`
 }
 
 // Capture locates the record an update changes.
@@ -154,6 +168,15 @@ func (c Config) validate() error {
 		if !strings.HasPrefix(e.Path, "/") {
 			return fmt.Errorf("event %s: path must start with /", name)
 		}
+		switch e.Method {
+		case "", http.MethodGet:
+			if e.Body != nil {
+				return fmt.Errorf("event %s: a GET list has no body", name)
+			}
+		case http.MethodPost:
+		default:
+			return fmt.Errorf("event %s: method must be GET or POST", name)
+		}
 		switch e.PositionFormat {
 		case "", "number", "rfc3339", "unix":
 		default:
@@ -170,6 +193,11 @@ func (c Config) validate() error {
 		}
 		if p := e.Pagination; p != nil && (p.Param == "" || p.More == "") {
 			return fmt.Errorf("event %s: pagination needs param and more", name)
+		}
+		if e.Webhook != nil {
+			if err := e.Webhook.validate(); err != nil {
+				return fmt.Errorf("event %s: webhook: %w", name, err)
+			}
 		}
 	}
 	for name, op := range c.Operations {
@@ -197,7 +225,11 @@ func (c Config) validate() error {
 			return fmt.Errorf("operation %s: restore must write", name)
 		}
 		switch op.BodyFormat {
-		case "", "json", "form":
+		case "", "json":
+		case "form":
+			if op.NullValue != nil {
+				return fmt.Errorf("operation %s: a form body sends null as \"\" already; nullValue is for JSON bodies", name)
+			}
 		default:
 			return fmt.Errorf("operation %s: bodyFormat must be json or form", name)
 		}
@@ -223,14 +255,18 @@ func Factory(ctx context.Context, cfg compiler.ConnectorConfig, secrets connecto
 	if err != nil {
 		return nil, fmt.Errorf("rest %s: %w", cfg.Endpoint, err)
 	}
+	conn.endpoint = cfg.Endpoint
+	conn.resolveWebhookSecrets(ctx, secrets)
 	return conn, nil
 }
 
 // Conn is a connector instance.
 type Conn struct {
-	cfg  Config
-	auth *authenticator
-	http *http.Client
+	cfg      Config
+	auth     *authenticator
+	http     *http.Client
+	endpoint string
+	webhooks map[string]*webhook
 }
 
 var (
@@ -361,17 +397,29 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 	}
 	idField := or(e.ID, "id")
 	posField := or(e.Position, idField)
-	q := url.Values{}
-	for k, v := range e.Params {
-		q.Set(k, varRE.ReplaceAllStringFunc(v, func(m string) string {
+	fill := func(v string) string {
+		return varRE.ReplaceAllStringFunc(v, func(m string) string {
 			switch varRE.FindStringSubmatch(m)[1] {
 			case "position":
 				return formatPosition(after, e.PositionFormat)
+			case "positionMillis":
+				return strconv.FormatInt(after, 10)
 			case "limit":
 				return strconv.Itoa(limit)
 			}
 			return m
-		}))
+		})
+	}
+	q := url.Values{}
+	for k, v := range e.Params {
+		q.Set(k, fill(v))
+	}
+	method, body := http.MethodGet, any(nil)
+	if e.Method == http.MethodPost {
+		method, body = http.MethodPost, fillBody(e.Body, fill, limit)
+		if body == nil {
+			body = map[string]any{}
+		}
 	}
 	desc := e.Order == "desc"
 	maxPages := 1
@@ -385,7 +433,7 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 	truncated := false
 	for page := 1; ; page++ {
 		var resp any
-		if err := c.do(ctx, http.MethodGet, e.Path, q, nil, nil, &resp); err != nil {
+		if err := c.do(ctx, method, e.Path, q, nil, body, &resp); err != nil {
 			return nil, err
 		}
 		list, ok := lookup(resp, e.Items).([]any)
@@ -445,6 +493,30 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 		}
 	}
 	return events, nil
+}
+
+// fillBody copies a list request's body template with its variables set.
+func fillBody(v any, fill func(string) string, limit int) any {
+	switch x := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, child := range x {
+			out[k] = fillBody(child, fill, limit)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, child := range x {
+			out[i] = fillBody(child, fill, limit)
+		}
+		return out
+	case string:
+		if m := varRE.FindStringSubmatch(x); m != nil && m[0] == x && m[1] == "limit" {
+			return limit
+		}
+		return fill(x)
+	}
+	return v
 }
 
 func formatPosition(pos int64, format string) string {
@@ -541,7 +613,31 @@ func (op Operation) request(values map[string]any) any {
 	if op.BodyFormat == "form" {
 		return formBody{body}
 	}
+	if op.NullValue != nil {
+		body = replaceNull(body, *op.NullValue)
+	}
 	return body
+}
+
+// replaceNull replaces nulls in objects and arrays with a value.
+func replaceNull(v any, with string) any {
+	switch x := v.(type) {
+	case nil:
+		return with
+	case map[string]any:
+		out := make(map[string]any, len(x))
+		for k, child := range x {
+			out[k] = replaceNull(child, with)
+		}
+		return out
+	case []any:
+		out := make([]any, len(x))
+		for i, child := range x {
+			out[i] = replaceNull(child, with)
+		}
+		return out
+	}
+	return v
 }
 
 // nest turns dotted keys into nested objects.

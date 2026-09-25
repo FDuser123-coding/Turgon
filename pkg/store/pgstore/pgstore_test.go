@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/fduser123-coding/turgon/internal/pgtest"
+	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/identity"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
 )
@@ -133,7 +135,8 @@ func sameJSON(a, b json.RawMessage) bool {
 func TestMigrateRenamesPorterTables(t *testing.T) {
 	ctx := context.Background()
 	pool, _ := pgtest.Pool(t)
-	body := schema[strings.Index(schema, "CREATE TABLE"):]
+	// The tables Porter had: the inbox came after the rename.
+	body := schema[strings.Index(schema, "CREATE TABLE"):strings.Index(schema, "-- Events delivered by webhook")]
 	old := strings.ReplaceAll(body+auditSchema, "turgon_", "porter_")
 	if _, err := pool.Exec(ctx, old); err != nil {
 		t.Fatal(err)
@@ -206,5 +209,73 @@ func TestLinksKeepAttributesForMatching(t *testing.T) {
 	}
 	if got, _ := s.Candidates(ctx, "Customer", identity.Attributes{"email": "ada@lovelace-gmbh.example"}); len(got) != 1 || got[0].Master != "C-101" || got[0].Attributes["name"] != "ada lovelace" {
 		t.Fatalf("after relink %+v", got)
+	}
+}
+
+func TestInboxKeepsEachDeliveryOnceInOrder(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	ev := func(id string) connector.Event {
+		return connector.Event{ID: id, Payload: json.RawMessage(`{"id":"` + id + `"}`)}
+	}
+	if n, err := s.Deliver(ctx, "stripe-billing/Invoice.Paid", []connector.Event{ev("evt_1"), ev("evt_2")}); err != nil || n != 2 {
+		t.Fatalf("deliver: %d %v", n, err)
+	}
+	// A redelivery, and the same events found by a reconciling poll.
+	if n, err := s.Deliver(ctx, "stripe-billing/Invoice.Paid", []connector.Event{ev("evt_2"), ev("evt_1"), ev("evt_3")}); err != nil || n != 1 {
+		t.Fatalf("redeliver: %d %v", n, err)
+	}
+	// Another source keeps its own IDs.
+	if n, _ := s.Deliver(ctx, "shopify-store/Order.Created", []connector.Event{ev("evt_1")}); n != 1 {
+		t.Fatalf("other source: %d", n)
+	}
+	got, err := s.Inbox(ctx, "stripe-billing/Invoice.Paid", "Invoice.Paid", 0, 10)
+	if err != nil || len(got) != 3 || got[0].ID != "evt_1" || got[2].ID != "evt_3" || got[0].Name != "Invoice.Paid" ||
+		!(got[0].Position < got[1].Position && got[1].Position < got[2].Position) || !sameJSON(got[1].Payload, json.RawMessage(`{"id":"evt_2"}`)) {
+		t.Fatalf("inbox %+v %v", got, err)
+	}
+	rest, _ := s.Inbox(ctx, "stripe-billing/Invoice.Paid", "Invoice.Paid", got[0].Position, 1)
+	if len(rest) != 1 || rest[0].ID != "evt_2" {
+		t.Fatalf("after first: %+v", rest)
+	}
+
+	if n, err := s.PruneInbox(ctx, time.Now().Add(-time.Hour)); err != nil || n != 0 {
+		t.Fatalf("pruned recent deliveries: %d %v", n, err)
+	}
+	if n, err := s.PruneInbox(ctx, time.Now().Add(time.Hour)); err != nil || n != 4 {
+		t.Fatalf("prune: %d %v", n, err)
+	}
+}
+
+// Concurrent deliveries to one source commit in sequence order, so a
+// reader that has passed a sequence number never finds an earlier one.
+func TestConcurrentDeliveriesCommitInOrder(t *testing.T) {
+	s := newStore(t)
+	ctx := context.Background()
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			_, _ = s.Deliver(ctx, "src", []connector.Event{{ID: fmt.Sprint(i), Payload: json.RawMessage(`{}`)}})
+		}(i)
+	}
+	seen, after := 0, int64(0)
+	for deadline := time.Now().Add(10 * time.Second); seen < 20 && time.Now().Before(deadline); {
+		got, err := s.Inbox(ctx, "src", "E", after, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range got {
+			after = ev.Position
+			seen++
+		}
+	}
+	wg.Wait()
+	if rest, _ := s.Inbox(ctx, "src", "E", after, 100); seen != 20 || len(rest) != 0 {
+		t.Fatalf("a reader skipped deliveries: saw %d, %d left behind", seen, len(rest))
+	}
+	if all, _ := s.Inbox(ctx, "src", "E", 0, 100); len(all) != 20 {
+		t.Fatalf("stored %d", len(all))
 	}
 }

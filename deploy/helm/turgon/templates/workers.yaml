@@ -37,6 +37,10 @@ spec:
             - --health-listen=:8081
             - --poll={{ $.Values.workers.pollInterval }}
             - --approval-timeout={{ $.Values.workers.approvalTimeout }}
+            {{- if $.Values.workers.webhooks.enabled }}
+            - --webhook-listen=:8082
+            - --reconcile={{ $.Values.workers.webhooks.reconcile }}
+            {{- end }}
           env:
             {{- include "turgon.commonEnv" $ | nindent 12 }}
           {{- with $.Values.workers.secretEnvFrom }}
@@ -49,6 +53,10 @@ spec:
           ports:
             - name: health
               containerPort: 8081
+            {{- if $.Values.workers.webhooks.enabled }}
+            - name: webhooks
+              containerPort: 8082
+            {{- end }}
           livenessProbe:
             httpGet: { path: /healthz, port: health }
             periodSeconds: 20
@@ -70,4 +78,74 @@ spec:
               - { key: {{ $name }}.json, path: {{ $name }}.json }
         - name: tmp
           emptyDir: { sizeLimit: 64Mi }
+{{- if $.Values.workers.webhooks.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "turgon.fullname" $ }}-webhooks-{{ $name }}
+  labels:
+    {{- include "turgon.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: worker
+    turgon.dev/spec: {{ $name }}
+spec:
+  selector:
+    {{- include "turgon.selector" $ | nindent 4 }}
+    app.kubernetes.io/component: worker
+    turgon.dev/spec: {{ $name }}
+  ports:
+    - { name: webhooks, port: 8082, targetPort: webhooks }
+{{- end }}
+{{- end }}
+{{- with .Values.workers.webhooks }}
+{{- if and .enabled .ingress.enabled }}
+{{- if not .ingress.host }}
+{{- fail "workers.webhooks.ingress.host is required" }}
+{{- end }}
+---
+# Only the webhook paths of each spec's webhook events are routed, each to
+# the workers of its spec.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "turgon.fullname" $ }}-webhooks
+  labels:
+    {{- include "turgon.labels" $ | nindent 4 }}
+  {{- with .ingress.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  {{- with .ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    - host: {{ .ingress.host | quote }}
+      http:
+        paths:
+          {{- $paths := 0 }}
+          {{- range $name, $spec := $.Values.specs }}
+          {{- $s := $spec | fromJson }}
+          {{- range $wf := $s.spec.workflows }}
+          {{- range $c := $s.spec.connectors }}
+          {{- if and (eq $c.endpoint $wf.trigger.endpoint) (dig "config" "events" $wf.trigger.event "webhook" "" $c) }}
+          {{- $paths = add1 $paths }}
+          - path: /webhooks/{{ $wf.trigger.endpoint }}/{{ $wf.trigger.event }}
+            pathType: Exact
+            backend:
+              service:
+                name: {{ include "turgon.fullname" $ }}-webhooks-{{ $name }}
+                port: { name: webhooks }
+          {{- end }}
+          {{- end }}
+          {{- end }}
+          {{- end }}
+          {{- if eq $paths 0 }}
+          {{- fail "workers.webhooks.ingress: no spec has an event configured for webhooks" }}
+          {{- end }}
+{{- end }}
 {{- end }}

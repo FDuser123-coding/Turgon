@@ -45,6 +45,7 @@ jobs:
           go run ./cmd/turgon compile -c examples salesforce-won-deals-to-erp -o /dev/null
           go run ./cmd/turgon compile -c examples shopify-store-orders-to-erp -o /dev/null
           go run ./cmd/turgon compile -c examples stripe-payments-to-erp -o /dev/null
+          go run ./cmd/turgon compile -c examples hubspot-won-deals-to-erp -o /dev/null
 
   console:
     runs-on: ubuntu-latest
@@ -91,6 +92,7 @@ jobs:
         run: |
           go run ./cmd/turgon compile -c examples shop-orders-to-erp -o /tmp/shop.json
           go run ./cmd/turgon compile -c examples salesforce-won-deals-to-erp -o /tmp/sf.json
+          go run ./cmd/turgon compile -c examples stripe-payments-to-erp -o /tmp/stripe.json
       - name: Lint, render and validate the chart
         run: |
           set -o pipefail
@@ -100,7 +102,9 @@ jobs:
                 --set agents.enabled=true --set 'agents.writes={shop-orders-to-erp}' --set agents.gateway.rateLimit=100/1m
                 --set agents.gateway.issuer=https://login.example.com --set agents.gateway.jwksURL=https://login.example.com/jwks
                 --set 'agents.gateway.audiences={turgon}' --set agents.gateway.ingress.enabled=true
-                --set agents.gateway.ingress.host=agents.example.com)
+                --set agents.gateway.ingress.host=agents.example.com
+                --set-file specs.stripe-payments-to-erp=/tmp/stripe.json --set workers.webhooks.enabled=true
+                --set workers.webhooks.ingress.enabled=true --set workers.webhooks.ingress.host=hooks.example.com)
           helm lint deploy/helm/turgon "${args[@]}"
           helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" > /tmp/rendered.yaml
           ~/go/bin/kubeconform -strict -summary -kubernetes-version 1.31.0 \

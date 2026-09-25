@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -84,8 +85,8 @@ func loadSpec(path string) (*compiler.RuntimeSpec, error) {
 func runCmd() *cobra.Command {
 	var tf temporalFlags
 	var specPath, dbURL, auditPath string
-	var poll, approvalTimeout time.Duration
-	var healthAddr string
+	var poll, approvalTimeout, reconcile time.Duration
+	var healthAddr, webhookAddr string
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run a compiled runtime spec: Temporal worker plus event dispatcher",
@@ -128,6 +129,7 @@ func runCmd() *cobra.Command {
 				Registry: connectorRegistry(),
 				Secrets:  connector.EnvSecrets{},
 				Store:    store, Resolver: store, Audit: log,
+				Webhooks: webhookAddr != "",
 			})
 			if err != nil {
 				return err
@@ -152,12 +154,36 @@ func runCmd() *cobra.Command {
 				go serveHealth(ctx, healthAddr, pool, cmd.ErrOrStderr())
 			}
 
-			d := &engine.Dispatcher{Runtime: rt, Cursors: store, Starter: engine.TemporalStarter{Client: c, TaskQueue: tf.taskQueue}, ApprovalTimeout: approvalTimeout}
+			d := &engine.Dispatcher{Runtime: rt, Cursors: store, Starter: engine.TemporalStarter{Client: c, TaskQueue: tf.taskQueue},
+				ApprovalTimeout: approvalTimeout, Inbox: store, Reconcile: reconcile}
 			out := cmd.ErrOrStderr()
 			fmt.Fprintf(out, "turgon: running %s (%s, level %s), %d workflow(s) on task queue %s, polling every %s\n",
 				spec.Metadata.Name, spec.Metadata.Digest[:19], spec.Metadata.Level, len(spec.Spec.Workflows), tf.taskQueue, poll)
+			wake := make(chan struct{}, 1)
+			if webhookAddr != "" {
+				srv := &http.Server{Addr: webhookAddr, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
+					Handler: engine.WebhookHandler(rt, store, func() {
+						select {
+						case wake <- struct{}{}:
+						default:
+						}
+					})}
+				ln, err := net.Listen("tcp", webhookAddr)
+				if err != nil {
+					return fmt.Errorf("webhooks: %w", err)
+				}
+				go func() { _ = srv.Serve(ln) }()
+				defer srv.Close()
+				for ep, events := range rt.Webhooks {
+					for ev := range events {
+						fmt.Fprintf(out, "turgon: receiving %s %s by webhook at http://%s/webhooks/%s/%s, reconciling every %s\n",
+							ep, ev, ln.Addr(), ep, ev, or(reconcile, engine.DefaultReconcile))
+					}
+				}
+			}
 			ticker := time.NewTicker(poll)
 			defer ticker.Stop()
+			pruned := time.Time{}
 			for {
 				n, err := d.Poll(ctx)
 				if n > 0 {
@@ -166,11 +192,20 @@ func runCmd() *cobra.Command {
 				if err != nil && ctx.Err() == nil {
 					fmt.Fprintf(out, "turgon: poll: %v\n", err)
 				}
+				if time.Since(pruned) > time.Hour {
+					// Deliveries older than any provider retries: Stripe
+					// retries for three days.
+					if _, err := store.PruneInbox(ctx, time.Now().Add(-inboxRetention)); err != nil && ctx.Err() == nil {
+						fmt.Fprintf(out, "turgon: prune inbox: %v\n", err)
+					}
+					pruned = time.Now()
+				}
 				select {
 				case <-ctx.Done():
 					fmt.Fprintln(out, "turgon: shutting down")
 					return nil
 				case <-ticker.C:
+				case <-wake:
 				}
 			}
 		},
@@ -181,8 +216,21 @@ func runCmd() *cobra.Command {
 	cmd.Flags().StringVar(&auditPath, "audit-log", "postgres", `audit log: "postgres" (shared by all workers) or a file path`)
 	cmd.Flags().DurationVar(&poll, "poll", 2*time.Second, "event source poll interval")
 	cmd.Flags().StringVar(&healthAddr, "health-listen", "", "serve /healthz and /readyz on this address, e.g. :8081")
+	cmd.Flags().StringVar(&webhookAddr, "webhook-listen", "", "receive events configured for webhooks on this address, e.g. :8082 (POST /webhooks/<endpoint>/<event>)")
+	cmd.Flags().DurationVar(&reconcile, "reconcile", engine.DefaultReconcile, "how often events received by webhook are also polled, for missed deliveries")
 	cmd.Flags().DurationVar(&approvalTimeout, "approval-timeout", engine.DefaultApprovalTimeout, "reject approvals nobody answers within this time")
 	return cmd
+}
+
+// inboxRetention keeps webhook deliveries long enough to drop every
+// redelivery of them.
+const inboxRetention = 30 * 24 * time.Hour
+
+func or(d, def time.Duration) time.Duration {
+	if d <= 0 {
+		return def
+	}
+	return d
 }
 
 func approveCmd() *cobra.Command {
@@ -348,7 +396,10 @@ func secretsCmd() *cobra.Command {
 				return err
 			}
 			for _, c := range spec.Spec.Connectors {
-				fmt.Fprintf(cmd.OutOrStdout(), "%-12s %-40s %s\n", c.Endpoint, c.SecretRef, connector.EnvName(c.SecretRef))
+				fmt.Fprintf(cmd.OutOrStdout(), "%-14s %-44s %s\n", c.Endpoint, c.SecretRef, connector.EnvName(c.SecretRef))
+				for _, ref := range connector.ConfigSecretRefs(c.Config) {
+					fmt.Fprintf(cmd.OutOrStdout(), "%-14s %-44s %s\n", c.Endpoint, ref, connector.EnvName(ref))
+				}
 			}
 			return nil
 		},
