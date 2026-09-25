@@ -14,6 +14,8 @@ const (
 	RoleApprover = "approver"
 	// RoleSteward links source records to master records.
 	RoleSteward = "steward"
+	// RoleOperator retries failed runs.
+	RoleOperator = "operator"
 )
 
 // User is an authenticated console user.
@@ -36,6 +38,15 @@ type Authenticator interface {
 	Authenticate(r *http.Request) (User, error)
 }
 
+// Interactive authenticators sign people in themselves (OIDCAuth): they
+// serve /auth/ and send browsers without a session to their login URL.
+type Interactive interface {
+	Authenticator
+	ServeAuth(w http.ResponseWriter, r *http.Request)
+	LoginURL(next string) string
+	LogoutURL() string
+}
+
 // ErrUnauthenticated is returned when a request carries no valid identity.
 var ErrUnauthenticated = errors.New("not authenticated")
 
@@ -44,7 +55,7 @@ var ErrUnauthenticated = errors.New("not authenticated")
 type DevAuth struct{ User string }
 
 func (d DevAuth) Authenticate(*http.Request) (User, error) {
-	return User{ID: d.User, Roles: []string{RoleViewer, RoleApprover, RoleSteward}}, nil
+	return User{ID: d.User, Roles: []string{RoleViewer, RoleApprover, RoleSteward, RoleOperator}}, nil
 }
 
 // ProxyAuth trusts identity headers set by an authenticating reverse proxy
@@ -57,6 +68,8 @@ type ProxyAuth struct {
 	ApproverGroup string
 	// StewardGroup's members resolve records in the data-steward queue.
 	StewardGroup string
+	// OperatorGroup's members retry failed runs.
+	OperatorGroup string
 	// ViewerGroup, if set, is required to see anything; otherwise every
 	// authenticated user may view.
 	ViewerGroup string
@@ -104,6 +117,9 @@ func (p ProxyAuth) Authenticate(r *http.Request) (User, error) {
 	}
 	if p.StewardGroup != "" && groups[p.StewardGroup] {
 		u.Roles = append(u.Roles, RoleSteward)
+	}
+	if p.OperatorGroup != "" && groups[p.OperatorGroup] {
+		u.Roles = append(u.Roles, RoleOperator)
 	}
 	return u, nil
 }

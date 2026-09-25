@@ -149,6 +149,12 @@ func (t TemporalRuns) Get(ctx context.Context, id string) (RunDetail, error) {
 	} else if in, err := (engine.TemporalStarter{Client: t.Client}).Input(ctx, id); err == nil {
 		d.SpecDigest, d.Event = in.SpecDigest, &in.Event
 	}
+	if d.Status == "running" {
+		// A running run has no close event yet: asking for one waits
+		// until the server's long poll gives up.
+		d.Pending, _ = t.Pending(ctx, id)
+		return d, nil
+	}
 	dc := converter.GetDefaultDataConverter()
 	it := t.Client.GetWorkflowHistory(ctx, id, d.RunID, false, enums.HISTORY_EVENT_FILTER_TYPE_CLOSE_EVENT)
 	for it.HasNext() {
@@ -173,9 +179,6 @@ func (t TemporalRuns) Get(ctx context.Context, id string) (RunDetail, error) {
 				}
 			}
 		}
-	}
-	if d.Status == "running" {
-		d.Pending, _ = t.Pending(ctx, id)
 	}
 	return d, nil
 }

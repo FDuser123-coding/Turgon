@@ -205,6 +205,33 @@ In Kubernetes, `workers.webhooks.enabled` opens the port on each worker behind a
 Each spec runs on its own Temporal task queue (`turgon-<spec name>`), so workers for different
 specs can share a cluster.
 
+### Notifications
+
+Workers tell people when a run needs them, so nobody has to watch the console:
+
+| Event | Who acts | Link |
+|---|---|---|
+| A write waits for approval (a recipe's, or one an agent asked for: the message names the agent and the user it acts for) | an approver, before the deadline shown | the run |
+| Nobody decided in time (the write was rejected) | an operator, who retries the run to ask again | the run |
+| A record matches no master record | a data steward | the steward queue |
+| A step failed and its earlier writes could not be undone | an operator, to reconcile | the run |
+
+Channels are set with environment variables, because webhook URLs are credentials:
+`TURGON_NOTIFY_SLACK_WEBHOOK_URL` (a Slack incoming webhook, Block Kit message with an "Open
+in Turgon" button), `TURGON_NOTIFY_TEAMS_WEBHOOK_URL` (a Teams workflow webhook, Adaptive
+Card) and `TURGON_NOTIFY_WEBHOOK_URL` with `TURGON_NOTIFY_WEBHOOK_SECRET` (the notification
+as JSON, signed `Turgon-Signature: t=…,v1=<HMAC-SHA256 of "t.body">`). `--console-url` (or
+`TURGON_CONSOLE_URL`, `workers.consoleURL` in the chart) makes the links.
+
+- Messages say what waits and where to act, never payload values: customer data stays in the
+  console, behind its sign-in. Values that do appear are escaped, so a source record cannot
+  inject Slack mentions or links.
+- Notifying is best effort: a channel that keeps failing is retried a few times and then
+  skipped, and the run goes on. A chat outage never holds up a write.
+- Runs that were already waiting when workers were upgraded carry on without notifying
+  (a workflow version gate); `pkg/engine/testdata/histories` holds histories recorded from
+  real runs before and after the change, which the tests replay against the current code.
+
 ### Console
 
 `turgon console` serves the web console: the approval queue (each pending write with its
@@ -219,12 +246,29 @@ bin/turgon console -c examples --audit-log turgon-audit.jsonl --dev-user you@exa
 ```
 
 `--auth dev` treats every request as `--dev-user` and only listens on loopback. In production
-use `--auth proxy` behind an authenticating reverse proxy such as oauth2-proxy with the
-customer's identity provider: it trusts `X-Auth-Request-Email` and `X-Auth-Request-Groups`
-only from `--trusted-proxy` addresses, and only members of `--approver-group` may decide.
+the console signs people in with the customer's identity provider, in one of two ways:
+
+- **`--auth oidc`**: the console is an OpenID Connect client itself (Microsoft Entra ID, Okta,
+  Keycloak, Google...). It uses the authorization code flow with PKCE, checks the ID token's
+  signature, issuer, audience, expiry and nonce, and keeps the user in an HttpOnly,
+  SameSite=Lax session cookie signed with `TURGON_CONSOLE_SESSION_KEY` (the same on every
+  replica); the client secret is read from `TURGON_OIDC_CLIENT_SECRET`. Roles come from the
+  groups claim (`--oidc-groups-claim`) at sign-in and last for `--session-ttl` (8 hours).
+  Register `<--url>/auth/callback` as the app's redirect URI. A page opened without a session,
+  such as a link from a notification, goes through sign-in and comes back to that page.
+- **`--auth proxy`**: behind an authenticating reverse proxy such as oauth2-proxy, trusting
+  `X-Auth-Request-Email` and `X-Auth-Request-Groups` only from `--trusted-proxy` addresses.
+
+Either way, only members of `--approver-group` may decide.
 A decision always refers to the exact request shown (by its SHA-256 digest), nobody can
 approve a write made on their own behalf, and cross-site requests are refused.
 For UI development, `cd console && npm run dev` proxies `/api` to a running console.
+
+**Retrying failed runs.** A failed run's page offers **Retry run** to operators
+(`--operator-group`): after an approval nobody answered in time, or once the cause of a failure
+is fixed. The reason is required and recorded as `run.retried` in the audit log before the run
+starts again from its event; writes it already made are not repeated, because it reuses their
+idempotency keys. Only failed, timed-out, terminated or cancelled runs can be retried.
 
 **Data-steward queue.** A run stops when a source record has no master record (a new customer's
 email, a Stripe customer ID), rather than guess. The console's Steward page lists each missing
@@ -336,6 +380,10 @@ helm install turgon deploy/helm/turgon -n integrations \
 helm test turgon -n integrations                        # runs `turgon check` for every spec
 ```
 
+To have the console sign people in itself instead of running oauth2-proxy, create a Secret
+with `TURGON_OIDC_CLIENT_SECRET` and `TURGON_CONSOLE_SESSION_KEY` and set
+`console.auth.mode=oidc` with `console.auth.oidc.{issuer,clientID,url,existingSecret}`.
+
 To receive webhooks, add the signing secrets to the connection secrets and
 `--set workers.webhooks.enabled=true --set workers.webhooks.ingress.enabled=true
 --set workers.webhooks.ingress.host=hooks.example.com`; the ingress routes only
@@ -431,8 +479,9 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references, the webhook inbox |
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
 | `pkg/agent` | §7.7, §8 | MCP server and A2A agent: business read tools, and write tools that start approval-gated writes; gateway identity, per-call policy and audit; agentgateway configuration |
+| `pkg/notify` | §7.3, §8 | Notifications when a run needs a person: Slack, Microsoft Teams, or a signed JSON webhook, with console links |
 | `pkg/identity` | §7.3 | Record matching: normalized identifying attributes, Fellegi-Sunter scoring with Jaro-Winkler names, suggestions and the automatic-match decision |
-| `pkg/console` | §7.3, §12 | Console API (runs, approvals, the data-steward queue, audit, catalog), proxy/dev authentication, embedded web app |
+| `pkg/console` | §7.3, §12 | Console API (runs and retries, approvals, the data-steward queue, audit, catalog), OpenID Connect sign-in or proxy authentication, embedded web app |
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
 | `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
 | `cmd/turgon` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check`, `mcp`, `gateway-config` |
@@ -477,6 +526,5 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 In rough roadmap order (§16, §19): Salesforce Pub/Sub API change capture and Bulk API reads;
 the Turgon operator; an appliance build (§11);
 Debezium change capture in place of outbox polling; training identity-matching weights per deployment, and an external Splink service; signed OPA bundles; the metadata
-graph and discovery; A2A streaming and push notifications; direct OIDC sign-in for the
-console and approving mapping fields from its review queue; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
+graph and discovery; A2A streaming and push notifications; approving mapping fields from the console's review queue; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

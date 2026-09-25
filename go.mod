@@ -5,6 +5,8 @@ go 1.24.7
 require (
 	github.com/a2aproject/a2a-go v0.3.15
 	github.com/blues/jsonata-go v1.5.4
+	github.com/coreos/go-oidc/v3 v3.17.0
+	github.com/go-jose/go-jose/v4 v4.1.3
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/modelcontextprotocol/go-sdk v1.4.0
 	github.com/open-policy-agent/opa v1.9.0
@@ -12,6 +14,7 @@ require (
 	github.com/spf13/cobra v1.10.2
 	go.temporal.io/api v1.62.12
 	go.temporal.io/sdk v1.45.0
+	golang.org/x/oauth2 v0.34.0
 	sigs.k8s.io/yaml v1.6.0
 )
 
@@ -75,7 +78,6 @@ require (
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
 	golang.org/x/crypto v0.47.0 // indirect
 	golang.org/x/net v0.49.0 // indirect
-	golang.org/x/oauth2 v0.34.0 // indirect
 	golang.org/x/sync v0.19.0 // indirect
 	golang.org/x/sys v0.40.0 // indirect
 	golang.org/x/text v0.33.0 // indirect

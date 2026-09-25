@@ -24,7 +24,7 @@ var (
 	// ErrDenied is returned when policy does not allow the write.
 	ErrDenied = errors.New("write denied by policy")
 	// ErrRejected is returned when an approver rejects the write.
-	ErrRejected = errors.New("write rejected by approver")
+	ErrRejected = errors.New("write rejected")
 	// ErrInvalid is returned when a payload fails validation.
 	ErrInvalid = errors.New("write payload invalid")
 	// ErrUnconfirmed is returned when a committed write cannot be read back.
@@ -331,7 +331,11 @@ func (g *Guard) Commit(ctx context.Context, req Request, approval *policy.Approv
 			return Outcome{Status: StatusFailed}, err
 		}
 		if approval.Status != policy.ApprovalApproved {
-			return Outcome{Status: StatusRejected, Approval: approval}, ErrRejected
+			err := fmt.Errorf("%w by %s", ErrRejected, approval.By)
+			if approval.Note != "" {
+				err = fmt.Errorf("%w: %s", err, approval.Note)
+			}
+			return Outcome{Status: StatusRejected, Approval: approval}, err
 		}
 		in.Approval = *approval
 	}

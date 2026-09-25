@@ -1,7 +1,13 @@
 {{- if .Values.console.enabled }}
 {{- $auth := .Values.console.auth }}
-{{- if ne $auth.mode "proxy" }}{{ fail "console.auth.mode must be proxy in a cluster; dev mode only listens on loopback" }}{{ end }}
-{{- if not $auth.trustedProxies }}{{ fail "console.auth.trustedProxies is required" }}{{ end }}
+{{- if not (has $auth.mode (list "proxy" "oidc")) }}{{ fail "console.auth.mode must be proxy or oidc in a cluster; dev mode only listens on loopback" }}{{ end }}
+{{- if and (eq $auth.mode "proxy") (not $auth.trustedProxies) }}{{ fail "console.auth.trustedProxies is required in proxy mode" }}{{ end }}
+{{- if eq $auth.mode "oidc" }}
+{{- range $k := list "issuer" "clientID" "url" "existingSecret" }}
+{{- if not (index $auth.oidc $k) }}{{ fail (printf "console.auth.oidc.%s is required in oidc mode" $k) }}{{ end }}
+{{- end }}
+{{- if not (hasPrefix "https://" $auth.oidc.url) }}{{ fail "console.auth.oidc.url must be https" }}{{ end }}
+{{- end }}
 {{- if not $auth.approverGroup }}{{ fail "console.auth.approverGroup is required" }}{{ end }}
 apiVersion: apps/v1
 kind: Deployment
@@ -30,11 +36,25 @@ spec:
           args:
             - console
             - --listen=0.0.0.0:8080
-            - --auth=proxy
+            - --auth={{ $auth.mode }}
+            {{- if eq $auth.mode "proxy" }}
             - --trusted-proxy={{ join "," $auth.trustedProxies }}
+            {{- else }}
+            - --oidc-issuer={{ $auth.oidc.issuer }}
+            - --oidc-client-id={{ $auth.oidc.clientID }}
+            - --url={{ $auth.oidc.url }}
+            - --oidc-groups-claim={{ $auth.oidc.groupsClaim }}
+            - --session-ttl={{ $auth.oidc.sessionTTL }}
+            {{- with $auth.oidc.scopes }}
+            - --oidc-scopes={{ join "," . }}
+            {{- end }}
+            {{- end }}
             - --approver-group={{ $auth.approverGroup }}
             {{- with $auth.stewardGroup }}
             - --steward-group={{ . }}
+            {{- end }}
+            {{- with $auth.operatorGroup }}
+            - --operator-group={{ . }}
             {{- end }}
             {{- with $auth.viewerGroup }}
             - --viewer-group={{ . }}
@@ -45,6 +65,11 @@ spec:
             {{- end }}
           env:
             {{- include "turgon.commonEnv" . | nindent 12 }}
+          {{- if eq $auth.mode "oidc" }}
+          envFrom:
+            - secretRef:
+                name: {{ $auth.oidc.existingSecret }}
+          {{- end }}
           ports:
             - name: http
               containerPort: 8080

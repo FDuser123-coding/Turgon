@@ -16,6 +16,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/identity"
 	"github.com/fduser123-coding/turgon/pkg/mapping"
+	"github.com/fduser123-coding/turgon/pkg/notify"
 	"github.com/fduser123-coding/turgon/pkg/policy"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
 )
@@ -32,6 +33,8 @@ type Activities struct {
 	Resolver Resolver
 	// Audit records automatic identity matches.
 	Audit audit.Recorder
+	// Notifier tells people when a run needs them; nil sends nothing.
+	Notifier notify.Notifier
 
 	mu      sync.Mutex
 	mappers map[string]*mapping.Mapper

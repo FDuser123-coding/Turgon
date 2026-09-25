@@ -95,7 +95,12 @@ func AgentWriteWorkflow(ctx workflow.Context, in AgentWriteInput) (RunResult, er
 			Step: AgentStep, Digest: RequestDigest(req), Request: req,
 			Preview: prep.Preview, Reasons: prep.Decision.Reasons, Since: workflow.Now(ctx),
 		}
+		name := "agent/" + req.Tool
+		tell(ctx, name, approvalPending(*pending, pending.Since.Add(timeout)))
 		approval = awaitApproval(ctx, workflow.GetSignalChannel(ctx, SignalApproval), *pending, timeout)
+		if approval.By == approvalTimeoutActor {
+			tell(ctx, name, approvalTimedOut(*pending))
+		}
 		pending = nil
 	}
 	var out writeguard.Outcome

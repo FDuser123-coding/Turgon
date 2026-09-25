@@ -35,8 +35,14 @@ workers:
   pollInterval: 2s
   approvalTimeout: 72h
   # Secrets whose keys become environment variables. Connection secrets are
-  # read from TURGON_SECRET_* variables (see `turgon secrets <spec>`).
+  # read from TURGON_SECRET_* variables (see `turgon secrets <spec>`), and
+  # notification channels from TURGON_NOTIFY_SLACK_WEBHOOK_URL,
+  # TURGON_NOTIFY_TEAMS_WEBHOOK_URL or TURGON_NOTIFY_WEBHOOK_URL with
+  # TURGON_NOTIFY_WEBHOOK_SECRET: workers tell people when an approval
+  # waits, a record needs a steward, or writes could not be undone.
   secretEnvFrom: []
+  # The console's public URL, linked from notifications.
+  consoleURL: ""
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 512Mi }
@@ -60,14 +66,29 @@ console:
   enabled: true
   replicas: 1
   auth:
+    # "oidc": the console signs people in with your OpenID Connect provider
+    # itself (Entra ID, Okta, Keycloak, Google...); register
+    # <oidc.url>/auth/callback as its redirect URI.
     # "proxy": trust X-Auth-Request-Email/Groups from an authenticating
     # reverse proxy (e.g. oauth2-proxy with your identity provider).
     mode: proxy
-    trustedProxies: []     # CIDRs the proxy connects from; required
+    oidc:
+      issuer: ""             # e.g. https://login.microsoftonline.com/<tenant>/v2.0
+      clientID: ""
+      url: ""                # the console's public https URL
+      scopes: []             # beyond openid, email and profile, e.g. [groups]
+      groupsClaim: groups
+      sessionTTL: 8h
+      # Secret with TURGON_OIDC_CLIENT_SECRET and TURGON_CONSOLE_SESSION_KEY
+      # (at least 32 random characters, e.g. openssl rand -base64 48).
+      existingSecret: ""
+    trustedProxies: []     # proxy mode: CIDRs the proxy connects from; required
     approverGroup: ""      # required
     # Members resolve records in the data-steward queue (link a source
     # record to its master record and retry the runs waiting on it).
     stewardGroup: ""
+    # Members retry failed runs (each retry audited with its reason).
+    operatorGroup: ""
     viewerGroup: ""
   # Optional ConfigMap holding catalog specs to show verifier reports for.
   catalogConfigMap: ""

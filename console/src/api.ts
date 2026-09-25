@@ -21,6 +21,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
   if (!res.ok) {
     const msg = (body as { error?: string } | null)?.error ?? `${res.status} ${res.statusText}`;
+    // The session ended: sign in again and come back to this page.
+    const login = (body as { login?: string } | null)?.login;
+    if (res.status === 401 && login?.startsWith("/auth/login")) {
+      window.location.assign(`/auth/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`);
+    }
     throw new ApiError(res.status, msg);
   }
   return body as T;
@@ -37,6 +42,12 @@ const liveApi = {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(d),
+    }),
+  retry: (r: { id: string; note: string }) =>
+    request<{ retried: string }>("/api/runs/retry", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(r),
     }),
   steward: () => request<StewardItem[]>("/api/steward"),
   link: (l: { entity: string; system: string; ref: string; master: string; note?: string }) =>

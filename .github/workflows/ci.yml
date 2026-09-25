@@ -97,20 +97,26 @@ jobs:
         run: |
           set -o pipefail
           args=(--set database.cloudNativePG.enabled=true --set 'console.auth.trustedProxies={10.0.0.0/8}'
-                --set console.auth.approverGroup=turgon-approvers --set console.auth.stewardGroup=turgon-stewards --set networkPolicy.allowAllEgress=false
+                --set console.auth.approverGroup=turgon-approvers --set console.auth.stewardGroup=turgon-stewards --set console.auth.operatorGroup=turgon-operators --set networkPolicy.allowAllEgress=false
                 --set-file specs.shop-orders-to-erp=/tmp/shop.json --set-file specs.salesforce-won-deals-to-erp=/tmp/sf.json
                 --set agents.enabled=true --set 'agents.writes={shop-orders-to-erp}' --set agents.gateway.rateLimit=100/1m
                 --set agents.gateway.issuer=https://login.example.com --set agents.gateway.jwksURL=https://login.example.com/jwks
                 --set 'agents.gateway.audiences={turgon}' --set agents.gateway.ingress.enabled=true
                 --set agents.gateway.ingress.host=agents.example.com
                 --set-file specs.stripe-payments-to-erp=/tmp/stripe.json --set workers.webhooks.enabled=true
-                --set workers.webhooks.ingress.enabled=true --set workers.webhooks.ingress.host=hooks.example.com)
+                --set workers.webhooks.ingress.enabled=true --set workers.webhooks.ingress.host=hooks.example.com
+                --set workers.consoleURL=https://turgon.example.com)
           helm lint deploy/helm/turgon "${args[@]}"
           helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" > /tmp/rendered.yaml
+          # The console signing people in itself, instead of behind a proxy.
+          helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" --set console.auth.mode=oidc \
+            --set console.auth.oidc.issuer=https://login.example.com --set console.auth.oidc.clientID=turgon \
+            --set console.auth.oidc.url=https://turgon.example.com --set console.auth.oidc.existingSecret=turgon-console-oidc \
+            > /tmp/rendered-oidc.yaml
           ~/go/bin/kubeconform -strict -summary -kubernetes-version 1.31.0 \
             -schema-location default \
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-            /tmp/rendered.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
+            /tmp/rendered.yaml /tmp/rendered-oidc.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
       - name: Lint the Dockerfile
         run: hadolint Dockerfile
 

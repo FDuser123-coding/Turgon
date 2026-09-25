@@ -31,7 +31,7 @@ export function App() {
   else if (path === "/" || path === "/approvals") page = <Approvals user={user} />;
   else if (path === "/steward") page = <Steward user={user} />;
   else if (path === "/runs") page = <Runs />;
-  else if (path.startsWith("/runs/")) page = <RunDetail id={decodeURIComponent(path.slice("/runs/".length))} />;
+  else if (path.startsWith("/runs/")) page = <RunDetail id={decodeURIComponent(path.slice("/runs/".length))} user={user} />;
   else if (path === "/audit") page = <Audit />;
   else if (path === "/catalog") page = <Catalog />;
   else page = <p>Not found.</p>;
@@ -60,6 +60,11 @@ export function App() {
           <span className="muted small" title={user.roles.join(", ")}>
             {user.id}
           </span>
+        )}
+        {user?.logout && (
+          <a className="muted small signout" href={user.logout}>
+            Sign out
+          </a>
         )}
       </nav>
       {demo && (

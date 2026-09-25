@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce"
 	"github.com/fduser123-coding/turgon/pkg/engine"
 	"github.com/fduser123-coding/turgon/pkg/identity"
+	"github.com/fduser123-coding/turgon/pkg/notify"
 	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
 )
 
@@ -86,7 +88,7 @@ func runCmd() *cobra.Command {
 	var tf temporalFlags
 	var specPath, dbURL, auditPath string
 	var poll, approvalTimeout, reconcile time.Duration
-	var healthAddr, webhookAddr string
+	var healthAddr, webhookAddr, consoleURL string
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run a compiled runtime spec: Temporal worker plus event dispatcher",
@@ -135,6 +137,15 @@ func runCmd() *cobra.Command {
 				return err
 			}
 			defer rt.Close()
+			// Channels come from TURGON_NOTIFY_* variables (the webhook URLs
+			// are credentials).
+			hub, err := notify.FromEnv(consoleURL, &http.Client{Timeout: 15 * time.Second})
+			if err != nil {
+				return fmt.Errorf("notifications: %w", err)
+			}
+			if hub != nil {
+				rt.Activities.Notifier = hub
+			}
 
 			c, err := tf.dial()
 			if err != nil {
@@ -159,6 +170,13 @@ func runCmd() *cobra.Command {
 			out := cmd.ErrOrStderr()
 			fmt.Fprintf(out, "turgon: running %s (%s, level %s), %d workflow(s) on task queue %s, polling every %s\n",
 				spec.Metadata.Name, spec.Metadata.Digest[:19], spec.Metadata.Level, len(spec.Spec.Workflows), tf.taskQueue, poll)
+			if hub != nil {
+				var names []string
+				for _, ch := range hub.Channels {
+					names = append(names, ch.Name())
+				}
+				fmt.Fprintf(out, "turgon: notifying %s about approvals, steward work and failed compensations\n", strings.Join(names, ", "))
+			}
 			wake := make(chan struct{}, 1)
 			if webhookAddr != "" {
 				srv := &http.Server{Addr: webhookAddr, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second,
@@ -217,6 +235,7 @@ func runCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&poll, "poll", 2*time.Second, "event source poll interval")
 	cmd.Flags().StringVar(&healthAddr, "health-listen", "", "serve /healthz and /readyz on this address, e.g. :8081")
 	cmd.Flags().StringVar(&webhookAddr, "webhook-listen", "", "receive events configured for webhooks on this address, e.g. :8082 (POST /webhooks/<endpoint>/<event>)")
+	cmd.Flags().StringVar(&consoleURL, "console-url", os.Getenv("TURGON_CONSOLE_URL"), "the console's URL, linked from notifications, e.g. https://turgon.example.com")
 	cmd.Flags().DurationVar(&reconcile, "reconcile", engine.DefaultReconcile, "how often events received by webhook are also polled, for missed deliveries")
 	cmd.Flags().DurationVar(&approvalTimeout, "approval-timeout", engine.DefaultApprovalTimeout, "reject approvals nobody answers within this time")
 	return cmd
