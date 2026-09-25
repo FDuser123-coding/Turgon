@@ -77,7 +77,8 @@ configuration only: each Connection declares its events, reads and writes as HTT
 (`examples/connections/shopify-store.yaml`).
 
 - **Events** are list requests polled with a cursor the API understands (`since_id`,
-  `created[gt]`, `updated_at_min`); timestamp cursors never split a group of equal timestamps.
+  `created[gt]`, `updated_at_min`), or search requests with a JSON body (HubSpot's
+  `POST .../search`); timestamp cursors never split a group of equal timestamps.
   Newest-first lists (Stripe) are paged back to the cursor with `starting_after` / `has_more`,
   so a burst of new items is read oldest first across polls and never skipped.
 - **Reads** fetch one record by ID and return business field names; they become agent tools.
@@ -87,7 +88,8 @@ configuration only: each Connection declares its events, reads and writes as HTT
   Where the API takes one, the idempotency key is sent as a header (`Idempotency-Key`).
 - **Updates can capture** the fields they change first. That previews the change for the approver
   (current and proposed values), confirms it by reading it back, and lets a `restore` operation
-  undo it exactly in a saga. A create is undone by a request templated from its own result
+  undo it exactly in a saga (`nullValue: ""` clears a field for APIs such as HubSpot that do
+  not take null). A create is undone by a request templated from its own result
   (`DELETE /invoices/{{id}}`).
 - **Auth**: a bearer token, an API-key header, basic, or OAuth 2.0 client credentials (refreshed
   before expiry and after a 401), always from the connection's secret.
@@ -135,6 +137,35 @@ bin/turgon run -s stripe.json &
 echo "cus_ada 49.90" >> stripe.cmds                              # recorded at once
 echo "cus_ada 75000" >> stripe.cmds                              # waits for approval
 ```
+
+### HubSpot to ERP: order entry from the CRM
+
+`hubspot-won-deals-to-erp` turns every deal won in HubSpot into an ERP sales order (a person
+approves it) and records the ERP order number on the deal. Won deals are found with the search
+API: deals in the closed-won stage without an ERP order number, in order of their last change
+(`examples/connections/hubspot-crm.yaml`). Writing the number takes the deal out of that
+search, so the write-back never starts a second run. If HubSpot rejects the update, the ERP
+order is cancelled. The buyer is matched by email and company domain against customers known
+from other systems; a new buyer at a known company goes to a data steward with the company
+suggested.
+
+```sh
+go build -o bin/fakehubspot ./internal/tools/fakehubspot
+touch hs.cmds && (tail -f hs.cmds | bin/fakehubspot &)          # http://127.0.0.1:9500, token pat-demo
+cp -r examples my-catalog && sed -i 's|https://api.hubapi.com|http://127.0.0.1:9500|' \
+  my-catalog/connections/hubspot-crm.yaml
+bin/turgon compile -c my-catalog hubspot-won-deals-to-erp -o hubspot.json
+export TURGON_SECRET_HUBSPOT_CRM_PRIVATE_APP_TOKEN=pat-demo
+bin/turgon check -s hubspot.json
+bin/turgon xref set --entity Customer --system shop-db --source ada@lovelace-gmbh.example \
+  --email ada@lovelace-gmbh.example --master C-100
+bin/turgon run -s hubspot.json &
+echo "won ada@lovelace-gmbh.example 1500" >> hs.cmds              # matched, waits for approval
+echo "won grace@lovelace-gmbh.example 900" >> hs.cmds             # goes to the steward queue
+```
+
+The deal needs two custom properties: `customer_email` (a HubSpot workflow can copy it from the
+deal's primary contact) and `erp_order_number`.
 
 Each spec runs on its own Temporal task queue (`turgon-<spec name>`), so workers for different
 specs can share a cluster.
@@ -355,7 +386,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/mapping` | §7.4 | JSONata evaluation of mapping sets |
 | `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow, and one for agent writes; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher |
 | `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox events, rollback dry-runs, idempotent writes) |
-| `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled events (ascending, or newest-first paged back to the cursor), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/` and `stripetest/` fake the Shopify Admin and Stripe APIs |
+| `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled list or search events (ascending, or newest-first paged back to the cursor), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/`, `stripetest/` and `hubspottest/` fake the Shopify Admin, Stripe and HubSpot CRM APIs |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references |
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
@@ -366,7 +397,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
 | `cmd/turgon` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check`, `mcp`, `gateway-config` |
 | `wit/turgon-stack.wit` | §18.4 | Host interface for Wasm plugins |
-| `examples/` | App. A–C, §18.5 | SAP ECC, Salesforce, Shopify, Stripe, Power BI connectors; slot contracts; the `eu-distributor-core` blueprint |
+| `examples/` | App. A–C, §18.5 | SAP ECC, Salesforce, Shopify, Stripe, HubSpot, Power BI connectors and connections; slot contracts; the `eu-distributor-core` blueprint |
 
 ## Design notes
 

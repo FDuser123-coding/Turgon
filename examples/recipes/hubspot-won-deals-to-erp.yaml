@@ -1,0 +1,48 @@
+# Order entry from the CRM: every deal won in HubSpot becomes an ERP sales
+# order, and the ERP order number is recorded on the deal, which takes it
+# out of the search for won deals. Sales orders are high risk, so each one
+# waits for approval (policy writeback-default). If the deal cannot be
+# updated, the ERP order is cancelled.
+apiVersion: turgon.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: hubspot-won-deals-to-erp
+  version: 1.0.0
+spec:
+  trigger:
+    source: hubspot-crm
+    event: Deal.Won
+  steps:
+    - map:
+        from: hubspot-crm.Deal
+        to: model.SalesOrder
+        mapping: hubspot-deal-to-order@1
+    # A buyer already known links at once; a new buyer at a known company
+    # goes to a data steward with the company suggested.
+    - resolve:
+        entity: model.Customer
+        strategy: probabilistic
+        autoMatchAbove: 0.95
+        match:
+          - { field: customerRef, kind: email }
+          - { field: customerRef, kind: domain }
+    - write:
+        target: erp-db
+        operation: create-sales-order
+        idempotencyKey: "hubspot-deal-{{ source.id }}"
+        simulate: true
+        output: erpOrder
+    - map:
+        from: model.SalesOrder
+        to: model.Deal
+        mapping: sales-order-to-hubspot-link@1
+    - write:
+        target: hubspot-crm
+        operation: link-deal
+        idempotencyKey: "hubspot-deal-{{ source.id }}"
+        simulate: true
+  policies: [writeback-default]
+  capacity:
+    peakPerSecond: 1
+  slo:
+    p95Latency: 10s

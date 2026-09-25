@@ -1,0 +1,60 @@
+# Sales on HubSpot, through the CRM API with a private app's access token
+# (the secret; scopes crm.objects.deals.read and crm.objects.deals.write).
+# Won deals are found with the search API: deals in the closed-won stage
+# that have no ERP order number yet, in order of their last change. Once
+# the ERP order exists its number is written to the deal, so the deal
+# leaves the search. The deal carries the buyer's email in the custom
+# property customer_email (a HubSpot workflow copies it from the deal's
+# primary contact) and the order number in erp_order_number.
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata: { name: hubspot-crm }
+spec:
+  connector: rest@^1
+  secretRef: openbao://hubspot-crm/private-app-token
+  entities: [Deal]
+  # Private apps may make 100 requests per 10 seconds; the search API
+  # allows 5 requests per second.
+  limits: { maxConcurrentCalls: 4, requestsPerSecond: 4 }
+  events:
+    - { name: Deal.Won, entity: Deal, interface: polling }
+  operations:
+    - { name: get-deal, entity: Deal, direction: read, interface: rest-api, risk: read }
+    - { name: link-deal, entity: Deal, direction: write, interface: rest-api, risk: low, compensation: unlink-deal }
+    - { name: unlink-deal, entity: Deal, direction: write, interface: rest-api, risk: low }
+  config:
+    baseURL: https://api.hubapi.com
+    auth: { type: bearer }
+    checkPath: /crm/v3/objects/deals?limit=1
+    events:
+      Deal.Won:
+        method: POST
+        path: /crm/v3/objects/deals/search
+        body:
+          filterGroups:
+            - filters:
+                - { propertyName: dealstage, operator: EQ, value: closedwon }
+                - { propertyName: erp_order_number, operator: NOT_HAS_PROPERTY }
+                - { propertyName: hs_lastmodifieddate, operator: GT, value: "{{positionMillis}}" }
+          sorts: [{ propertyName: hs_lastmodifieddate, direction: ASCENDING }]
+          properties: [dealname, amount, deal_currency_code, closedate, dealstage, customer_email]
+          limit: "{{limit}}"
+        items: results
+        position: updatedAt
+        positionFormat: rfc3339
+    operations:
+      get-deal:
+        method: GET
+        path: /crm/v3/objects/deals/{{id}}?properties=dealname,amount,dealstage,erp_order_number
+        fields: { properties.dealname: name, properties.amount: amount, properties.dealstage: stage, properties.erp_order_number: erpOrderNumber }
+      link-deal:
+        method: PATCH
+        path: /crm/v3/objects/deals/{{dealId}}
+        fields: { properties.erp_order_number: erpOrderNumber }
+        capture: { path: "/crm/v3/objects/deals/{{dealId}}?properties=erp_order_number" }
+      # HubSpot clears a property with "", not null.
+      unlink-deal:
+        method: PATCH
+        path: /crm/v3/objects/deals/{{dealId}}
+        restore: true
+        nullValue: ""

@@ -45,6 +45,7 @@ jobs:
           go run ./cmd/turgon compile -c examples salesforce-won-deals-to-erp -o /dev/null
           go run ./cmd/turgon compile -c examples shopify-store-orders-to-erp -o /dev/null
           go run ./cmd/turgon compile -c examples stripe-payments-to-erp -o /dev/null
+          go run ./cmd/turgon compile -c examples hubspot-won-deals-to-erp -o /dev/null
 
   console:
     runs-on: ubuntu-latest

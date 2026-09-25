@@ -1,0 +1,17 @@
+# A won HubSpot deal as a sales order. HubSpot property values are
+# strings; dates are ISO 8601.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: hubspot-deal-to-order
+  version: 1.0.0
+spec:
+  from: hubspot-crm.Deal
+  to: model.SalesOrder
+  fields:
+    - { target: externalId,  expression: "'HUBSPOT-' & id",                              origin: human,     confidence: 1.0 }
+    - { target: hubspotId,   expression: "id",                                           origin: human,     confidence: 1.0 }
+    - { target: customerRef, expression: "$lowercase(properties.customer_email)",        origin: human,     confidence: 0.99 }
+    - { target: orderDate,   expression: "$substring(properties.closedate, 0, 10)",      origin: certified, confidence: 0.99 }
+    - { target: netValue,    expression: "$number(properties.amount)",                  origin: certified, confidence: 0.99 }
+    - { target: currency,    expression: "$uppercase(properties.deal_currency_code)",    origin: certified, confidence: 0.99 }

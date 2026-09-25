@@ -1,0 +1,12 @@
+# After the ERP accepts an order, record its number on the HubSpot deal.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: sales-order-to-hubspot-link
+  version: 1.0.0
+spec:
+  from: model.SalesOrder
+  to: model.Deal
+  fields:
+    - { target: dealId,         expression: "hubspotId",             origin: human, confidence: 1.0 }
+    - { target: erpOrderNumber, expression: "$string(erpOrder.id)",  origin: human, confidence: 1.0 }

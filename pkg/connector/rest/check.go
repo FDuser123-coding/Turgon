@@ -46,7 +46,8 @@ func (c *Conn) Check(ctx context.Context) []connector.CheckResult {
 				"Check the event's path, params and items in the connection's config against the API's list response.")))
 			continue
 		}
-		out = append(out, connector.Pass("event "+n, fmt.Sprintf("GET %s answers (%d item(s) in a first page of 1)", c.cfg.Events[n].Path, len(events))))
+		e := c.cfg.Events[n]
+		out = append(out, connector.Pass("event "+n, fmt.Sprintf("%s %s answers (%d item(s) in a first page of 1)", or(e.Method, http.MethodGet), e.Path, len(events))))
 	}
 	return out
 }
