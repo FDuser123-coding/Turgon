@@ -26,6 +26,12 @@ spec:
         path: /orders.json
         params: { since_id: "{{position}}", limit: "{{limit}}", status: any }
         items: orders
+        # Workers started with --webhook-listen also receive orders from an
+        # orders/create webhook subscription (…/webhooks/shopify-store/
+        # Order.Created), signed with the app's client secret.
+        webhook:
+          signature: shopify
+          secretRef: openbao://shopify-store/client-secret
     operations:
       get-order:
         method: GET

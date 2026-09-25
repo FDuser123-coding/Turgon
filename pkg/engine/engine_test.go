@@ -63,6 +63,12 @@ func newFixture(t *testing.T) *fixture {
 // endpoints to the test database, others through extra secrets.
 func newFixtureFor(t *testing.T, recipe string, extra connector.StaticSecrets, rewrites ...func(string) string) *fixture {
 	t.Helper()
+	return newFixtureWith(t, recipe, extra, false, rewrites...)
+}
+
+// newFixtureWith also receives webhooks when webhooks is set.
+func newFixtureWith(t *testing.T, recipe string, extra connector.StaticSecrets, webhooks bool, rewrites ...func(string) string) *fixture {
+	t.Helper()
 	pool, schema := pgtest.Pool(t)
 	ctx := context.Background()
 	sql, err := os.ReadFile("../../examples/sql/demo.sql")
@@ -113,6 +119,7 @@ func newFixtureFor(t *testing.T, recipe string, extra connector.StaticSecrets, r
 		Store:    store,
 		Resolver: store,
 		Audit:    audit.New(&syncWriter{w: &buf}),
+		Webhooks: webhooks,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -157,11 +164,13 @@ func (f *fixture) orders(where string) int {
 
 // recorder is a Starter that remembers runs instead of starting them.
 type recorder struct {
-	runs map[string]RunInput
-	ids  []string
+	runs  map[string]RunInput
+	ids   []string
+	calls int // including starts of IDs already started
 }
 
 func (r *recorder) Start(_ context.Context, id string, in RunInput) error {
+	r.calls++
 	if r.runs == nil {
 		r.runs = map[string]RunInput{}
 	}

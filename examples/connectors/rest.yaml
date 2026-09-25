@@ -22,7 +22,8 @@ spec:
         simulation: preview
     events:
       # A list request with a cursor the API understands (since_id,
-      # created[gt], updated_at_min).
+      # created[gt], updated_at_min, a search body). An event may also
+      # arrive by signed webhook, which the polling then reconciles.
       - kind: polling
   limits:
     # Conservative defaults; each connection sets its API's own limits.

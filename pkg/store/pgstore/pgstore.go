@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/identity"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
 )
@@ -64,6 +65,18 @@ ALTER TABLE turgon_xref ADD COLUMN IF NOT EXISTS attributes jsonb NOT NULL DEFAU
 CREATE INDEX IF NOT EXISTS turgon_xref_email ON turgon_xref (entity, (attributes->>'email'));
 CREATE INDEX IF NOT EXISTS turgon_xref_domain ON turgon_xref (entity, (attributes->>'domain'));
 CREATE INDEX IF NOT EXISTS turgon_xref_name ON turgon_xref (entity, left(attributes->>'name', 3));
+
+-- Events delivered by webhook, until the dispatcher starts their runs. One
+-- row per source event: a provider's redelivery is dropped here.
+CREATE TABLE IF NOT EXISTS turgon_inbox (
+	seq         bigserial PRIMARY KEY,
+	source      text NOT NULL,
+	event_id    text NOT NULL,
+	payload     jsonb NOT NULL,
+	received_at timestamptz NOT NULL DEFAULT now(),
+	UNIQUE (source, event_id)
+);
+CREATE INDEX IF NOT EXISTS turgon_inbox_received ON turgon_inbox (received_at);
 `
 
 // Migrate creates or upgrades Turgon's schema.
@@ -190,6 +203,60 @@ func (s *Store) SetCursor(ctx context.Context, name string, pos int64) error {
 		INSERT INTO turgon_cursors (name, position) VALUES ($1, $2)
 		ON CONFLICT (name) DO UPDATE SET position = GREATEST(turgon_cursors.position, $2), updated_at = now()`, name, pos)
 	return err
+}
+
+// Deliver stores webhook events for a source ("endpoint/event") and
+// returns how many were new. Deliveries to one source are serialized, so
+// sequence numbers commit in order and a reader never passes one that is
+// still being written.
+func (s *Store) Deliver(ctx context.Context, source string, events []connector.Event) (int, error) {
+	n := 0
+	err := pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(7071, hashtext($1))`, source); err != nil {
+			return err
+		}
+		for _, ev := range events {
+			tag, err := tx.Exec(ctx, `
+				INSERT INTO turgon_inbox (source, event_id, payload) VALUES ($1, $2, $3)
+				ON CONFLICT (source, event_id) DO NOTHING`, source, ev.ID, []byte(ev.Payload))
+			if err != nil {
+				return err
+			}
+			n += int(tag.RowsAffected())
+		}
+		return nil
+	})
+	return n, err
+}
+
+// Inbox returns up to limit delivered events for a source after a
+// sequence number, in order; their positions are sequence numbers.
+func (s *Store) Inbox(ctx context.Context, source, name string, after int64, limit int) ([]connector.Event, error) {
+	rows, err := s.pool.Query(ctx, `
+		SELECT seq, event_id, payload FROM turgon_inbox
+		WHERE source = $1 AND seq > $2 ORDER BY seq LIMIT $3`, source, after, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []connector.Event
+	for rows.Next() {
+		ev := connector.Event{Name: name}
+		var payload []byte
+		if err := rows.Scan(&ev.Position, &ev.ID, &payload); err != nil {
+			return nil, err
+		}
+		ev.Payload = payload
+		out = append(out, ev)
+	}
+	return out, rows.Err()
+}
+
+// PruneInbox deletes deliveries received before a time. Their runs have
+// long started; keeping them for a while drops late redeliveries.
+func (s *Store) PruneInbox(ctx context.Context, before time.Time) (int64, error) {
+	tag, err := s.pool.Exec(ctx, `DELETE FROM turgon_inbox WHERE received_at < $1`, before)
+	return tag.RowsAffected(), err
 }
 
 // Xref looks up the master ID for a record in a source system.

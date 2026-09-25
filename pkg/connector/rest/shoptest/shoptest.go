@@ -5,6 +5,10 @@
 package shoptest
 
 import (
+	"bytes"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -31,8 +35,56 @@ type Shop struct {
 	FailUpdates bool
 	// Requests counts requests by "METHOD path".
 	Requests map[string]int
+	// DropWebhooks skips webhook deliveries, as when Shopify gives up on
+	// an endpoint that was down.
+	DropWebhooks bool
+	// Deliveries records each webhook delivery's HTTP status.
+	Deliveries []int
+
+	webhookURL, webhookSecret string
 
 	srv *httptest.Server
+}
+
+// SendWebhooks makes the store post each new order to url as an
+// orders/create webhook, signed with the app's client secret the way
+// Shopify signs webhooks (X-Shopify-Hmac-Sha256).
+func (s *Shop) SendWebhooks(url, secret string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.webhookURL, s.webhookSecret = url, secret
+}
+
+// Sign returns the X-Shopify-Hmac-Sha256 header for body.
+func Sign(secret string, body []byte) string {
+	m := hmac.New(sha256.New, []byte(secret))
+	m.Write(body)
+	return base64.StdEncoding.EncodeToString(m.Sum(nil))
+}
+
+func (s *Shop) deliver(topic string, id int64, v map[string]any) {
+	s.mu.Lock()
+	url, secret, drop := s.webhookURL, s.webhookSecret, s.DropWebhooks
+	s.mu.Unlock()
+	if url == "" || drop {
+		return
+	}
+	body, _ := json.Marshal(v)
+	req, _ := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Shopify-Topic", topic)
+	req.Header.Set("X-Shopify-Shop-Domain", "turgon-demo.myshopify.com")
+	req.Header.Set("X-Shopify-API-Version", Version)
+	req.Header.Set("X-Shopify-Webhook-Id", fmt.Sprintf("b54557e4-bdd9-4b37-8a5f-%012d", id%1_000_000_000_000))
+	req.Header.Set("X-Shopify-Hmac-Sha256", Sign(secret, body))
+	status := 0
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		status = resp.StatusCode
+		resp.Body.Close()
+	}
+	s.mu.Lock()
+	s.Deliveries = append(s.Deliveries, status)
+	s.mu.Unlock()
 }
 
 // New starts a fake store on a local port.
@@ -62,6 +114,12 @@ func (s *Shop) Close() { s.srv.Close() }
 
 // AddOrder stores an order and returns its ID. Orders get increasing IDs.
 func (s *Shop) AddOrder(order map[string]any) int64 {
+	id := s.addOrder(order)
+	s.deliver("orders/create", id, s.Order(id))
+	return id
+}
+
+func (s *Shop) addOrder(order map[string]any) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.nextID++

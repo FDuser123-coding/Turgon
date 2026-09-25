@@ -40,6 +40,21 @@ workers:
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 512Mi }
+  # Receive events whose connection configures a webhook (Stripe, Shopify,
+  # ...) on port 8082 at /webhooks/<endpoint>/<event>, so runs start within
+  # seconds; polling every `reconcile` then only catches missed deliveries.
+  # Put the signing secrets in secretEnvFrom (see `turgon secrets <spec>`).
+  # The providers must reach the workers: enable the ingress, or route
+  # /webhooks/ to the per-spec Services from your own gateway.
+  webhooks:
+    enabled: false
+    reconcile: 5m
+    ingress:
+      enabled: false
+      className: ""
+      host: ""               # required with the ingress
+      annotations: {}
+      tls: []                # e.g. [{secretName: turgon-webhooks-tls, hosts: [hooks.example.com]}]
 
 console:
   enabled: true
@@ -117,6 +132,9 @@ networkPolicy:
   consoleFrom: []
   # Who may reach the agent gateway. Empty allows any pod in the namespace.
   agentsFrom: []
+  # Who may reach the workers' webhook port. Empty allows any pod in the
+  # namespace; list your ingress controller's pods to narrow it.
+  webhooksFrom: []
   # Egress. With allowAllEgress false, only DNS and egressRules are allowed:
   # list Temporal, the state database and every connected system.
   allowAllEgress: true

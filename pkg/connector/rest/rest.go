@@ -82,6 +82,10 @@ type Event struct {
 	Order string `json:"order,omitempty"`
 	// Pagination pages a list by the last item's ID.
 	Pagination *Pagination `json:"pagination,omitempty"`
+	// Webhook lets the event also arrive pushed by the API, to a worker
+	// that listens for webhooks; the list request then reconciles what was
+	// not delivered.
+	Webhook *WebhookConfig `json:"webhook,omitempty"`
 }
 
 // Pagination is cursor paging by the last item: the next page is
@@ -190,6 +194,11 @@ func (c Config) validate() error {
 		if p := e.Pagination; p != nil && (p.Param == "" || p.More == "") {
 			return fmt.Errorf("event %s: pagination needs param and more", name)
 		}
+		if e.Webhook != nil {
+			if err := e.Webhook.validate(); err != nil {
+				return fmt.Errorf("event %s: webhook: %w", name, err)
+			}
+		}
 	}
 	for name, op := range c.Operations {
 		if !strings.HasPrefix(op.Path, "/") {
@@ -246,14 +255,18 @@ func Factory(ctx context.Context, cfg compiler.ConnectorConfig, secrets connecto
 	if err != nil {
 		return nil, fmt.Errorf("rest %s: %w", cfg.Endpoint, err)
 	}
+	conn.endpoint = cfg.Endpoint
+	conn.resolveWebhookSecrets(ctx, secrets)
 	return conn, nil
 }
 
 // Conn is a connector instance.
 type Conn struct {
-	cfg  Config
-	auth *authenticator
-	http *http.Client
+	cfg      Config
+	auth     *authenticator
+	http     *http.Client
+	endpoint string
+	webhooks map[string]*webhook
 }
 
 var (

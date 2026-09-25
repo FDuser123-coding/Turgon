@@ -25,6 +25,9 @@ type Options struct {
 	Audit    audit.Recorder
 	// Policy defaults to policy.WritebackDefault until OPA bundles are wired in.
 	Policy policy.Decider
+	// Webhooks makes the runtime receive trigger events that are configured
+	// to arrive by webhook; their signing secrets must then be available.
+	Webhooks bool
 }
 
 // Runtime is a compiled spec bound to live connectors.
@@ -32,7 +35,10 @@ type Runtime struct {
 	Spec       *compiler.RuntimeSpec
 	Activities *Activities
 	Sources    map[string]connector.Source
-	instances  map[string]connector.Instance
+	// Webhooks are the trigger events this runtime receives by webhook, by
+	// endpoint and event (only with Options.Webhooks).
+	Webhooks  map[string]map[string]connector.Webhook
+	instances map[string]connector.Instance
 }
 
 // New connects every endpoint the spec's workflows use, and the endpoints
@@ -57,7 +63,8 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Runtim
 			agentOnly[t.Endpoint] = true
 		}
 	}
-	rt := &Runtime{Spec: spec, Sources: map[string]connector.Source{}, instances: map[string]connector.Instance{}}
+	rt := &Runtime{Spec: spec, Sources: map[string]connector.Source{}, Webhooks: map[string]map[string]connector.Webhook{},
+		instances: map[string]connector.Instance{}}
 	targets := map[string]writeguard.TargetConfig{}
 	for _, c := range spec.Spec.Connectors {
 		if !used[c.Endpoint] && !agentOnly[c.Endpoint] {
@@ -83,10 +90,27 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Runtim
 		}
 	}
 	for _, wf := range spec.Spec.Workflows {
-		if _, ok := rt.Sources[wf.Trigger.Endpoint]; !ok {
+		src, ok := rt.Sources[wf.Trigger.Endpoint]
+		if !ok {
 			rt.Close()
 			return nil, fmt.Errorf("workflow %s: endpoint %s cannot emit events", wf.Name, wf.Trigger.Endpoint)
 		}
+		ws, ok := src.(connector.WebhookSource)
+		if !opts.Webhooks || !ok {
+			continue
+		}
+		hook, err := ws.Webhook(wf.Trigger.Event)
+		if errors.Is(err, connector.ErrNoWebhook) {
+			continue
+		}
+		if err != nil {
+			rt.Close()
+			return nil, fmt.Errorf("workflow %s: %w", wf.Name, err)
+		}
+		if rt.Webhooks[wf.Trigger.Endpoint] == nil {
+			rt.Webhooks[wf.Trigger.Endpoint] = map[string]connector.Webhook{}
+		}
+		rt.Webhooks[wf.Trigger.Endpoint][wf.Trigger.Event] = hook
 	}
 	decider, err := recipeDeciders(ctx, spec, opts.Policy)
 	if err != nil {
@@ -123,9 +147,25 @@ type CursorStore interface {
 	SetCursor(ctx context.Context, name string, pos int64) error
 }
 
+// Inbox holds events delivered by webhook until their runs start.
+type Inbox interface {
+	// Deliver stores events for a source and returns how many were new.
+	Deliver(ctx context.Context, source string, events []connector.Event) (int, error)
+	// Inbox returns delivered events after a position, in order.
+	Inbox(ctx context.Context, source, name string, after int64, limit int) ([]connector.Event, error)
+}
+
+// InboxSource names an event's inbox.
+func InboxSource(endpoint, event string) string { return endpoint + "/" + event }
+
+// DefaultReconcile is how often an event that arrives by webhook is also
+// polled, to start runs for deliveries the provider never made.
+const DefaultReconcile = 5 * time.Minute
+
 // Dispatcher reads events from sources and starts one run per event.
 // Run IDs derive from the workflow and event, so re-reading an event after
-// a crash never starts a second run.
+// a crash, or reading it both from a webhook and a poll, never starts a
+// second run.
 type Dispatcher struct {
 	Runtime *Runtime
 	Cursors CursorStore
@@ -134,6 +174,15 @@ type Dispatcher struct {
 	Batch int
 	// ApprovalTimeout is passed to each run; zero uses the default.
 	ApprovalTimeout time.Duration
+	// Inbox holds webhook deliveries for the runtime's webhook events.
+	// Those events are read from it on every pass and polled from their
+	// source only every Reconcile (default DefaultReconcile).
+	Inbox     Inbox
+	Reconcile time.Duration
+	// Now is the clock (default time.Now).
+	Now func() time.Time
+
+	lastPolled map[string]time.Time
 }
 
 // RunID is the workflow ID for an event.
@@ -150,34 +199,101 @@ func (d *Dispatcher) Poll(ctx context.Context) (int, error) {
 	}
 	wfs := append([]compiler.Workflow{}, d.Runtime.Spec.Spec.Workflows...)
 	sort.Slice(wfs, func(i, j int) bool { return wfs[i].Name < wfs[j].Name })
+	now := time.Now
+	if d.Now != nil {
+		now = d.Now
+	}
+	reconcile := d.Reconcile
+	if reconcile <= 0 {
+		reconcile = DefaultReconcile
+	}
+	if d.lastPolled == nil {
+		d.lastPolled = map[string]time.Time{}
+	}
 	started := 0
 	var errs []error
 	for _, wf := range wfs {
 		name := wf.Name + "@" + wf.Trigger.Endpoint + "/" + wf.Trigger.Event
-		pos, err := d.Cursors.Cursor(ctx, name)
-		if err != nil {
+		src := d.Runtime.Sources[wf.Trigger.Endpoint]
+		if _, hooked := d.Runtime.Webhooks[wf.Trigger.Endpoint][wf.Trigger.Event]; !hooked || d.Inbox == nil {
+			n, err := d.drain(ctx, wf, name, func(after int64) ([]connector.Event, error) {
+				return src.Poll(ctx, wf.Trigger.Event, after, batch)
+			})
+			started += n
 			errs = append(errs, err)
 			continue
 		}
-		events, err := d.Runtime.Sources[wf.Trigger.Endpoint].Poll(ctx, wf.Trigger.Event, pos, batch)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("%s: %w", name, err))
-			continue
-		}
-		for _, ev := range events {
-			in := RunInput{SpecDigest: d.Runtime.Spec.Metadata.Digest, Workflow: wf, Event: ev, ApprovalTimeout: d.ApprovalTimeout}
-			if err := d.Starter.Start(ctx, RunID(wf.Name, ev), in); err != nil {
-				errs = append(errs, fmt.Errorf("%s: start %s: %w", name, ev.ID, err))
-				break // keep the cursor before the event that failed
-			}
-			started++
-			if err := d.Cursors.SetCursor(ctx, name, ev.Position); err != nil {
+		// The event arrives by webhook. Polling now and then reconciles:
+		// what it finds goes into the same inbox, where each event ID is
+		// kept once, so an event read both ways starts one run, and a run
+		// that failed (an approval rejected) is not started again.
+		inbox := InboxSource(wf.Trigger.Endpoint, wf.Trigger.Event)
+		if last, ok := d.lastPolled[name]; !ok || now().Sub(last) >= reconcile {
+			if err := d.reconcile(ctx, src, wf, name, inbox, batch); err != nil {
 				errs = append(errs, err)
-				break
+			} else {
+				d.lastPolled[name] = now()
 			}
 		}
+		n, err := d.drain(ctx, wf, name+"#inbox", func(after int64) ([]connector.Event, error) {
+			return d.Inbox.Inbox(ctx, inbox, wf.Trigger.Event, after, batch)
+		})
+		started += n
+		errs = append(errs, err)
 	}
 	return started, errors.Join(errs...)
+}
+
+// reconcile polls a webhook event's source into its inbox, one batch at a
+// time until the source has nothing more.
+func (d *Dispatcher) reconcile(ctx context.Context, src connector.Source, wf compiler.Workflow, cursor, inbox string, batch int) error {
+	for {
+		pos, err := d.Cursors.Cursor(ctx, cursor)
+		if err != nil {
+			return err
+		}
+		events, err := src.Poll(ctx, wf.Trigger.Event, pos, batch)
+		if err != nil {
+			return fmt.Errorf("%s: %w", cursor, err)
+		}
+		if len(events) == 0 {
+			return nil
+		}
+		if _, err := d.Inbox.Deliver(ctx, inbox, events); err != nil {
+			return fmt.Errorf("%s: inbox: %w", cursor, err)
+		}
+		if err := d.Cursors.SetCursor(ctx, cursor, events[len(events)-1].Position); err != nil {
+			return err
+		}
+		if len(events) < batch {
+			return nil
+		}
+	}
+}
+
+// drain starts runs for the events after a cursor and advances it past
+// each event whose run started.
+func (d *Dispatcher) drain(ctx context.Context, wf compiler.Workflow, cursor string, read func(after int64) ([]connector.Event, error)) (int, error) {
+	pos, err := d.Cursors.Cursor(ctx, cursor)
+	if err != nil {
+		return 0, err
+	}
+	events, err := read(pos)
+	if err != nil {
+		return 0, fmt.Errorf("%s: %w", cursor, err)
+	}
+	started := 0
+	for _, ev := range events {
+		in := RunInput{SpecDigest: d.Runtime.Spec.Metadata.Digest, Workflow: wf, Event: ev, ApprovalTimeout: d.ApprovalTimeout}
+		if err := d.Starter.Start(ctx, RunID(wf.Name, ev), in); err != nil {
+			return started, fmt.Errorf("%s: start %s: %w", cursor, ev.ID, err) // keep the cursor before it
+		}
+		started++
+		if err := d.Cursors.SetCursor(ctx, cursor, ev.Position); err != nil {
+			return started, err
+		}
+	}
+	return started, nil
 }
 
 // recipeDeciders gives each workflow its own OPA decider built from the

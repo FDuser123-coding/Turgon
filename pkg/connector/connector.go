@@ -8,9 +8,13 @@ package connector
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/fduser123-coding/turgon/pkg/compiler"
@@ -38,6 +42,66 @@ type Source interface {
 	// Poll returns up to limit events named event with Position > after,
 	// in Position order.
 	Poll(ctx context.Context, event string, after int64, limit int) ([]Event, error)
+}
+
+// WebhookSource is implemented by sources that can also receive events
+// pushed to them. Webhooks cut the delay to seconds; polling stays as the
+// safety net that reconciles deliveries the system never made.
+type WebhookSource interface {
+	Source
+	// Webhook returns how event arrives by webhook: ErrNoWebhook when it
+	// is not configured, another error when it is but cannot be used (its
+	// signing secret is missing).
+	Webhook(event string) (Webhook, error)
+}
+
+// Webhook verifies and parses deliveries of one event.
+type Webhook interface {
+	// Receive checks a delivery's signature and returns the events it
+	// carries, without positions (the inbox assigns them). A delivery that
+	// is authentic but not for this event returns no events.
+	Receive(header http.Header, body []byte, now time.Time) ([]Event, error)
+}
+
+var (
+	// ErrNoWebhook: the event is not configured to arrive by webhook.
+	ErrNoWebhook = errors.New("event is not configured for webhooks")
+	// ErrUnauthenticated: a delivery's signature is missing, wrong or expired.
+	ErrUnauthenticated = errors.New("webhook signature is missing, invalid or expired")
+)
+
+// ConfigSecretRefs returns the secret references inside a connector's
+// configuration: the values of its "secretRef" fields at any depth, such
+// as a webhook's signing secret. Sorted, without duplicates.
+func ConfigSecretRefs(cfg json.RawMessage) []string {
+	var doc any
+	if json.Unmarshal(cfg, &doc) != nil {
+		return nil
+	}
+	seen := map[string]bool{}
+	var walk func(v any)
+	walk = func(v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			for k, child := range x {
+				if ref, ok := child.(string); ok && k == "secretRef" && ref != "" {
+					seen[ref] = true
+				}
+				walk(child)
+			}
+		case []any:
+			for _, child := range x {
+				walk(child)
+			}
+		}
+	}
+	walk(doc)
+	out := make([]string, 0, len(seen))
+	for ref := range seen {
+		out = append(out, ref)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // SecretResolver turns a secret reference into its value at runtime.

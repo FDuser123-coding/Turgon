@@ -1,6 +1,7 @@
 # Billing on Stripe, through the REST API with a restricted secret key
 # (the secret). Paid invoices are read from invoice.paid events, which
-# Stripe lists newest first: the connector pages back to its cursor. The
+# Stripe lists newest first: the connector pages back to its cursor, or
+# which Stripe posts to a webhook endpoint. The
 # ERP payment ID is written into the invoice's metadata, form-encoded.
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
@@ -31,6 +32,13 @@ spec:
         positionFormat: unix
         order: desc
         pagination: { param: starting_after, more: has_more }
+        # Workers started with --webhook-listen also receive the event from
+        # a Stripe webhook endpoint (…/webhooks/stripe-billing/Invoice.Paid,
+        # event invoice.paid); polling then only reconciles.
+        webhook:
+          signature: stripe
+          secretRef: openbao://stripe-billing/webhook-secret
+          filter: { type: invoice.paid }
     operations:
       get-invoice:
         method: GET

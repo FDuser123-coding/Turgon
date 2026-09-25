@@ -78,7 +78,8 @@ configuration only: each Connection declares its events, reads and writes as HTT
 
 - **Events** are list requests polled with a cursor the API understands (`since_id`,
   `created[gt]`, `updated_at_min`), or search requests with a JSON body (HubSpot's
-  `POST .../search`); timestamp cursors never split a group of equal timestamps.
+  `POST .../search`); timestamp cursors never split a group of equal timestamps. An event can
+  also arrive by **signed webhook** (see below).
   Newest-first lists (Stripe) are paged back to the cursor with `starting_after` / `has_more`,
   so a burst of new items is read oldest first across polls and never skipped.
 - **Reads** fetch one record by ID and return business field names; they become agent tools.
@@ -166,6 +167,40 @@ echo "won grace@lovelace-gmbh.example 900" >> hs.cmds             # goes to the 
 
 The deal needs two custom properties: `customer_email` (a HubSpot workflow can copy it from the
 deal's primary contact) and `erp_order_number`.
+
+### Webhooks: events in seconds, polling as the safety net
+
+Turgon runs next to the customer's systems, often where nothing may connect in, so events are
+polled by default. Where the provider can reach a worker, an event can also arrive by webhook:
+the connection's event gets a `webhook` block (`examples/connections/stripe-billing.yaml`,
+`shopify-store.yaml`) and workers run with `--webhook-listen`. Then:
+
+- **Deliveries are verified** before anything is stored: Stripe's `Stripe-Signature`
+  (timestamped, so old deliveries cannot be replayed), Shopify's `X-Shopify-Hmac-Sha256`, or
+  any HMAC-SHA256 of the body in a header (hex or base64, with a prefix such as `sha256=`).
+  The signing secret is its own secret reference (`turgon secrets` lists it). Forged or
+  expired deliveries get 401; bodies are capped at 4 MiB.
+- **A delivery is stored before it is acknowledged**, in an inbox table in Turgon's database,
+  so an acknowledged event is never lost; if storing fails the provider is told to retry. The
+  dispatcher is woken and the run starts at once (6 ms after the delivery, in the demo below).
+- **Polling reconciles.** Every `--reconcile` (5 minutes by default) the event is also polled,
+  into the same inbox, to catch deliveries the provider gave up on. The inbox keeps each
+  event ID once, so an event that arrives both ways, or is redelivered, starts one run, and a
+  run that ended (an approval that was rejected) is never started again.
+- A worker without `--webhook-listen` polls as before and needs no signing secret.
+
+```sh
+bin/turgon compile -c my-catalog stripe-payments-to-erp -o stripe.json   # as above
+export TURGON_SECRET_STRIPE_BILLING_WEBHOOK_SECRET=whsec_demo
+bin/turgon run -s stripe.json --webhook-listen 127.0.0.1:8082 --reconcile 30s &
+touch stripe.cmds && (tail -f stripe.cmds | bin/fakestripe -webhook-url \
+  http://127.0.0.1:8082/webhooks/stripe-billing/Invoice.Paid -webhook-secret whsec_demo &)
+echo "cus_ada 49.90" >> stripe.cmds            # delivered: the run starts at once
+echo "cus_ada 12.00 nohook" >> stripe.cmds     # never delivered: the next reconcile finds it
+```
+
+In Kubernetes, `workers.webhooks.enabled` opens the port on each worker behind a Service, and
+`workers.webhooks.ingress` routes exactly the webhook paths of each spec's webhook events.
 
 Each spec runs on its own Temporal task queue (`turgon-<spec name>`), so workers for different
 specs can share a cluster.
@@ -301,6 +336,11 @@ helm install turgon deploy/helm/turgon -n integrations \
 helm test turgon -n integrations                        # runs `turgon check` for every spec
 ```
 
+To receive webhooks, add the signing secrets to the connection secrets and
+`--set workers.webhooks.enabled=true --set workers.webhooks.ingress.enabled=true
+--set workers.webhooks.ingress.host=hooks.example.com`; the ingress routes only
+`/webhooks/<endpoint>/<event>` for the events configured for webhooks.
+
 #### Agents behind agentgateway
 
 With `agents.enabled`, the chart runs [agentgateway](https://agentgateway.dev) (v1.5.0) in front
@@ -384,11 +424,11 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/policy` | §9, App. C | Policy decision interface and the built-in write-back default; `opa/` evaluates and tests Rego packs with Open Policy Agent |
 | `pkg/audit` | §9 | Append-only, hash-chained audit log with tamper detection |
 | `pkg/mapping` | §7.4 | JSONata evaluation of mapping sets |
-| `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow, and one for agent writes; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher |
+| `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow, and one for agent writes; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher; webhook receiver with a durable inbox, reconciled by polling |
 | `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox events, rollback dry-runs, idempotent writes) |
-| `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled list or search events (ascending, or newest-first paged back to the cursor), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/`, `stripetest/` and `hubspottest/` fake the Shopify Admin, Stripe and HubSpot CRM APIs |
+| `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled list or search events (ascending, or newest-first paged back to the cursor), also received as signed webhooks (Stripe, Shopify, generic HMAC), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/`, `stripetest/` and `hubspottest/` fake the Shopify Admin, Stripe and HubSpot CRM APIs |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
-| `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references |
+| `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references, the webhook inbox |
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
 | `pkg/agent` | §7.7, §8 | MCP server and A2A agent: business read tools, and write tools that start approval-gated writes; gateway identity, per-call policy and audit; agentgateway configuration |
 | `pkg/identity` | §7.3 | Record matching: normalized identifying attributes, Fellegi-Sunter scoring with Jaro-Winkler names, suggestions and the automatic-match decision |
