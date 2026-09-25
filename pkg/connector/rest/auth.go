@@ -155,3 +155,30 @@ func (a *authenticator) current(ctx context.Context) (string, error) {
 	a.token, a.expires = tok.AccessToken, time.Now().Add(life-margin)
 	return a.token, nil
 }
+
+// Authenticator authenticates requests as an Auth says, for other HTTP
+// connectors (SAP OData) that share these methods.
+type Authenticator struct{ a *authenticator }
+
+// NewAuthenticator checks cfg and the secret it needs.
+func NewAuthenticator(cfg Auth, secret string, client *http.Client) (*Authenticator, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
+	a, err := newAuthenticator(cfg, secret, client)
+	if err != nil {
+		return nil, err
+	}
+	return &Authenticator{a}, nil
+}
+
+// Apply sets the request's credentials, fetching a token when needed.
+func (x *Authenticator) Apply(ctx context.Context, req *http.Request) error {
+	return x.a.apply(ctx, req)
+}
+
+// Refreshable reports whether a rejected credential is worth fetching again.
+func (x *Authenticator) Refreshable() bool { return x.a.refreshable() }
+
+// Invalidate drops a cached token.
+func (x *Authenticator) Invalidate() { x.a.invalidate() }

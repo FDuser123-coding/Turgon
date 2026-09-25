@@ -168,6 +168,53 @@ echo "won grace@lovelace-gmbh.example 900" >> hs.cmds             # goes to the 
 The deal needs two custom properties: `customer_email` (a HubSpot workflow can copy it from the
 deal's primary contact) and `erp_order_number`.
 
+### SAP S/4HANA: sales orders through SAP's released APIs
+
+The `sap-odata` connector reaches SAP S/4HANA (Cloud, and on-premise 1909 or later) only through
+its released OData v2 APIs, the interfaces SAP sanctions for integration; the manifest prohibits
+direct database access and ODP-RFC. Like `rest`, each Connection declares what it uses
+(`examples/connections/s4-prod.yaml`):
+
+- **Creates** send one deep insert, with the header and its items (`to_Item`). Values are converted
+  to OData v2 types: ISO dates become `/Date(ms)/`, numbers become decimal strings.
+- **Dry runs** go through the API's simulation service (`API_SALES_ORDER_SIMULATION_SRV`), which
+  prices and checks the order without saving it. The approver sees SAP's own totals, not
+  Turgon's guess.
+- **No duplicates after a lost response.** The write's idempotency key goes into a reference
+  property (`PurchaseOrderByCustomer`), and a create first looks for an order carrying it. A retry
+  after a gateway timeout finds the order the first attempt made instead of creating a second.
+- **Deletes** undo a create in a saga, with the order's ETag. SAP refuses once the order has
+  follow-on documents, and the run then stops for a person.
+- **Events** are entities polled on `LastChangeDateTime` with `$filter` and `$orderby`. As with
+  Salesforce, a batch never ends inside a group of equal timestamps.
+- **Reads** fetch one entity by key and return business names; they become agent tools.
+- **Sessions:** modifying requests fetch and send SAP's CSRF token, and fetch a new one when the
+  session expires. Authentication is a communication user (basic) or OAuth 2.0 client credentials.
+- **Errors:** SAP's messages ("Sold-to party C-999 not maintained for sales area...") fail the
+  step at once; throttling, locks and server errors are retried.
+
+`turgon check` reads each service's `$metadata` and names every entity set or property that does
+not exist. It also explains the fix for a service that is not activated or not in the
+communication arrangement.
+
+`shopify-store-orders-to-s4` is the Shopify saga with S/4HANA as the ERP. Without a system, run
+the test fake of the three APIs:
+
+```sh
+go build -o bin/fakesap ./internal/tools/fakesap
+touch sap.cmds && (tail -f sap.cmds | bin/fakesap -client 100 &)   # http://127.0.0.1:9500, TURGON_COMM / demo
+sed -i 's|    baseURL: https://my300000-api.s4hana.cloud.sap|    baseURL: http://127.0.0.1:9500\n    client: "100"|' \
+  my-catalog/connections/s4-prod.yaml                          # with the Shopify fake set up as above
+bin/turgon compile -c my-catalog shopify-store-orders-to-s4 -o s4.json
+export TURGON_SECRET_S4_PROD_COMM_USER=TURGON_COMM:demo
+bin/turgon check -s s4.json                                     # services, entity sets, properties
+bin/turgon run -s s4.json &
+echo "ada@example.com 310.00" >> shop.cmds
+```
+
+The approval shows SAP's simulated order. Once approved, the fake prints the new sales order, and
+the Shopify order's note gets its number.
+
 ### Webhooks: events in seconds, polling as the safety net
 
 Turgon runs next to the customer's systems, often where nothing may connect in, so events are
@@ -568,7 +615,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 ## Not built yet
 
-In rough roadmap order (§16, §19): Salesforce Pub/Sub API change capture and Bulk API reads;
+In rough roadmap order (§16, §19): SAP events by SAP Event Mesh in place of polling; Salesforce Pub/Sub API change capture and Bulk API reads;
 the Turgon operator; an appliance build (§11);
 Debezium change capture in place of outbox polling; training identity-matching weights per deployment, and an external Splink service; signed OPA bundles; the metadata
 graph and discovery; A2A streaming and push notifications; approving mapping fields from the console's review queue; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go

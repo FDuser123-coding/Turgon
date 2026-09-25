@@ -31,6 +31,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/connector/postgres"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce"
+	"github.com/fduser123-coding/turgon/pkg/connector/sap"
 	"github.com/fduser123-coding/turgon/pkg/engine"
 	"github.com/fduser123-coding/turgon/pkg/identity"
 	"github.com/fduser123-coding/turgon/pkg/notify"
@@ -114,7 +115,7 @@ func (f *temporalFlags) tlsConfig() (*tls.Config, error) {
 
 // connectorRegistry lists the connectors built into this worker.
 func connectorRegistry() connector.Registry {
-	return connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory, rest.Name: rest.Factory}
+	return connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory, rest.Name: rest.Factory, sap.Name: sap.Factory}
 }
 
 func envOr(key, def string) string {
