@@ -176,7 +176,7 @@ func TestAgentsReadThroughBusinessTools(t *testing.T) {
 	}
 	sort.Strings(names)
 	// Only reads are served: no create_sales_order or update_opportunity.
-	if strings.Join(names, ",") != "erp_db_get_customer,get_sales_order,salesforce_prod_get_customer" {
+	if strings.Join(names, ",") != "erp_db_get_customer,get_payment,get_sales_order,salesforce_prod_get_customer" {
 		t.Fatalf("tools = %v", names)
 	}
 

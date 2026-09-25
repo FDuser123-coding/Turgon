@@ -69,6 +69,23 @@ type Event struct {
 	Position string `json:"position,omitempty"`
 	// PositionFormat is "number" (default), "rfc3339" or "unix" (seconds).
 	PositionFormat string `json:"positionFormat,omitempty"`
+	// Order is the API's list order: "asc" (default, oldest first) or
+	// "desc" (newest first, as Stripe lists). A descending list is paged
+	// back to the cursor, so a burst of new items is never skipped.
+	Order string `json:"order,omitempty"`
+	// Pagination pages a list by the last item's ID.
+	Pagination *Pagination `json:"pagination,omitempty"`
+}
+
+// Pagination is cursor paging by the last item: the next page is
+// requested with Param set to the last item's Cursor field, while the
+// response's More field is true.
+type Pagination struct {
+	Param  string `json:"param"`            // e.g. starting_after
+	Cursor string `json:"cursor,omitempty"` // item field, default the event's ID field
+	More   string `json:"more"`             // response field, e.g. has_more
+	// MaxPages bounds one poll (default 20).
+	MaxPages int `json:"maxPages,omitempty"`
 }
 
 // Operation is one request.
@@ -84,6 +101,10 @@ type Operation struct {
 	Fields map[string]string `json:"fields,omitempty"`
 	// Wrap nests the body under a key, e.g. {"order": {...}}.
 	Wrap string `json:"wrap,omitempty"`
+	// BodyFormat is "json" (default) or "form": form-encoded, with nested
+	// fields as metadata[key] and a null sent as "" (which Stripe reads
+	// as "unset").
+	BodyFormat string `json:"bodyFormat,omitempty"`
 	// Result is the dotted path of the record in the response.
 	Result string `json:"result,omitempty"`
 	// IdempotencyHeader sends the write's idempotency key, e.g. Idempotency-Key.
@@ -138,6 +159,18 @@ func (c Config) validate() error {
 		default:
 			return fmt.Errorf("event %s: positionFormat must be number, rfc3339 or unix", name)
 		}
+		switch e.Order {
+		case "", "asc":
+		case "desc":
+			if e.Pagination == nil {
+				return fmt.Errorf("event %s: a descending list needs pagination to reach the cursor", name)
+			}
+		default:
+			return fmt.Errorf("event %s: order must be asc or desc", name)
+		}
+		if p := e.Pagination; p != nil && (p.Param == "" || p.More == "") {
+			return fmt.Errorf("event %s: pagination needs param and more", name)
+		}
 	}
 	for name, op := range c.Operations {
 		if !strings.HasPrefix(op.Path, "/") {
@@ -162,6 +195,11 @@ func (c Config) validate() error {
 		}
 		if op.Restore && op.Method == http.MethodGet {
 			return fmt.Errorf("operation %s: restore must write", name)
+		}
+		switch op.BodyFormat {
+		case "", "json", "form":
+		default:
+			return fmt.Errorf("operation %s: bodyFormat must be json or form", name)
 		}
 	}
 	return nil
@@ -241,9 +279,14 @@ func (e *APIError) permanent() bool {
 // do sends a request and decodes a JSON response into out, if any.
 func (c *Conn) do(ctx context.Context, method, path string, query url.Values, header http.Header, body any, out any) error {
 	var payload []byte
-	if body != nil {
+	contentType := "application/json"
+	switch b := body.(type) {
+	case nil:
+	case formBody:
+		payload, contentType = []byte(encodeForm(b.v).Encode()), "application/x-www-form-urlencoded"
+	default:
 		var err error
-		if payload, err = json.Marshal(body); err != nil {
+		if payload, err = json.Marshal(b); err != nil {
 			return err
 		}
 	}
@@ -258,7 +301,7 @@ func (c *Conn) do(ctx context.Context, method, path string, query url.Values, he
 		}
 		req.Header.Set("Accept", "application/json")
 		if body != nil {
-			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Content-Type", contentType)
 		}
 		for k, v := range c.cfg.Headers {
 			req.Header.Set(k, v)
@@ -305,8 +348,11 @@ func classify(err error) error {
 }
 
 // Poll returns up to limit items after the position, in position order.
-// When a page is full and positions are timestamps, the trailing group of
-// items sharing the last timestamp is left for the next poll, so a strict
+// An ascending list is read one page at a time. A descending list is paged
+// back until it reaches the position, then its oldest items are taken, so
+// the cursor never jumps over items it has not returned. When a batch is
+// cut short and positions are timestamps, the trailing group of items
+// sharing the last timestamp is left for the next poll, so a strict
 // "after" cursor cannot skip items.
 func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) ([]connector.Event, error) {
 	e, ok := c.cfg.Events[event]
@@ -327,40 +373,69 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 			return m
 		}))
 	}
-	var resp any
-	if err := c.do(ctx, http.MethodGet, e.Path, q, nil, nil, &resp); err != nil {
-		return nil, err
-	}
-	list, ok := lookup(resp, e.Items).([]any)
-	if !ok {
-		return nil, fmt.Errorf("rest: %s: response has no item array at %q", e.Path, e.Items)
+	desc := e.Order == "desc"
+	maxPages := 1
+	if e.Pagination != nil && desc {
+		maxPages = e.Pagination.MaxPages
+		if maxPages <= 0 {
+			maxPages = 20
+		}
 	}
 	var events []connector.Event
-	for _, it := range list {
-		item, ok := it.(map[string]any)
-		if !ok {
-			return nil, fmt.Errorf("rest: %s: items must be objects", e.Path)
-		}
-		id := scalar(lookup(item, idField))
-		pos, err := parsePosition(lookup(item, posField), e.PositionFormat)
-		if id == "" || err != nil {
-			return nil, fmt.Errorf("rest: %s: item without a usable %s/%s: %v", e.Path, idField, posField, err)
-		}
-		if pos <= after {
-			continue
-		}
-		payload, err := json.Marshal(item)
-		if err != nil {
+	truncated := false
+	for page := 1; ; page++ {
+		var resp any
+		if err := c.do(ctx, http.MethodGet, e.Path, q, nil, nil, &resp); err != nil {
 			return nil, err
 		}
-		events = append(events, connector.Event{ID: id, Position: pos, Name: event, Payload: payload})
+		list, ok := lookup(resp, e.Items).([]any)
+		if !ok {
+			return nil, fmt.Errorf("rest: %s: response has no item array at %q", e.Path, e.Items)
+		}
+		reached := false
+		var last map[string]any
+		for _, it := range list {
+			item, ok := it.(map[string]any)
+			if !ok {
+				return nil, fmt.Errorf("rest: %s: items must be objects", e.Path)
+			}
+			last = item
+			id := scalar(lookup(item, idField))
+			pos, err := parsePosition(lookup(item, posField), e.PositionFormat)
+			if id == "" || err != nil {
+				return nil, fmt.Errorf("rest: %s: item without a usable %s/%s: %v", e.Path, idField, posField, err)
+			}
+			if pos <= after {
+				reached = true
+				continue
+			}
+			payload, err := json.Marshal(item)
+			if err != nil {
+				return nil, err
+			}
+			events = append(events, connector.Event{ID: id, Position: pos, Name: event, Payload: payload})
+		}
+		if !desc {
+			truncated = len(list) >= limit
+			break
+		}
+		more, _ := lookup(resp, e.Pagination.More).(bool)
+		if reached || !more || last == nil {
+			break
+		}
+		if page >= maxPages {
+			// Too many new items to reach the cursor in one poll: the
+			// newest pages were read, but older unread items remain, so
+			// report none rather than move the cursor past them.
+			return nil, fmt.Errorf("rest: %s: more than %d pages of new items; raise pagination.maxPages or poll more often", e.Path, maxPages)
+		}
+		q.Set(e.Pagination.Param, scalar(lookup(last, or(e.Pagination.Cursor, idField))))
 	}
 	sort.SliceStable(events, func(i, j int) bool { return events[i].Position < events[j].Position })
-	full := len(list) >= limit
 	if len(events) > limit {
-		events, full = events[:limit], true
+		events, truncated = events[:limit], true
 	}
-	if full && e.PositionFormat != "" && e.PositionFormat != "number" {
+	if truncated && e.PositionFormat != "" && e.PositionFormat != "number" {
 		cut := len(events)
 		for cut > 0 && events[cut-1].Position == events[len(events)-1].Position {
 			cut--
@@ -436,8 +511,10 @@ func render(tmpl string, vars map[string]any) (string, map[string]any, error) {
 	return out, used, nil
 }
 
-// body builds a write's request body from the payload.
-func (op Operation) body(doc map[string]any) (map[string]any, error) {
+// values maps a write's API fields (dotted for nested ones, such as
+// metadata.erp_payment_id) to their values from the payload. Without
+// Fields, the payload is sent as it is.
+func (op Operation) values(doc map[string]any) (map[string]any, error) {
 	if len(op.Fields) == 0 {
 		return doc, nil
 	}
@@ -452,11 +529,70 @@ func (op Operation) body(doc map[string]any) (map[string]any, error) {
 	return b, nil
 }
 
-func (op Operation) wrap(b any) any {
-	if op.Wrap == "" {
-		return b
+// request builds the request body from API field values.
+func (op Operation) request(values map[string]any) any {
+	var body any = values
+	if len(op.Fields) > 0 || op.Restore {
+		body = nest(values)
 	}
-	return map[string]any{op.Wrap: b}
+	if op.Wrap != "" {
+		body = map[string]any{op.Wrap: body}
+	}
+	if op.BodyFormat == "form" {
+		return formBody{body}
+	}
+	return body
+}
+
+// nest turns dotted keys into nested objects.
+func nest(flat map[string]any) map[string]any {
+	out := map[string]any{}
+	for k, v := range flat {
+		parts := strings.Split(k, ".")
+		m := out
+		for _, p := range parts[:len(parts)-1] {
+			child, ok := m[p].(map[string]any)
+			if !ok {
+				child = map[string]any{}
+				m[p] = child
+			}
+			m = child
+		}
+		m[parts[len(parts)-1]] = v
+	}
+	return out
+}
+
+// formBody marks a body to be sent form-encoded.
+type formBody struct{ v any }
+
+// encodeForm encodes nested objects and arrays the way Stripe and Rails
+// read them: metadata[key]=v, items[0][price]=v; null is sent as "".
+func encodeForm(v any) url.Values {
+	out := url.Values{}
+	var walk func(prefix string, v any)
+	walk = func(prefix string, v any) {
+		switch x := v.(type) {
+		case map[string]any:
+			for k, child := range x {
+				key := k
+				if prefix != "" {
+					key = prefix + "[" + k + "]"
+				}
+				walk(key, child)
+			}
+		case []any:
+			for i, child := range x {
+				walk(fmt.Sprintf("%s[%d]", prefix, i), child)
+			}
+		case nil:
+			out.Set(prefix, "")
+		default:
+			out.Set(prefix, scalar(x))
+		}
+	}
+	walk("", v)
+	return out
 }
 
 // current reads the record a captured update changes.
@@ -491,7 +627,7 @@ func (c *Conn) Simulate(ctx context.Context, name string, payload json.RawMessag
 	if err != nil {
 		return nil, err
 	}
-	b, err := op.body(doc)
+	vals, err := op.values(doc)
 	if err != nil {
 		return nil, err
 	}
@@ -503,13 +639,14 @@ func (c *Conn) Simulate(ctx context.Context, name string, payload json.RawMessag
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(map[string]any{"mode": "preview", "request": op.Method + " " + path, "current": previous(rec, b), "proposed": b})
+	return json.Marshal(map[string]any{"mode": "preview", "request": op.Method + " " + path, "current": previous(rec, vals), "proposed": vals})
 }
 
-func previous(rec, body map[string]any) map[string]any {
+// previous returns the record's current value of each field.
+func previous(rec, values map[string]any) map[string]any {
 	prev := map[string]any{}
-	for k := range body {
-		prev[k] = rec[k]
+	for k := range values {
+		prev[k] = lookup(rec, k)
 	}
 	return prev
 }
@@ -528,26 +665,25 @@ func (c *Conn) Commit(ctx context.Context, name, key string, payload json.RawMes
 		return nil, err
 	}
 	vars, body := doc, any(nil)
-	var captured map[string]any
+	var vals, captured map[string]any
 	switch {
 	case op.Restore:
 		var r UpdateResult
 		if err := json.Unmarshal(payload, &r); err != nil || r.Params == nil || r.Previous == nil {
 			return nil, fmt.Errorf("%w: restore needs a captured update's result", writeguard.ErrInvalid)
 		}
-		vars, body = r.Params, op.wrap(r.Previous)
+		vars, body = r.Params, op.request(r.Previous)
 	case op.Method != http.MethodDelete:
-		b, err := op.body(doc)
-		if err != nil {
+		if vals, err = op.values(doc); err != nil {
 			return nil, err
 		}
-		body = op.wrap(b)
+		body = op.request(vals)
 		if op.Capture != nil {
 			rec, err := c.current(ctx, op, doc)
 			if err != nil {
 				return nil, err
 			}
-			captured = previous(rec, b)
+			captured = previous(rec, vals)
 		}
 	}
 	path, params, err := render(op.Path, vars)
@@ -565,8 +701,7 @@ func (c *Conn) Commit(ctx context.Context, name, key string, payload json.RawMes
 	result := lookup(resp, op.Result)
 	switch {
 	case captured != nil:
-		b, _ := op.body(doc)
-		return json.Marshal(UpdateResult{Params: params, Previous: captured, Applied: b, Response: result})
+		return json.Marshal(UpdateResult{Params: params, Previous: captured, Applied: vals, Response: result})
 	case op.Restore:
 		return json.Marshal(map[string]any{"restored": params, "response": result})
 	case result == nil:
@@ -590,8 +725,8 @@ func (c *Conn) Confirm(ctx context.Context, name string, result json.RawMessage)
 		return err
 	}
 	for k, want := range r.Applied {
-		if !sameJSON(rec[k], want) {
-			return fmt.Errorf("rest: %s reads back %s = %v, want %v", name, k, rec[k], want)
+		if got := lookup(rec, k); !sameJSON(got, want) && !(op.BodyFormat == "form" && scalar(got) == scalar(want)) {
+			return fmt.Errorf("rest: %s reads back %s = %v, want %v", name, k, got, want)
 		}
 	}
 	return nil

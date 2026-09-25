@@ -154,7 +154,7 @@ func buildRequest(in PrepareInput) (writeguard.Request, error) {
 	if err != nil {
 		return writeguard.Request{}, err
 	}
-	amount, _ := in.Doc["netValue"].(float64)
+	amount := AmountOf(in.Doc)
 	return writeguard.Request{
 		Recipe:          in.Workflow,
 		Target:          c.Endpoint,
@@ -171,6 +171,24 @@ func buildRequest(in PrepareInput) (writeguard.Request, error) {
 		RequireApproval: c.Approval == "required",
 		Reason:          fmt.Sprintf("recipe %s step %s", in.Workflow, in.Step),
 	}, nil
+}
+
+// amountFields name a document's monetary amount, in order of preference;
+// policy compares it with approval thresholds.
+var amountFields = []string{"netValue", "amount", "totalAmount"}
+
+// AmountOf returns a document's monetary amount, or 0 if it has none.
+func AmountOf(doc map[string]any) float64 {
+	for _, f := range amountFields {
+		switch v := doc[f].(type) {
+		case float64:
+			return v
+		case json.Number:
+			n, _ := v.Float64()
+			return n
+		}
+	}
+	return 0
 }
 
 func lowerFirst(s string) string {

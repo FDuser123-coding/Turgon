@@ -1,0 +1,20 @@
+# A Stripe invoice.paid event as a payment received. Stripe amounts are in
+# the currency's minor unit and times are Unix seconds.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: stripe-invoice-to-payment
+  version: 1.0.0
+spec:
+  from: stripe-billing.Invoice
+  to: model.Payment
+  fields:
+    - { target: externalId,  expression: "data.object.id",                  origin: human,     confidence: 1.0 }
+    - { target: invoiceRef,  expression: "data.object.number",              origin: human,     confidence: 1.0 }
+    - { target: customerRef, expression: "data.object.customer",            origin: human,     confidence: 1.0 }
+    - { target: amount,      expression: "data.object.amount_paid / 100",   origin: certified, confidence: 0.99 }
+    - { target: currency,    expression: "$uppercase(data.object.currency)", origin: certified, confidence: 0.99 }
+    - target: paidOn
+      expression: "$substring($fromMillis(data.object.status_transitions.paid_at * 1000), 0, 10)"
+      origin: certified
+      confidence: 0.99

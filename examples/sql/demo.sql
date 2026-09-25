@@ -26,3 +26,15 @@ CREATE TABLE IF NOT EXISTS erp.sales_orders (
 );
 
 INSERT INTO erp.customers (id, name) VALUES ('C-100', 'Ada Lovelace GmbH') ON CONFLICT DO NOTHING;
+
+-- Payments received, for the stripe-payments-to-erp recipe.
+CREATE TABLE IF NOT EXISTS erp.payments (
+	id          bigserial PRIMARY KEY,
+	external_id text UNIQUE NOT NULL,
+	invoice_ref text NOT NULL,
+	customer_id text NOT NULL REFERENCES erp.customers (id),
+	amount      numeric(12,2) NOT NULL CHECK (amount >= 0),
+	currency    char(3) NOT NULL,
+	paid_on     date NOT NULL,
+	status      text NOT NULL DEFAULT 'received'
+);

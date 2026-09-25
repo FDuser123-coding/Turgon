@@ -1,0 +1,12 @@
+# After the ERP records a payment, note its ID on the Stripe invoice.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: payment-to-stripe-link
+  version: 1.0.0
+spec:
+  from: model.Payment
+  to: model.Invoice
+  fields:
+    - { target: invoiceId,    expression: "externalId",               origin: human, confidence: 1.0 }
+    - { target: erpPaymentId, expression: "$string(erpPayment.id)",   origin: human, confidence: 1.0 }

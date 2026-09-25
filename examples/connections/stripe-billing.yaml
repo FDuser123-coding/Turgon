@@ -1,0 +1,50 @@
+# Billing on Stripe, through the REST API with a restricted secret key
+# (the secret). Paid invoices are read from invoice.paid events, which
+# Stripe lists newest first: the connector pages back to its cursor. The
+# ERP payment ID is written into the invoice's metadata, form-encoded.
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata: { name: stripe-billing }
+spec:
+  connector: rest@^1
+  secretRef: openbao://stripe-billing/restricted-key
+  entities: [Invoice]
+  # Stripe allows 25 read and 25 write requests per second in live mode;
+  # stay well under it.
+  limits: { maxConcurrentCalls: 8, requestsPerSecond: 20 }
+  events:
+    - { name: Invoice.Paid, entity: Invoice, interface: polling }
+  operations:
+    - { name: get-invoice, entity: Invoice, direction: read, interface: rest-api, risk: read }
+    - { name: link-invoice, entity: Invoice, direction: write, interface: rest-api, risk: low, compensation: unlink-invoice }
+    - { name: unlink-invoice, entity: Invoice, direction: write, interface: rest-api, risk: low }
+  config:
+    baseURL: https://api.stripe.com
+    auth: { type: bearer }
+    checkPath: /v1/balance
+    events:
+      Invoice.Paid:
+        path: /v1/events
+        params: { type: invoice.paid, "created[gt]": "{{position}}", limit: "{{limit}}" }
+        items: data
+        position: created
+        positionFormat: unix
+        order: desc
+        pagination: { param: starting_after, more: has_more }
+    operations:
+      get-invoice:
+        method: GET
+        path: /v1/invoices/{{id}}
+        fields: { number: number, customer: customer, amount_paid: amountPaid, currency: currency, status: status }
+      link-invoice:
+        method: POST
+        path: /v1/invoices/{{invoiceId}}
+        bodyFormat: form
+        idempotencyHeader: Idempotency-Key
+        fields: { metadata.erp_payment_id: erpPaymentId }
+        capture: { path: "/v1/invoices/{{invoiceId}}" }
+      unlink-invoice:
+        method: POST
+        path: /v1/invoices/{{invoiceId}}
+        bodyFormat: form
+        restore: true

@@ -30,6 +30,10 @@ type ConnectionSpec struct {
 	Operations []Operation      `json:"operations,omitempty"`
 	// Config is connector-specific configuration, passed to the worker as-is.
 	Config json.RawMessage `json:"config,omitempty"`
+	// Limits are this system's own rate and concurrency limits. They set a
+	// generic connector's (one whose operations come from connections, such
+	// as rest or postgres); any other connector's limits can only be lowered.
+	Limits *Limits `json:"limits,omitempty"`
 }
 
 func (c *Connection) GetTypeMeta() TypeMeta { return c.TypeMeta }
@@ -51,6 +55,14 @@ func (c *Connection) Validate() FieldErrors {
 			es.add("spec.config", "must be an object")
 		}
 	}
+	if l := c.Spec.Limits; l != nil {
+		if l.MaxConcurrentCalls <= 0 {
+			es.add("spec.limits.maxConcurrentCalls", "must be positive")
+		}
+		if l.RequestsPerSecond <= 0 {
+			es.add("spec.limits.requestsPerSecond", "must be positive")
+		}
+	}
 	return es
 }
 
@@ -66,6 +78,9 @@ func (c *Connection) Effective(m *ConnectorManifest) *ConnectorManifest {
 	if c.Spec.SecretRef != "" {
 		e.Spec.Auth.SecretRef = c.Spec.SecretRef
 	}
+	if c.Spec.Limits != nil {
+		e.Spec.Limits = *c.Spec.Limits
+	}
 	return &e
 }
 
@@ -75,6 +90,13 @@ func (c *Connection) ValidateEffective(m *ConnectorManifest) FieldErrors {
 	var es FieldErrors
 	for _, e := range c.Effective(m).Validate() {
 		es = append(es, FieldError{Path: fmt.Sprintf("connection %s: %s", c.Metadata.Name, e.Path), Message: e.Message})
+	}
+	// A connector that declares its own operations knows its system's
+	// limits; a connection may only tighten them.
+	if l := c.Spec.Limits; l != nil && len(m.Spec.Operations) > 0 &&
+		(l.RequestsPerSecond > m.Spec.Limits.RequestsPerSecond || l.MaxConcurrentCalls > m.Spec.Limits.MaxConcurrentCalls) {
+		es = append(es, FieldError{Path: fmt.Sprintf("connection %s: spec.limits", c.Metadata.Name),
+			Message: fmt.Sprintf("can only lower %s's limits (%g requests/s, %d concurrent calls)", m.Metadata.Name, m.Spec.Limits.RequestsPerSecond, m.Spec.Limits.MaxConcurrentCalls)})
 	}
 	return es
 }
