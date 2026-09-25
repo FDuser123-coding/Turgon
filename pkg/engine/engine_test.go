@@ -23,6 +23,8 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/connector/postgres"
+	"github.com/fduser123-coding/turgon/pkg/connector/rest"
+	"github.com/fduser123-coding/turgon/pkg/connector/rest/shoptest"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce/sftest"
 	"github.com/fduser123-coding/turgon/pkg/policy"
@@ -56,7 +58,7 @@ func newFixture(t *testing.T) *fixture {
 
 // newFixtureFor compiles the named example recipe and connects it: Postgres
 // endpoints to the test database, others through extra secrets.
-func newFixtureFor(t *testing.T, recipe string, extra connector.StaticSecrets) *fixture {
+func newFixtureFor(t *testing.T, recipe string, extra connector.StaticSecrets, rewrites ...func(string) string) *fixture {
 	t.Helper()
 	pool, schema := pgtest.Pool(t)
 	ctx := context.Background()
@@ -89,7 +91,11 @@ func newFixtureFor(t *testing.T, recipe string, extra connector.StaticSecrets) *
 	}
 	for i := range spec.Spec.Connectors {
 		c := &spec.Spec.Connectors[i]
-		c.Config = json.RawMessage(localize(string(c.Config), schema))
+		cfg := localize(string(c.Config), schema)
+		for _, rw := range rewrites {
+			cfg = rw(cfg)
+		}
+		c.Config = json.RawMessage(cfg)
 	}
 
 	url := pgtest.URL(t, schema)
@@ -99,7 +105,7 @@ func newFixtureFor(t *testing.T, recipe string, extra connector.StaticSecrets) *
 		secrets[k] = v
 	}
 	rt, err := New(ctx, spec, Options{
-		Registry: connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory},
+		Registry: connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory, rest.Name: rest.Factory},
 		Secrets:  secrets,
 		Store:    store,
 		Resolver: store,
@@ -470,7 +476,7 @@ func TestPolicyDenialStopsBeforeAnyoneIsAsked(t *testing.T) {
 	// Rebuild the runtime with a freeze pack added to the recipe's policies.
 	spec := *f.rt.Spec
 	spec.Spec.Policies = append(append([]compiler.PolicyRef{}, spec.Spec.Policies...), compiler.PolicyRef{
-		Name: "erp-freeze", Rego: "package porter.writeback\ndeny contains \"ERP writes are frozen for the year-end close\" if input.recipe == \"shop-orders-to-erp\"",
+		Name: "erp-freeze", Rego: "package turgon.writeback\ndeny contains \"ERP writes are frozen for the year-end close\" if input.recipe == \"shop-orders-to-erp\"",
 	})
 	spec.Spec.Workflows = append([]compiler.Workflow{}, spec.Spec.Workflows...)
 	spec.Spec.Workflows[0].Policies = append(append([]string{}, spec.Spec.Workflows[0].Policies...), "erp-freeze")
@@ -503,4 +509,78 @@ func mustGuard(t *testing.T, f *fixture, d policy.Decider) *writeguard.Guard {
 		t.Fatal(err)
 	}
 	return g
+}
+
+// newShopifyFixture runs the shopify-store-orders-to-erp recipe against the
+// fake Shopify store and Postgres.
+func newShopifyFixture(t *testing.T) (*fixture, *shoptest.Shop, int64) {
+	t.Helper()
+	shop := shoptest.New("shpat_test")
+	t.Cleanup(shop.Close)
+	f := newFixtureFor(t, "shopify-store-orders-to-erp", connector.StaticSecrets{"openbao://shopify-store/token": "shpat_test"},
+		func(cfg string) string {
+			return strings.ReplaceAll(cfg, "https://turgon-demo.myshopify.com/admin/api/"+shoptest.Version, shop.URL())
+		})
+	if err := f.store.PutXref(context.Background(), "Customer", "shopify-store", "ada@example.com", "C-100"); err != nil {
+		t.Fatal(err)
+	}
+	id := shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-09-24T09:30:00-04:00",
+		"subtotal_price": "310.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-1", "quantity": 3}},
+	})
+	return f, shop, id
+}
+
+func TestShopifyOrderBecomesERPOrderAndIsNotedBack(t *testing.T) {
+	f, shop, id := newShopifyFixture(t)
+	runs := f.dispatch()
+	if len(runs) != 1 || runs[0].Event.ID != fmt.Sprint(id) {
+		t.Fatalf("runs = %+v", runs)
+	}
+	res, err, pending := f.run(runs[0], approve("03-write"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Writes) != 2 || res.Writes[1].Status != writeguard.StatusCommitted || len(pending) != 1 {
+		t.Fatalf("writes = %+v, pending = %d", res.Writes, len(pending))
+	}
+	ext := fmt.Sprintf("SHOPIFY-%d", id)
+	if f.orders(`external_id = '`+ext+`' AND customer_id = 'C-100' AND net_value = 310.00 AND currency = 'EUR'
+		AND lines = '[{"material":"M-1","quantity":3}]'`) != 1 {
+		t.Fatal("ERP order missing or mis-mapped")
+	}
+	var erpID int64
+	_ = f.pool.QueryRow(context.Background(), "SELECT id FROM "+f.schema+"_erp.sales_orders").Scan(&erpID)
+	if got := shop.Order(id)["note"]; got != fmt.Sprintf("ERP order %d", erpID) {
+		t.Fatalf("Shopify note = %v", got)
+	}
+	// The write-back was previewed from the order's current note, read back
+	// after it was written, and audited with its previous value.
+	log := f.auditLog.String()
+	if !strings.Contains(log, `"proposed":{"note":"ERP order`) || !strings.Contains(log, `"previous":{"note":null}`) {
+		t.Fatalf("write-back not previewed or audited:\n%s", log)
+	}
+	if shop.Requests["GET /orders/"+fmt.Sprint(id)+".json"] < 3 {
+		t.Errorf("expected capture, preview and confirmation reads: %v", shop.Requests)
+	}
+
+	// A second poll finds nothing new: the cursor moved past the order.
+	if again := f.dispatch(); len(again) != 0 {
+		t.Fatalf("re-dispatched %+v", again)
+	}
+}
+
+func TestShopifyRejectionCancelsTheERPOrder(t *testing.T) {
+	f, shop, id := newShopifyFixture(t)
+	shop.FailUpdates = true
+	_, err, _ := f.run(f.dispatch()[0], approve("03-write"))
+	if errType(err) != ErrTypeInvalid || !strings.Contains(err.Error(), "locked") {
+		t.Fatalf("err = %v (%s)", err, errType(err))
+	}
+	if f.orders(fmt.Sprintf(`external_id = 'SHOPIFY-%d' AND status = 'cancelled'`, id)) != 1 {
+		t.Fatal("ERP order was not cancelled after Shopify rejected the note")
+	}
+	if shop.Order(id)["note"] != nil {
+		t.Fatal("Shopify order changed")
+	}
 }

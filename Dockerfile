@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# Porter worker and console. Multi-stage: the web console is built with
+# Turgon worker and console. Multi-stage: the web console is built with
 # Node, the binary with Go (static, no cgo), and the result runs on a
 # distroless base as a non-root user with a read-only root filesystem.
 
@@ -18,9 +18,9 @@ RUN go mod download
 COPY . .
 COPY --from=console /src/pkg/console/dist/ pkg/console/dist/
 ARG VERSION=dev
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/porter ./cmd/porter
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w -X main.version=${VERSION}" -o /out/turgon ./cmd/turgon
 
 FROM gcr.io/distroless/static-debian12:nonroot
-COPY --from=build /out/porter /porter
+COPY --from=build /out/turgon /turgon
 USER 65532:65532
-ENTRYPOINT ["/porter"]
+ENTRYPOINT ["/turgon"]

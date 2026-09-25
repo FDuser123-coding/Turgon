@@ -1,0 +1,21 @@
+{{- if .Values.database.cloudNativePG.enabled }}
+# Requires the CloudNativePG operator. It creates the Secret
+# <release>-turgon-db-app with the connection URI the pods use.
+apiVersion: postgresql.cnpg.io/v1
+kind: Cluster
+metadata:
+  name: {{ include "turgon.fullname" . }}-db
+  labels:
+    {{- include "turgon.labels" . | nindent 4 }}
+spec:
+  instances: {{ .Values.database.cloudNativePG.instances }}
+  bootstrap:
+    initdb:
+      database: turgon
+      owner: turgon
+  storage:
+    size: {{ .Values.database.cloudNativePG.storage.size }}
+    {{- with .Values.database.cloudNativePG.storage.storageClass }}
+    storageClass: {{ . }}
+    {{- end }}
+{{- end }}

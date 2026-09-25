@@ -38,7 +38,7 @@ const (
 	RuntimeScreen    = "screen"
 	RuntimeWasm      = "wasm"
 	RuntimeContainer = "container"
-	// RuntimeNative connectors are built into the Porter worker. The
+	// RuntimeNative connectors are built into the Turgon worker. The
 	// prototype's Postgres connector is native; production connectors run
 	// on the worker types above.
 	RuntimeNative = "native"

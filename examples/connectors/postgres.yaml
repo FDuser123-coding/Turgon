@@ -1,6 +1,6 @@
 # A generic connector: its entities, events and operations come from each
 # Connection, but only through the interfaces declared here.
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: ConnectorManifest
 metadata:
   name: postgres

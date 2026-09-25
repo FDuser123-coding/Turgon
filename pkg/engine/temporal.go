@@ -19,7 +19,7 @@ import (
 // its own queue: a worker only has the connectors of the spec it runs, so
 // tasks for another spec must never reach it.
 func TaskQueueFor(spec *compiler.RuntimeSpec) string {
-	return "porter-" + spec.Metadata.Name
+	return "turgon-" + spec.Metadata.Name
 }
 
 // Register adds the workflow and activities to a Temporal worker.

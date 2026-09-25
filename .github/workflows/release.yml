@@ -1,7 +1,7 @@
 # Signed releases (architecture §9 supply chain, §11 delivery). Pushing a
 # tag like v0.2.0 builds, scans, signs and publishes:
-#   ghcr.io/<owner>/porter:<version>          multi-arch image, provenance + SBOM
-#   oci://ghcr.io/<owner>/charts/porter       Helm chart
+#   ghcr.io/<owner>/turgon:<version>          multi-arch image, provenance + SBOM
+#   oci://ghcr.io/<owner>/charts/turgon       Helm chart
 #   GitHub release                             binaries, checksums, SBOM
 # Signatures are keyless (Sigstore, GitHub OIDC): no signing key to guard.
 # Customers verify with the identity of this workflow; see README.
@@ -41,7 +41,7 @@ jobs:
         # GHCR repository names must be lowercase; the owner is not.
         run: |
           owner="${GITHUB_REPOSITORY_OWNER,,}"
-          echo "IMAGE=ghcr.io/${owner}/porter" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/${owner}/turgon" >> "$GITHUB_ENV"
           echo "CHARTS=ghcr.io/${owner}/charts" >> "$GITHUB_ENV"
       - name: Version
         id: version
@@ -79,9 +79,9 @@ jobs:
         with:
           image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
           format: spdx-json
-          output-file: porter-image.spdx.json
+          output-file: turgon-image.spdx.json
       - name: Attest the SBOM
-        run: cosign attest --yes --type spdxjson --predicate porter-image.spdx.json "${IMAGE}@${{ steps.build.outputs.digest }}"
+        run: cosign attest --yes --type spdxjson --predicate turgon-image.spdx.json "${IMAGE}@${{ steps.build.outputs.digest }}"
       - uses: actions/attest-build-provenance@v2
         with:
           subject-name: ${{ env.IMAGE }}
@@ -101,7 +101,7 @@ jobs:
         # GHCR repository names must be lowercase; the owner is not.
         run: |
           owner="${GITHUB_REPOSITORY_OWNER,,}"
-          echo "IMAGE=ghcr.io/${owner}/porter" >> "$GITHUB_ENV"
+          echo "IMAGE=ghcr.io/${owner}/turgon" >> "$GITHUB_ENV"
           echo "CHARTS=ghcr.io/${owner}/charts" >> "$GITHUB_ENV"
       - uses: azure/setup-helm@v4
         with:
@@ -112,14 +112,14 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           version="${GITHUB_REF_NAME#v}"
-          helm package deploy/helm/porter --version "$version" --app-version "$version"
+          helm package deploy/helm/turgon --version "$version" --app-version "$version"
           echo "$GH_TOKEN" | helm registry login ghcr.io -u "${{ github.actor }}" --password-stdin
-          out=$(helm push "porter-${version}.tgz" "oci://${CHARTS}" 2>&1)
+          out=$(helm push "turgon-${version}.tgz" "oci://${CHARTS}" 2>&1)
           echo "$out"
           digest=$(echo "$out" | sed -n 's/^Digest: //p')
           test -n "$digest"
           echo "$GH_TOKEN" | cosign login ghcr.io -u "${{ github.actor }}" --password-stdin
-          cosign sign --yes "${CHARTS}/porter@${digest}"
+          cosign sign --yes "${CHARTS}/turgon@${digest}"
 
   binaries:
     needs: test
@@ -143,19 +143,19 @@ jobs:
           mkdir dist
           for arch in amd64 arm64; do
             CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath \
-              -ldflags "-s -w -X main.version=${version}" -o "dist/porter-linux-${arch}" ./cmd/porter
+              -ldflags "-s -w -X main.version=${version}" -o "dist/turgon-linux-${arch}" ./cmd/turgon
           done
-          (cd dist && sha256sum porter-* > SHA256SUMS)
+          (cd dist && sha256sum turgon-* > SHA256SUMS)
       - name: Source SBOM
         uses: anchore/sbom-action@v0
         with:
           path: .
           format: spdx-json
-          output-file: dist/porter-source.spdx.json
+          output-file: dist/turgon-source.spdx.json
       - uses: sigstore/cosign-installer@v3
       - name: Sign the checksums
         run: cosign sign-blob --yes --bundle dist/SHA256SUMS.sigstore.json dist/SHA256SUMS
       - name: Publish the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --title "Porter $GITHUB_REF_NAME" --generate-notes --verify-tag
+        run: gh release create "$GITHUB_REF_NAME" dist/* --title "Turgon $GITHUB_REF_NAME" --generate-notes --verify-tag

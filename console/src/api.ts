@@ -42,5 +42,5 @@ const liveApi = {
 
 // The demo build (Vercel) uses sample data: the real API runs inside the
 // customer's environment and is never exposed publicly.
-export const demo = __PORTER_DEMO__;
+export const demo = __TURGON_DEMO__;
 export const api: typeof liveApi = demo ? createDemoApi() : liveApi;

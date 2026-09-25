@@ -40,17 +40,17 @@ func TestAuditChainInPostgres(t *testing.T) {
 
 	// The table refuses changes...
 	for _, stmt := range []string{
-		`UPDATE porter_audit SET actor = 'mallory' WHERE seq = 3`,
-		`DELETE FROM porter_audit WHERE seq = 3`,
-		`TRUNCATE porter_audit`,
+		`UPDATE turgon_audit SET actor = 'mallory' WHERE seq = 3`,
+		`DELETE FROM turgon_audit WHERE seq = 3`,
+		`TRUNCATE turgon_audit`,
 	} {
 		if _, err := pool.Exec(ctx, stmt); err == nil || !strings.Contains(err.Error(), "append-only") {
 			t.Errorf("%s: %v", stmt, err)
 		}
 	}
 	// ...and if someone with enough rights disables that, the chain notices.
-	if _, err := pool.Exec(ctx, `ALTER TABLE porter_audit DISABLE TRIGGER porter_audit_no_change;
-		UPDATE porter_audit SET line = replace(line, '"i":1', '"i":7') WHERE seq = (SELECT min(seq) FROM porter_audit WHERE line LIKE '%"i":1%')`); err != nil {
+	if _, err := pool.Exec(ctx, `ALTER TABLE turgon_audit DISABLE TRIGGER turgon_audit_no_change;
+		UPDATE turgon_audit SET line = replace(line, '"i":1', '"i":7') WHERE seq = (SELECT min(seq) FROM turgon_audit WHERE line LIKE '%"i":1%')`); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := log.Verify(ctx); !errors.Is(err, audit.ErrTampered) {

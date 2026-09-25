@@ -1,0 +1,16 @@
+Turgon {{ .Chart.AppVersion }} is installed in namespace {{ .Release.Namespace }}.
+
+Workers: {{ if .Values.specs }}{{ keys .Values.specs | sortAlpha | join ", " }}{{ else }}none — pass compiled specs with --set-file specs.<name>=runtime-spec.json{{ end }}
+{{- if .Values.console.enabled }}
+Console: service {{ include "turgon.fullname" . }}-console:{{ .Values.console.service.port }}, behind your authenticating proxy.
+         Approvers: members of {{ .Values.console.auth.approverGroup }}.
+{{- end }}
+{{- if .Values.agents.enabled }}
+Agents:  through agentgateway at service {{ include "turgon.fullname" . }}-agents:{{ .Values.agents.gateway.service.port }}:
+         MCP at /<spec>/mcp, A2A at /<spec>/a2a,
+         with a bearer token from {{ .Values.agents.gateway.issuer }}.
+         Write tools: {{ if .Values.agents.writes }}{{ join ", " .Values.agents.writes }}{{ else }}none{{ end }}.
+{{- end }}
+
+Check every connection now:
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}

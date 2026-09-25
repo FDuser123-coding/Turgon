@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -124,4 +125,52 @@ func TestCursorsAndXref(t *testing.T) {
 func sameJSON(a, b json.RawMessage) bool {
 	var x, y any
 	return json.Unmarshal(a, &x) == nil && json.Unmarshal(b, &y) == nil && reflect.DeepEqual(x, y)
+}
+
+// A state database created while Turgon was called Porter is renamed in
+// place: its idempotency records and audit chain carry over.
+func TestMigrateRenamesPorterTables(t *testing.T) {
+	ctx := context.Background()
+	pool, _ := pgtest.Pool(t)
+	body := schema[strings.Index(schema, "CREATE TABLE"):]
+	old := strings.ReplaceAll(body+auditSchema, "turgon_", "porter_")
+	if _, err := pool.Exec(ctx, old); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO porter_writes (key, status, outcome) VALUES ('erp-db/create/SHOP-1', 'done', '{"status":"committed"}')`); err != nil {
+		t.Fatal(err)
+	}
+	log := NewAuditLog(pool)
+	// The old table has the same shape, so the current code can seed it.
+	if _, err := pool.Exec(ctx, `ALTER TABLE porter_audit RENAME TO turgon_audit`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := log.Record("alice", "approve", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `ALTER TABLE turgon_audit RENAME TO porter_audit`); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	if err := Migrate(ctx, pool); err != nil {
+		t.Fatalf("second migration: %v", err)
+	}
+	var n int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_tables WHERE tablename LIKE 'porter\_%' AND schemaname = current_schema()`).Scan(&n); err != nil || n != 0 {
+		t.Fatalf("%d porter tables left (%v)", n, err)
+	}
+	out, err := New(pool).Lookup("erp-db/create/SHOP-1")
+	if err != nil || out == nil || out.Status != writeguard.StatusCommitted {
+		t.Fatalf("idempotency record lost: %+v %v", out, err)
+	}
+	e, err := log.Record("bob", "reject", nil)
+	if err != nil || e.Seq != 2 {
+		t.Fatalf("audit chain did not continue: %+v %v", e, err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM turgon_audit`); err == nil {
+		t.Fatal("renamed audit table is not append-only")
+	}
 }

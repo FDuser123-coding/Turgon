@@ -1,0 +1,41 @@
+# A saga between a SaaS shop and the ERP: each new Shopify order becomes an
+# ERP sales order, and the ERP order number is noted on the Shopify order.
+# If the note cannot be written, the ERP order is cancelled.
+apiVersion: turgon.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: shopify-store-orders-to-erp
+  version: 1.0.0
+spec:
+  trigger:
+    source: shopify-store
+    event: Order.Created
+  steps:
+    - map:
+        from: shopify-store.Order
+        to: model.SalesOrder
+        mapping: shopify-rest-order-to-order@1
+    - resolve:
+        entity: model.Customer
+        strategy: exact
+        autoMatchAbove: 1.0
+    - write:
+        target: erp-db
+        operation: create-sales-order
+        idempotencyKey: "{{ source.admin_graphql_api_id }}"
+        simulate: true
+        output: erpOrder
+    - map:
+        from: model.SalesOrder
+        to: model.Order
+        mapping: sales-order-to-shopify-note@1
+    - write:
+        target: shopify-store
+        operation: update-order
+        idempotencyKey: "{{ source.admin_graphql_api_id }}"
+        simulate: true
+  policies: [writeback-default]
+  capacity:
+    peakPerSecond: 1
+  slo:
+    p95Latency: 10s

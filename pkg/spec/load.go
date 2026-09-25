@@ -1,4 +1,4 @@
-// Package spec decodes Porter objects from YAML or JSON documents. Decoding
+// Package spec decodes Turgon objects from YAML or JSON documents. Decoding
 // is strict: unknown fields are rejected, so typos surface at load time
 // rather than as silently ignored configuration.
 package spec

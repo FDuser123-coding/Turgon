@@ -4,14 +4,14 @@
 apiVersion: troubleshoot.sh/v1beta2
 kind: Preflight
 metadata:
-  name: porter
+  name: turgon
 spec:
   analyzers:
     - clusterVersion:
         outcomes:
           - fail:
               when: "< 1.28.0"
-              message: Porter needs Kubernetes 1.28 or later.
+              message: Turgon needs Kubernetes 1.28 or later.
           - pass:
               message: Kubernetes version is supported.
     - nodeResources:
@@ -37,7 +37,7 @@ spec:
           - pass:
               message: Enough memory for the small profile.
     - storageClass:
-        checkName: Default storage class for Porter's database
+        checkName: Default storage class for Turgon's database
         outcomes:
           - fail:
               message: No default storage class. Set database.cloudNativePG.storage.storageClass or create one.

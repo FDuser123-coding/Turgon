@@ -12,6 +12,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -51,13 +52,19 @@ type Options struct {
 	// ApprovalTimeout rejects a write nobody approved after this long;
 	// zero uses the engine's default.
 	ApprovalTimeout time.Duration
-	Version         string
+	// A2AURL is where other agents reach the A2A endpoint, for the agent
+	// card; defaults to the request's own host.
+	A2AURL  string
+	Version string
 }
 
 // WriteSubmitter starts agent writes, or reports on one already started
 // under the same id. engine.AgentWrites implements it on Temporal.
 type WriteSubmitter interface {
 	Submit(ctx context.Context, id string, in engine.AgentWriteInput) (engine.AgentWriteStatus, error)
+	// Status reports on a write already started; engine.ErrUnknownWrite
+	// if there is none.
+	Status(ctx context.Context, id string) (engine.AgentWriteStatus, error)
 }
 
 // Server is an MCP endpoint over a runtime spec's read tools.
@@ -67,6 +74,9 @@ type Server struct {
 	writes    WriteSubmitter
 	digest    string
 	timeout   time.Duration
+	version   string
+	a2aURL    string
+	a2a       http.Handler
 	tools     []compiler.Tool
 	instances []connector.Instance
 	handler   http.Handler
@@ -80,7 +90,7 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Server
 	if opts.Policy == nil {
 		opts.Policy = policy.WritebackDefault{}
 	}
-	s := &Server{auth: opts.Auth, writes: opts.Writes, digest: spec.Metadata.Digest, timeout: opts.ApprovalTimeout}
+	s := &Server{auth: opts.Auth, writes: opts.Writes, digest: spec.Metadata.Digest, timeout: opts.ApprovalTimeout, a2aURL: opts.A2AURL}
 	needed := map[string]bool{}
 	for _, t := range spec.Spec.Tools {
 		switch {
@@ -121,6 +131,7 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Server
 	if version == "" {
 		version = "dev"
 	}
+	s.version = version
 	m := mcp.NewServer(&mcp.Implementation{Name: "turgon", Title: "Turgon", Version: version}, &mcp.ServerOptions{
 		Instructions: "Tools read and write business records in the customer's systems through Turgon. " +
 			"Every call is authorized for you and the person you act for, and audited. " +
@@ -137,6 +148,7 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Server
 	}
 	s.handler = mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return m },
 		&mcp.StreamableHTTPOptions{Stateless: true})
+	s.a2a = s.a2aHTTP()
 	return s, nil
 }
 
@@ -169,44 +181,55 @@ func humanTitle(t compiler.Tool) string {
 	return strings.ToUpper(s[:1]) + s[1:] + " (" + t.Endpoint + ")"
 }
 
-// call returns the handler for one tool.
+// call returns the MCP handler for one read tool.
 func (s *Server) call(t compiler.Tool) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, ok := identity(req)
 		if !ok {
 			return failure("not authenticated"), nil
 		}
-		var args struct {
-			ID string `json:"id"`
-		}
-		dec := json.NewDecoder(strings.NewReader(string(req.Params.Arguments)))
-		dec.DisallowUnknownFields()
-		if err := dec.Decode(&args); err != nil || strings.TrimSpace(args.ID) == "" {
-			return failure("pass the record's identifier as {\"id\": \"...\"}"), nil
-		}
-		data, err := s.guard.Read(ctx, writeguard.ReadRequest{
-			Target: t.Endpoint, Operation: t.Operation, Tool: t.Name, Entity: t.Entity, ID: args.ID,
-			Subject: policy.Subject{ID: id.Agent, Agent: true, OnBehalfOf: id.OnBehalfOf, Roles: id.Roles},
-		})
-		switch {
-		case errors.Is(err, writeguard.ErrNotFound):
-			return failure(fmt.Sprintf("no %s with identifier %q in %s", strings.ToLower(orEntity(t.Entity)), args.ID, t.Endpoint)), nil
-		case errors.Is(err, writeguard.ErrDenied):
-			return failure("denied by policy: " + err.Error()), nil
-		case errors.Is(err, writeguard.ErrCircuitOpen):
-			return failure(t.Endpoint + " is failing; reads are paused. Try again later."), nil
-		case err != nil:
-			return failure(t.Endpoint + " did not answer: " + err.Error()), nil
+		data, err := s.read(ctx, t, id, req.Params.Arguments)
+		if err != nil {
+			return failure(err.Error()), nil
 		}
 		var record map[string]any
-		if err := json.Unmarshal(data, &record); err != nil {
-			return failure("unreadable record"), nil
-		}
+		_ = json.Unmarshal(data, &record)
 		return &mcp.CallToolResult{
 			Content:           []mcp.Content{&mcp.TextContent{Text: string(data)}},
 			StructuredContent: record,
 		}, nil
 	}
+}
+
+// read runs a read tool for a caller. Its errors are messages for the agent.
+func (s *Server) read(ctx context.Context, t compiler.Tool, id Identity, raw json.RawMessage) (json.RawMessage, error) {
+	var args struct {
+		ID string `json:"id"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&args); err != nil || strings.TrimSpace(args.ID) == "" {
+		return nil, errors.New(`pass the record's identifier as {"id": "..."}`)
+	}
+	data, err := s.guard.Read(ctx, writeguard.ReadRequest{
+		Target: t.Endpoint, Operation: t.Operation, Tool: t.Name, Entity: t.Entity, ID: args.ID,
+		Subject: policy.Subject{ID: id.Agent, Agent: true, OnBehalfOf: id.OnBehalfOf, Roles: id.Roles},
+	})
+	switch {
+	case errors.Is(err, writeguard.ErrNotFound):
+		return nil, fmt.Errorf("no %s with identifier %q in %s", strings.ToLower(orEntity(t.Entity)), args.ID, t.Endpoint)
+	case errors.Is(err, writeguard.ErrDenied):
+		return nil, errors.New("denied by policy: " + err.Error())
+	case errors.Is(err, writeguard.ErrCircuitOpen):
+		return nil, errors.New(t.Endpoint + " is failing; reads are paused. Try again later.")
+	case err != nil:
+		return nil, errors.New(t.Endpoint + " did not answer: " + err.Error())
+	}
+	var record map[string]any
+	if err := json.Unmarshal(data, &record); err != nil {
+		return nil, errors.New("unreadable record")
+	}
+	return data, nil
 }
 
 // identity returns the caller ServeHTTP authenticated.
@@ -232,8 +255,9 @@ func failure(msg string) *mcp.CallToolResult {
 // Tools lists the tools served.
 func (s *Server) Tools() []compiler.Tool { return s.tools }
 
-// ServeHTTP authenticates the caller, replaces any identity header it sent
-// with the authenticated one, and hands the request to MCP.
+// ServeHTTP authenticates the caller and hands the request to A2A (under
+// /a2a) or MCP (anywhere else). MCP handlers read the identity from a
+// header that replaces any the caller sent; A2A from the request context.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/healthz" {
 		_, _ = w.Write([]byte("ok\n"))
@@ -242,6 +266,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id, err := s.auth.Authenticate(r)
 	if err != nil {
 		http.Error(w, "agents reach Turgon through the agent gateway", http.StatusUnauthorized)
+		return
+	}
+	if r.URL.Path == a2aPath || strings.HasPrefix(r.URL.Path, a2aPath+"/") {
+		s.a2a.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey{}, id)))
 		return
 	}
 	b, _ := json.Marshal(id)

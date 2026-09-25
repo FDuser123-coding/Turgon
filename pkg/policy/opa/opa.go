@@ -1,6 +1,6 @@
 // Package opa evaluates Rego policy packs with Open Policy Agent
 // (architecture §9, AD-11). Packs contribute rules to the package
-// porter.writeback:
+// turgon.writeback:
 //
 //	allow             write may proceed (after approval if also required)
 //	require_approval  a person must approve first
@@ -28,7 +28,7 @@ import (
 )
 
 // WritebackPackage is the Rego package write decisions come from.
-const WritebackPackage = "porter.writeback"
+const WritebackPackage = "turgon.writeback"
 
 // Module is one policy pack's Rego source.
 type Module struct {
@@ -37,21 +37,21 @@ type Module struct {
 }
 
 // decision normalizes whatever the packs define into one document.
-const decisionModule = `package porter.decision
+const decisionModule = `package turgon.decision
 
 import rego.v1
 
 default allow := false
 
-allow if data.porter.writeback.allow
+allow if data.turgon.writeback.allow
 
 default require_approval := false
 
-require_approval if data.porter.writeback.require_approval
+require_approval if data.turgon.writeback.require_approval
 
-reasons contains r if some r in data.porter.writeback.reasons
+reasons contains r if some r in data.turgon.writeback.reasons
 
-deny contains d if some d in data.porter.writeback.deny
+deny contains d if some d in data.turgon.writeback.deny
 `
 
 func parse(mods []Module) (map[string]*ast.Module, error) {
@@ -132,14 +132,14 @@ type Decider struct {
 
 var _ policy.Decider = (*Decider)(nil)
 
-// New prepares a decider. At least one module must define porter.writeback.
+// New prepares a decider. At least one module must define turgon.writeback.
 func New(ctx context.Context, mods []Module) (*Decider, error) {
 	if !DefinesWriteback(mods) {
 		return nil, fmt.Errorf("no policy pack defines package %s", WritebackPackage)
 	}
 	opts := []func(*rego.Rego){
-		rego.Query("x = data.porter.decision"),
-		rego.Module("porter-decision.rego", decisionModule),
+		rego.Query("x = data.turgon.decision"),
+		rego.Module("turgon-decision.rego", decisionModule),
 		rego.SetRegoVersion(ast.RegoV1),
 	}
 	for _, m := range mods {

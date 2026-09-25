@@ -1,0 +1,37 @@
+{{- range $name, $spec := .Values.specs }}
+---
+# `helm test` runs the Connect-stage checks for every spec.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: {{ include "turgon.fullname" $ }}-check-{{ $name }}
+  labels:
+    {{- include "turgon.labels" $ | nindent 4 }}
+  annotations:
+    helm.sh/hook: test
+    helm.sh/hook-delete-policy: before-hook-creation
+spec:
+  restartPolicy: Never
+  {{- include "turgon.podSettings" $ | nindent 2 }}
+  containers:
+    - name: check
+      image: {{ include "turgon.image" $ }}
+      args: [check, --spec=/specs/{{ $name }}.json]
+      env:
+        {{- include "turgon.commonEnv" $ | nindent 8 }}
+      {{- with $.Values.workers.secretEnvFrom }}
+      envFrom:
+        {{- range . }}
+        - secretRef:
+            name: {{ . }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        {{- toYaml $.Values.securityContext | nindent 8 }}
+      volumeMounts:
+        - { name: specs, mountPath: /specs, readOnly: true }
+  volumes:
+    - name: specs
+      configMap:
+        name: {{ include "turgon.fullname" $ }}-specs
+{{- end }}

@@ -1,0 +1,20 @@
+# A Shopify Admin REST order as a sales order.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: shopify-rest-order-to-order
+  version: 1.0.0
+spec:
+  from: shopify-store.Order
+  to: model.SalesOrder
+  fields:
+    - { target: externalId,  expression: "'SHOPIFY-' & $string(id)",      origin: human,     confidence: 1.0 }
+    - { target: shopifyId,   expression: "id",                            origin: human,     confidence: 1.0 }
+    - { target: customerRef, expression: "$lowercase(email)",             origin: human,     confidence: 0.99 }
+    - { target: orderDate,   expression: "$substring(created_at, 0, 10)", origin: certified, confidence: 0.99 }
+    - { target: netValue,    expression: "$number(subtotal_price)",       origin: certified, confidence: 0.99 }
+    - { target: currency,    expression: "$uppercase(currency)",          origin: certified, confidence: 0.99 }
+    - target: lines
+      expression: "line_items.{ 'material': sku, 'quantity': quantity }[]"
+      origin: human
+      confidence: 0.98

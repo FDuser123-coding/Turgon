@@ -1,4 +1,4 @@
-// Package catalog indexes Porter objects by kind, name and version and
+// Package catalog indexes Turgon objects by kind, name and version and
 // resolves references such as "sf-opportunity-to-order@3" to the highest
 // version that satisfies the constraint.
 package catalog

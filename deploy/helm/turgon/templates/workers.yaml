@@ -1,0 +1,73 @@
+{{- range $name, $spec := .Values.specs }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "turgon.fullname" $ }}-worker-{{ $name }}
+  labels:
+    {{- include "turgon.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: worker
+    turgon.dev/spec: {{ $name }}
+spec:
+  replicas: {{ $.Values.workers.replicas }}
+  selector:
+    matchLabels:
+      {{- include "turgon.selector" $ | nindent 6 }}
+      app.kubernetes.io/component: worker
+      turgon.dev/spec: {{ $name }}
+  template:
+    metadata:
+      labels:
+        {{- include "turgon.selector" $ | nindent 8 }}
+        app.kubernetes.io/component: worker
+        turgon.dev/spec: {{ $name }}
+      annotations:
+        # Roll the worker when its spec changes.
+        turgon.dev/spec-checksum: {{ $spec | sha256sum }}
+    spec:
+      {{- include "turgon.podSettings" $ | nindent 6 }}
+      containers:
+        - name: worker
+          image: {{ include "turgon.image" $ }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          args:
+            - run
+            - --spec=/specs/{{ $name }}.json
+            - --audit-log=postgres
+            - --health-listen=:8081
+            - --poll={{ $.Values.workers.pollInterval }}
+            - --approval-timeout={{ $.Values.workers.approvalTimeout }}
+          env:
+            {{- include "turgon.commonEnv" $ | nindent 12 }}
+          {{- with $.Values.workers.secretEnvFrom }}
+          envFrom:
+            {{- range . }}
+            - secretRef:
+                name: {{ . }}
+            {{- end }}
+          {{- end }}
+          ports:
+            - name: health
+              containerPort: 8081
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /readyz, port: health }
+            periodSeconds: 10
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml $.Values.workers.resources | nindent 12 }}
+          volumeMounts:
+            - { name: specs, mountPath: /specs, readOnly: true }
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: specs
+          configMap:
+            name: {{ include "turgon.fullname" $ }}-specs
+            items:
+              - { key: {{ $name }}.json, path: {{ $name }}.json }
+        - name: tmp
+          emptyDir: { sizeLimit: 64Mi }
+{{- end }}

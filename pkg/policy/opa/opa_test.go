@@ -69,7 +69,7 @@ func TestPackTestsRun(t *testing.T) {
 	if err != nil || len(fails) != 0 || n != 4 {
 		t.Fatalf("n=%d fails=%+v err=%v", n, fails, err)
 	}
-	broken := Module{Name: "broken", Source: `package porter.writeback
+	broken := Module{Name: "broken", Source: `package turgon.writeback
 test_wrong if { 1 == 2 }`}
 	fails, _, err = Test(context.Background(), []Module{broken})
 	if err != nil || len(fails) != 1 || !strings.Contains(fails[0].Name, "test_wrong") {
@@ -80,7 +80,7 @@ test_wrong if { 1 == 2 }`}
 func TestPacksCombine(t *testing.T) {
 	ctx := context.Background()
 	// A stricter pack adds a denial on top of the default.
-	stricter := Module{Name: "no-weekend-writes", Source: `package porter.writeback
+	stricter := Module{Name: "no-weekend-writes", Source: `package turgon.writeback
 deny contains "writes to erp-db are frozen for the audit" if input.recipe == "shop-orders-to-erp"`}
 	d, err := New(ctx, []Module{examplePack(t, "writeback-default"), stricter})
 	if err != nil {
@@ -98,10 +98,10 @@ deny contains "writes to erp-db are frozen for the audit" if input.recipe == "sh
 }
 
 func TestCompileErrors(t *testing.T) {
-	if err := Compile([]Module{{Name: "bad", Source: "package porter.writeback\nallow if {"}}); err == nil {
+	if err := Compile([]Module{{Name: "bad", Source: "package turgon.writeback\nallow if {"}}); err == nil {
 		t.Fatal("syntax error accepted")
 	}
-	if _, err := New(context.Background(), []Module{{Name: "masking", Source: "package porter.data.masking\nx := 1"}}); err == nil {
+	if _, err := New(context.Background(), []Module{{Name: "masking", Source: "package turgon.data.masking\nx := 1"}}); err == nil {
 		t.Fatal("decider without a writeback package accepted")
 	}
 }

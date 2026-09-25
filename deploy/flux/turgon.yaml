@@ -1,0 +1,53 @@
+# Pull-based delivery with Flux (architecture §11, AD-02): the cluster pulls
+# the signed chart from the registry; nothing connects inward. Compiled
+# runtime specs and connection secrets stay in the customer's namespace.
+apiVersion: source.toolkit.fluxcd.io/v1beta2
+kind: OCIRepository
+metadata:
+  name: turgon
+  namespace: integrations
+spec:
+  interval: 10m
+  url: oci://ghcr.io/fduser123-coding/charts/turgon
+  ref:
+    semver: "0.1.x"      # the ring this installation follows
+  verify:
+    provider: cosign     # refuse charts not signed by Turgon's release workflow
+    matchOIDCIdentity:
+      - issuer: "^https://token\\.actions\\.githubusercontent\\.com$"
+        subject: "^https://github\\.com/FDuser123-coding/Turgon/\\.github/workflows/release\\.yml@refs/tags/v.*$"
+---
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: turgon
+  namespace: integrations
+spec:
+  interval: 10m
+  chartRef:
+    kind: OCIRepository
+    name: turgon
+  install:
+    remediation: { retries: 3 }
+  upgrade:
+    remediation: { retries: 3, remediateLastFailure: true }   # automatic rollback
+  test:
+    enable: true         # runs `turgon check` for every spec after each release
+  values:
+    temporal:
+      address: temporal-frontend.temporal:7233
+    database:
+      cloudNativePG: { enabled: true, instances: 1 }
+    console:
+      auth:
+        trustedProxies: ["10.42.0.0/16"]
+        approverGroup: turgon-approvers
+    workers:
+      secretEnvFrom: [turgon-connection-secrets]
+  # Compiled specs, one key per spec, e.g. created with
+  #   kubectl create configmap turgon-specs --from-file=shop-orders-to-erp=runtime-spec.json
+  valuesFrom:
+    - kind: ConfigMap
+      name: turgon-specs
+      targetPath: specs.shop-orders-to-erp
+      valuesKey: shop-orders-to-erp

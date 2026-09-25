@@ -182,7 +182,7 @@ func (d *Dispatcher) Poll(ctx context.Context) (int, error) {
 
 // recipeDeciders gives each workflow its own OPA decider built from the
 // policy packs compiled into the spec, so one recipe's packs never loosen
-// another's. Workflows whose packs do not define porter.writeback, and
+// another's. Workflows whose packs do not define turgon.writeback, and
 // requests from no recipe, use the fallback decider.
 func recipeDeciders(ctx context.Context, spec *compiler.RuntimeSpec, fallback policy.Decider) (policy.Decider, error) {
 	packs := map[string]opa.Module{}

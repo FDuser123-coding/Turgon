@@ -1,4 +1,4 @@
-// Package semver implements the small subset of semantic versioning Porter
+// Package semver implements the small subset of semantic versioning Turgon
 // needs to pin connectors, mappings and plugins: parsing, ordering and
 // constraints of the forms "*", "1", "1.2", "1.2.3", "^1.2", "~1.2" and
 // ">=1.2.0".
@@ -78,7 +78,7 @@ func (v Version) String() string {
 }
 
 // Compare returns -1, 0 or 1. Pre-releases sort before their release and are
-// compared lexically, which is sufficient for Porter's catalog.
+// compared lexically, which is sufficient for Turgon's catalog.
 func (v Version) Compare(o Version) int {
 	for _, d := range [3]int{v.Major - o.Major, v.Minor - o.Minor, v.Patch - o.Patch} {
 		if d < 0 {

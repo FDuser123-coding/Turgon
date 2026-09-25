@@ -71,87 +71,144 @@ func writeToolDef(t compiler.Tool) *mcp.Tool {
 	}
 }
 
-// write returns the handler for one write tool.
+// write returns the MCP handler for one write tool.
 func (s *Server) write(t compiler.Tool) mcp.ToolHandler {
-	allowed := map[string]bool{}
-	for _, f := range t.Fields {
-		allowed[f] = true
-	}
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		id, ok := identity(req)
 		if !ok {
 			return failure("not authenticated"), nil
 		}
-		var args struct {
-			RequestID string         `json:"requestId"`
-			Record    map[string]any `json:"record"`
-			Reason    string         `json:"reason"`
-		}
-		dec := json.NewDecoder(bytes.NewReader(req.Params.Arguments))
-		dec.DisallowUnknownFields()
-		dec.UseNumber()
-		if err := dec.Decode(&args); err != nil || args.Record == nil {
-			return failure(`pass {"requestId": "...", "record": {...}, "reason": "..."}`), nil
-		}
-		if !requestIDRE.MatchString(args.RequestID) {
-			return failure("requestId must be 1 to 128 letters, digits, '.', '_', ':' or '-'"), nil
-		}
-		if len(args.Reason) > maxReason {
-			return failure(fmt.Sprintf("reason is longer than %d characters", maxReason)), nil
-		}
-		if len(allowed) > 0 {
-			var unknown []string
-			for k := range args.Record {
-				if !allowed[k] {
-					unknown = append(unknown, k)
-				}
-			}
-			if len(unknown) > 0 {
-				sort.Strings(unknown)
-				return failure(fmt.Sprintf("record has unknown field(s) %s; %s takes %s",
-					strings.Join(unknown, ", "), t.Name, strings.Join(t.Fields, ", "))), nil
-			}
-		}
-		// Maps marshal with sorted keys, so the same record always gives
-		// the same payload and the same request digest.
-		payload, err := json.Marshal(args.Record)
+		w, err := s.submit(ctx, t, id, req.Params.Arguments, "")
 		if err != nil {
-			return failure("unreadable record"), nil
+			return failure(err.Error()), nil
 		}
-		var amount float64
-		if n, ok := args.Record["netValue"].(json.Number); ok {
-			amount, _ = n.Float64()
-		}
-		// The audit log and the approver see who asked; the reason is the
-		// agent's own words.
-		reason := strings.TrimSpace(args.Reason)
-		if reason == "" {
-			reason = "no reason given"
-		}
-		wreq := writeguard.Request{
-			Target: t.Endpoint, Operation: t.Operation, Tool: t.Name, Risk: t.Risk,
-			Subject:        policy.Subject{ID: id.Agent, Agent: true, OnBehalfOf: id.OnBehalfOf, Roles: id.Roles},
-			IdempotencyKey: "agent:" + id.Agent + ":" + args.RequestID,
-			Payload:        payload, Entity: t.Entity, Amount: amount, Simulate: t.Simulate, Reason: reason,
-		}
-		// One workflow per agent and request; the tool name first, so the
-		// console lists agent writes by tool.
-		wfID := t.Name + "/" + url.PathEscape(id.Agent) + ":" + args.RequestID
-		st, err := s.writes.Submit(ctx, wfID, engine.AgentWriteInput{SpecDigest: s.digest, Request: wreq, ApprovalTimeout: s.timeout})
-		switch {
-		case errors.Is(err, engine.ErrRequestConflict):
-			return failure(fmt.Sprintf("requestId %q was already used for a different %s request; use a new requestId", args.RequestID, t.Name)), nil
-		case err != nil:
-			return failure("could not start the write: " + err.Error()), nil
-		}
-		return writeResult(t, args.RequestID, st), nil
+		return writeResult(t, w.requestID, w.status), nil
 	}
 }
 
+// writeCall is a write a caller asked for, and where it stands.
+type writeCall struct {
+	workflowID, requestID string
+	status                engine.AgentWriteStatus
+}
+
+// submit starts a write tool's governed write for a caller, or reports on
+// the one already started for the same request. defaultRequestID is used
+// when the arguments carry no requestId (A2A messages have their own ID).
+// Its errors are messages for the agent.
+func (s *Server) submit(ctx context.Context, t compiler.Tool, id Identity, raw json.RawMessage, defaultRequestID string) (writeCall, error) {
+	var args struct {
+		RequestID string         `json:"requestId"`
+		Record    map[string]any `json:"record"`
+		Reason    string         `json:"reason"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(raw))
+	dec.DisallowUnknownFields()
+	dec.UseNumber()
+	if err := dec.Decode(&args); err != nil || args.Record == nil {
+		return writeCall{}, errors.New(`pass {"requestId": "...", "record": {...}, "reason": "..."}`)
+	}
+	if args.RequestID == "" {
+		args.RequestID = defaultRequestID
+	}
+	if !requestIDRE.MatchString(args.RequestID) {
+		return writeCall{}, errors.New("requestId must be 1 to 128 letters, digits, '.', '_', ':' or '-'")
+	}
+	if len(args.Reason) > maxReason {
+		return writeCall{}, fmt.Errorf("reason is longer than %d characters", maxReason)
+	}
+	if len(t.Fields) > 0 {
+		allowed := map[string]bool{}
+		for _, f := range t.Fields {
+			allowed[f] = true
+		}
+		var unknown []string
+		for k := range args.Record {
+			if !allowed[k] {
+				unknown = append(unknown, k)
+			}
+		}
+		if len(unknown) > 0 {
+			sort.Strings(unknown)
+			return writeCall{}, fmt.Errorf("record has unknown field(s) %s; %s takes %s",
+				strings.Join(unknown, ", "), t.Name, strings.Join(t.Fields, ", "))
+		}
+	}
+	// Maps marshal with sorted keys, so the same record always gives the
+	// same payload and the same request digest.
+	payload, err := json.Marshal(args.Record)
+	if err != nil {
+		return writeCall{}, errors.New("unreadable record")
+	}
+	var amount float64
+	if n, ok := args.Record["netValue"].(json.Number); ok {
+		amount, _ = n.Float64()
+	}
+	// The audit log and the approver see who asked; the reason is the
+	// agent's own words.
+	reason := strings.TrimSpace(args.Reason)
+	if reason == "" {
+		reason = "no reason given"
+	}
+	wreq := writeguard.Request{
+		Target: t.Endpoint, Operation: t.Operation, Tool: t.Name, Risk: t.Risk,
+		Subject:        policy.Subject{ID: id.Agent, Agent: true, OnBehalfOf: id.OnBehalfOf, Roles: id.Roles},
+		IdempotencyKey: "agent:" + id.Agent + ":" + args.RequestID,
+		Payload:        payload, Entity: t.Entity, Amount: amount, Simulate: t.Simulate, Reason: reason,
+	}
+	w := writeCall{workflowID: writeID(t.Name, id.Agent, args.RequestID), requestID: args.RequestID}
+	w.status, err = s.writes.Submit(ctx, w.workflowID, engine.AgentWriteInput{SpecDigest: s.digest, Request: wreq, ApprovalTimeout: s.timeout})
+	switch {
+	case errors.Is(err, engine.ErrRequestConflict):
+		return w, fmt.Errorf("requestId %q was already used for a different %s request; use a new requestId", args.RequestID, t.Name)
+	case err != nil:
+		return w, errors.New("could not start the write: " + err.Error())
+	}
+	return w, nil
+}
+
+// writeID names the workflow of one agent's request: the tool first, so
+// the console lists agent writes by tool.
+func writeID(tool, agent, requestID string) string {
+	return tool + "/" + escapeAgent(agent) + ":" + requestID
+}
+
+// escapeAgent escapes an agent's name for a write ID; ':' is escaped too,
+// so the first ':' always ends the agent's part.
+func escapeAgent(agent string) string {
+	return strings.ReplaceAll(url.PathEscape(agent), ":", "%3A")
+}
+
+// writeOwner returns the tool and the agent a write workflow belongs to.
+func writeOwner(workflowID string) (tool, agent string, ok bool) {
+	tool, rest, ok := strings.Cut(workflowID, "/")
+	if !ok {
+		return "", "", false
+	}
+	escaped, _, ok := strings.Cut(rest, ":")
+	if !ok {
+		return "", "", false
+	}
+	agent, err := url.PathUnescape(escaped)
+	return tool, agent, err == nil && tool != "" && agent != ""
+}
+
 func writeResult(t compiler.Tool, requestID string, st engine.AgentWriteStatus) *mcp.CallToolResult {
-	out := map[string]any{"state": st.State, "requestId": requestID}
+	out, isErr := writeSummary(t, requestID, st)
+	b, _ := json.Marshal(out)
+	return &mcp.CallToolResult{
+		IsError:           isErr,
+		Content:           []mcp.Content{&mcp.TextContent{Text: string(b)}},
+		StructuredContent: out,
+	}
+}
+
+// writeSummary describes where a write stands, for the agent: its state,
+// a message, and the result, preview or reasons. isErr is set when nothing
+// was or will be written.
+func writeSummary(t compiler.Tool, requestID string, st engine.AgentWriteStatus) (out map[string]any, isErr bool) {
+	out = map[string]any{"state": st.State, "requestId": requestID}
 	var text string
-	isErr := false
 	switch st.State {
 	case engine.AgentWriteCommitted:
 		text = fmt.Sprintf("Done: %s committed in %s.", t.Name, t.Endpoint)
@@ -189,10 +246,5 @@ func writeResult(t compiler.Tool, requestID string, st engine.AgentWriteStatus) 
 		text, isErr = "The write failed. Use a new requestId to try again. "+st.Message, true
 	}
 	out["message"] = strings.TrimSpace(text)
-	b, _ := json.Marshal(out)
-	return &mcp.CallToolResult{
-		IsError:           isErr,
-		Content:           []mcp.Content{&mcp.TextContent{Text: string(b)}},
-		StructuredContent: out,
-	}
+	return out, isErr
 }

@@ -1,5 +1,5 @@
--- Demo systems for the shop-orders-to-erp recipe. Porter's own state
--- (idempotency, cursors, cross-references) is created by `porter run`.
+-- Demo systems for the shop-orders-to-erp recipe. Turgon's own state
+-- (idempotency, cursors, cross-references) is created by `turgon run`.
 CREATE SCHEMA IF NOT EXISTS shop;
 CREATE SCHEMA IF NOT EXISTS erp;
 

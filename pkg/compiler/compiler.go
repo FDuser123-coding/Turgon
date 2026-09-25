@@ -517,7 +517,7 @@ func Digest(body RuntimeBody) string {
 }
 
 func topicName(connector, event string) string {
-	return "porter." + connector + "." + strings.ToLower(strings.ReplaceAll(event, ".", "-"))
+	return "turgon." + connector + "." + strings.ToLower(strings.ReplaceAll(event, ".", "-"))
 }
 
 func humanize(op string) string {

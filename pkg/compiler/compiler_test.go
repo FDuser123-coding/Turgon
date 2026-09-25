@@ -146,7 +146,7 @@ func TestConnectionConfigIsCompiledIn(t *testing.T) {
 func TestPoliciesAreCompiledIn(t *testing.T) {
 	cat, _ := catalog.Load("../../examples")
 	rt := compileNamed(t, cat, "shop-orders-to-erp")
-	if len(rt.Spec.Policies) != 1 || !strings.Contains(rt.Spec.Policies[0].Rego, "package porter.writeback") {
+	if len(rt.Spec.Policies) != 1 || !strings.Contains(rt.Spec.Policies[0].Rego, "package turgon.writeback") {
 		t.Fatalf("policies = %+v", rt.Spec.Policies)
 	}
 	if got := rt.Spec.Workflows[0].Policies; len(got) != 1 || got[0] != "writeback-default" {

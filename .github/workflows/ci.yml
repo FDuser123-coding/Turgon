@@ -15,15 +15,15 @@ jobs:
       postgres:
         image: postgres:16
         env:
-          POSTGRES_USER: porter
-          POSTGRES_PASSWORD: porter
-          POSTGRES_DB: porter_test
+          POSTGRES_USER: turgon
+          POSTGRES_PASSWORD: turgon
+          POSTGRES_DB: turgon_test
         ports: ["5432:5432"]
         options: >-
-          --health-cmd "pg_isready -U porter"
+          --health-cmd "pg_isready -U turgon"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      PORTER_TEST_DATABASE_URL: postgres://porter:porter@localhost:5432/porter_test?sslmode=disable
+      TURGON_TEST_DATABASE_URL: postgres://turgon:turgon@localhost:5432/turgon_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -37,12 +37,13 @@ jobs:
         run: go test -race ./...
       - name: Validate, verify and compile the example catalog
         run: |
-          go run ./cmd/porter validate examples
-          go run ./cmd/porter verify -c examples eu-distributor-core
-          go run ./cmd/porter verify -c examples shop-orders-to-erp
-          go run ./cmd/porter compile -c examples eu-distributor-core -o /dev/null
-          go run ./cmd/porter compile -c examples shop-orders-to-erp -o /dev/null
-          go run ./cmd/porter compile -c examples salesforce-won-deals-to-erp -o /dev/null
+          go run ./cmd/turgon validate examples
+          go run ./cmd/turgon verify -c examples eu-distributor-core
+          go run ./cmd/turgon verify -c examples shop-orders-to-erp
+          go run ./cmd/turgon compile -c examples eu-distributor-core -o /dev/null
+          go run ./cmd/turgon compile -c examples shop-orders-to-erp -o /dev/null
+          go run ./cmd/turgon compile -c examples salesforce-won-deals-to-erp -o /dev/null
+          go run ./cmd/turgon compile -c examples shopify-store-orders-to-erp -o /dev/null
 
   console:
     runs-on: ubuntu-latest
@@ -66,9 +67,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
-      - name: Build porter with the console embedded
+      - name: Build turgon with the console embedded
         working-directory: .
-        run: go build -o /tmp/porter ./cmd/porter
+        run: go build -o /tmp/turgon ./cmd/turgon
 
   chart:
     runs-on: ubuntu-latest
@@ -87,20 +88,24 @@ jobs:
           chmod +x /usr/local/bin/hadolint
       - name: Compile example specs
         run: |
-          go run ./cmd/porter compile -c examples shop-orders-to-erp -o /tmp/shop.json
-          go run ./cmd/porter compile -c examples salesforce-won-deals-to-erp -o /tmp/sf.json
+          go run ./cmd/turgon compile -c examples shop-orders-to-erp -o /tmp/shop.json
+          go run ./cmd/turgon compile -c examples salesforce-won-deals-to-erp -o /tmp/sf.json
       - name: Lint, render and validate the chart
         run: |
           set -o pipefail
           args=(--set database.cloudNativePG.enabled=true --set 'console.auth.trustedProxies={10.0.0.0/8}'
-                --set console.auth.approverGroup=porter-approvers --set networkPolicy.allowAllEgress=false
-                --set-file specs.shop-orders-to-erp=/tmp/shop.json --set-file specs.salesforce-won-deals-to-erp=/tmp/sf.json)
-          helm lint deploy/helm/porter "${args[@]}"
-          helm template porter deploy/helm/porter --kube-version 1.31.0 "${args[@]}" > /tmp/rendered.yaml
+                --set console.auth.approverGroup=turgon-approvers --set networkPolicy.allowAllEgress=false
+                --set-file specs.shop-orders-to-erp=/tmp/shop.json --set-file specs.salesforce-won-deals-to-erp=/tmp/sf.json
+                --set agents.enabled=true --set 'agents.writes={shop-orders-to-erp}' --set agents.gateway.rateLimit=100/1m
+                --set agents.gateway.issuer=https://login.example.com --set agents.gateway.jwksURL=https://login.example.com/jwks
+                --set 'agents.gateway.audiences={turgon}' --set agents.gateway.ingress.enabled=true
+                --set agents.gateway.ingress.host=agents.example.com)
+          helm lint deploy/helm/turgon "${args[@]}"
+          helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" > /tmp/rendered.yaml
           ~/go/bin/kubeconform -strict -summary -kubernetes-version 1.31.0 \
             -schema-location default \
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-            /tmp/rendered.yaml deploy/flux/porter.yaml deploy/kyverno/verify-porter-images.yaml
+            /tmp/rendered.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
       - name: Lint the Dockerfile
         run: hadolint Dockerfile
 

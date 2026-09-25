@@ -1,0 +1,31 @@
+# A generic connector for HTTP JSON APIs (Shopify, Stripe, HubSpot, in-house
+# services). Like postgres, its entities, events and operations come from
+# each Connection, which declares them as HTTP requests (pkg/connector/rest).
+apiVersion: turgon.dev/v1alpha1
+kind: ConnectorManifest
+metadata:
+  name: rest
+  version: 1.0.0
+spec:
+  system: "HTTP JSON APIs"
+  runtime: native
+  auth:
+    methods: [bearer, api-key-header, basic, oauth2-client-credentials]
+    secretRef: openbao://rest/default
+  interfaces:
+    read:
+      - kind: rest-api
+    write:
+      # Updates that capture the fields they change are previewed as
+      # current and proposed values; other writes have no dry run.
+      - kind: rest-api
+        simulation: preview
+    events:
+      # A list request with a cursor the API understands (since_id,
+      # created[gt], updated_at_min).
+      - kind: polling
+  limits:
+    # Shared by every connection on this connector; the strictest common
+    # API (Shopify's REST Admin API: 2 requests per second) sets it.
+    maxConcurrentCalls: 2
+    requestsPerSecond: 2

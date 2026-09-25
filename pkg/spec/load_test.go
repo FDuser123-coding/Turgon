@@ -12,14 +12,14 @@ import (
 func TestDecodeAllMultiDocument(t *testing.T) {
 	data := `
 # leading comment
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: PolicyPack
 metadata: { name: a }
 spec: { rego: "package a" }
 ---
 # only a comment
 ---
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: PolicyPack
 metadata: { name: b }
 spec: { rego: "package b" }
@@ -38,7 +38,7 @@ spec: { rego: "package b" }
 
 func TestDecodeRejectsUnknownFields(t *testing.T) {
 	_, err := Decode([]byte(`
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: PolicyPack
 metadata: { name: a }
 spec: { rego: "package a", regoo: "typo" }
@@ -49,10 +49,10 @@ spec: { rego: "package a", regoo: "typo" }
 }
 
 func TestDecodeRejectsUnknownKindAndVersion(t *testing.T) {
-	if _, err := Decode([]byte("apiVersion: porter.dev/v1alpha1\nkind: Widget\n")); err == nil {
+	if _, err := Decode([]byte("apiVersion: turgon.dev/v1alpha1\nkind: Widget\n")); err == nil {
 		t.Error("unknown kind accepted")
 	}
-	if _, err := Decode([]byte("apiVersion: porter.dev/v2\nkind: Recipe\n")); err == nil {
+	if _, err := Decode([]byte("apiVersion: turgon.dev/v2\nkind: Recipe\n")); err == nil {
 		t.Error("unknown apiVersion accepted")
 	}
 }
@@ -79,7 +79,7 @@ func TestLoadPathsSkipsConfigMapCopies(t *testing.T) {
 	if err := os.Mkdir(hidden, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	doc := "apiVersion: porter.dev/v1alpha1\nkind: PolicyPack\nmetadata: { name: a }\nspec: { rego: \"package a\" }\n"
+	doc := "apiVersion: turgon.dev/v1alpha1\nkind: PolicyPack\nmetadata: { name: a }\nspec: { rego: \"package a\" }\n"
 	if err := os.WriteFile(filepath.Join(hidden, "a.yaml"), []byte(doc), 0o644); err != nil {
 		t.Fatal(err)
 	}

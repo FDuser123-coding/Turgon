@@ -1,4 +1,4 @@
-// Package v1alpha1 defines Porter's declarative object model: connector
+// Package v1alpha1 defines Turgon's declarative object model: connector
 // manifests, recipes, mappings, slot contracts, plugins, stack blueprints and
 // policy packs. Every object is data, versioned in Git and verified by the
 // integration compiler before anything runs (architecture §2, "Declarative
@@ -12,7 +12,7 @@ import (
 )
 
 // APIVersion is the only API version understood by this package.
-const APIVersion = "porter.dev/v1alpha1"
+const APIVersion = "turgon.dev/v1alpha1"
 
 // Object kinds.
 const (

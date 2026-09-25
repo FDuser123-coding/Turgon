@@ -75,7 +75,7 @@ func TestPluginPermissions(t *testing.T) {
 		TypeMeta: TypeMeta{APIVersion: APIVersion, Kind: KindPlugin},
 		Metadata: ObjectMeta{Name: "x", Version: "1.0.0", Publisher: "acme"},
 		Spec: PluginSpec{
-			Type: PluginLogic, Runtime: PluginRuntimeWasm, World: "porter:stack/logic-plugin@0.1.0",
+			Type: PluginLogic, Runtime: PluginRuntimeWasm, World: "turgon:stack/logic-plugin@0.1.0",
 			Permissions: PluginPermissions{
 				Network: &NetworkPermissions{Allow: []string{"*.example.com", "api.example.com"}},
 				Secrets: []string{"sk_live_abc123=="},

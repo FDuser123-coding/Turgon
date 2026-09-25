@@ -1,7 +1,7 @@
 # The sales org, reached as a dedicated integration user with the OAuth 2.0
 # JWT bearer flow. The secret holds loginUrl, clientId, username and the
 # user's private key (see pkg/connector/salesforce.Credentials).
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: Connection
 metadata: { name: salesforce-prod }
 spec:

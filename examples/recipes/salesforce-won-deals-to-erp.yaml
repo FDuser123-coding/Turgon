@@ -1,7 +1,7 @@
 # A saga across two systems: a won deal becomes an ERP sales order, and the
 # ERP order number is written back to the opportunity. If the write-back
 # fails, the ERP order is cancelled.
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: Recipe
 metadata:
   name: salesforce-won-deals-to-erp

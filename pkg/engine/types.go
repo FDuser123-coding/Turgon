@@ -17,9 +17,9 @@ import (
 
 // Workflow, signal and query names.
 const (
-	WorkflowName   = "porter.integration"
-	SignalApproval = "porter.approval"
-	QueryPending   = "porter.pending"
+	WorkflowName   = "turgon.integration"
+	SignalApproval = "turgon.approval"
+	QueryPending   = "turgon.pending"
 )
 
 // Error types reported by activities. Temporal does not retry them.

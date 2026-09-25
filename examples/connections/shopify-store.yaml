@@ -1,0 +1,49 @@
+# The web shop on Shopify, through the Admin REST API with a custom app's
+# access token (the secret). New orders are read with since_id; the ERP
+# order number is written back into the order's note.
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata: { name: shopify-store }
+spec:
+  connector: rest@^1
+  secretRef: openbao://shopify-store/token
+  entities: [Order, Customer]
+  events:
+    - { name: Order.Created, entity: Order, interface: polling }
+  operations:
+    - { name: get-order, entity: Order, direction: read, interface: rest-api, risk: read }
+    - { name: get-customer, entity: Customer, direction: read, interface: rest-api, risk: read }
+    - { name: update-order, entity: Order, direction: write, interface: rest-api, risk: low, compensation: restore-order }
+    - { name: restore-order, entity: Order, direction: write, interface: rest-api, risk: low }
+  config:
+    baseURL: https://turgon-demo.myshopify.com/admin/api/2026-07
+    auth: { type: header, header: X-Shopify-Access-Token }
+    checkPath: /shop.json
+    events:
+      Order.Created:
+        path: /orders.json
+        params: { since_id: "{{position}}", limit: "{{limit}}", status: any }
+        items: orders
+    operations:
+      get-order:
+        method: GET
+        path: /orders/{{id}}.json
+        result: order
+        fields: { name: number, email: email, total_price: total, financial_status: paymentStatus, note: note }
+      get-customer:
+        method: GET
+        path: /customers/{{id}}.json
+        result: customer
+        fields: { email: email, first_name: firstName, last_name: lastName, orders_count: ordersCount }
+      update-order:
+        method: PUT
+        path: /orders/{{orderId}}.json
+        wrap: order
+        result: order
+        fields: { note: note }
+        capture: { path: "/orders/{{orderId}}.json", result: order }
+      restore-order:
+        method: PUT
+        path: /orders/{{orderId}}.json
+        wrap: order
+        restore: true

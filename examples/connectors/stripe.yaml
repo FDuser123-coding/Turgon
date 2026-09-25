@@ -1,4 +1,4 @@
-apiVersion: porter.dev/v1alpha1
+apiVersion: turgon.dev/v1alpha1
 kind: ConnectorManifest
 metadata:
   name: stripe

@@ -51,7 +51,7 @@ func New() *Server {
 		panic(err)
 	}
 	s := &Server{
-		Key: key, ClientID: "3MVG9test", Username: "porter-integration@example.com", PageSize: 2000,
+		Key: key, ClientID: "3MVG9test", Username: "turgon-integration@example.com", PageSize: 2000,
 		records: map[string]map[string]map[string]any{}, tokens: map[string]bool{}, cursors: map[string][]map[string]any{},
 	}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
