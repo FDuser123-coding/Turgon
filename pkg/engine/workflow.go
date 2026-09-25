@@ -59,17 +59,23 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 
 	var result RunResult
 	var done []committedWrite
+	failedStep := ""
 	fail := func(err error) (RunResult, error) {
+		if n, ok := stewardNeeded(err); ok {
+			tell(ctx, in.Workflow.Name, n)
+		}
 		if len(done) == 0 {
 			return result, err
 		}
 		logger.Warn("step failed; compensating committed writes", "error", err, "writes", len(done))
 		var errs []error
+		var causes []string
 		for i := len(done) - 1; i >= 0; i-- {
 			w := done[i]
 			cerr := workflow.ExecuteActivity(ctx, a.Compensate, CompensateInput{Request: w.request, Result: w.result}).Get(ctx, nil)
 			if cerr != nil {
 				errs = append(errs, fmt.Errorf("compensate %s: %w", w.step, cerr))
+				causes = append(causes, fmt.Sprintf("undo %s: %s", w.step, cause(cerr)))
 			}
 		}
 		if len(errs) == 0 {
@@ -77,12 +83,14 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			return result, err
 		}
 		// Some writes could not be undone; an operator must act.
+		tell(ctx, in.Workflow.Name, compensationFailed(failedStep, cause(err), causes))
 		return result, temporal.NewNonRetryableApplicationError(
 			fmt.Sprintf("step failed and %d compensation(s) failed: %v", len(errs), errors.Join(errs...)),
 			ErrTypeCompensationFailed, err)
 	}
 
 	for _, step := range in.Workflow.Steps {
+		failedStep = step.Name
 		switch {
 		// Results decode into a fresh map: decoding into doc would merge
 		// keys into it (and into source, which doc starts as).
@@ -120,7 +128,11 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 					Step: step.Name, Digest: RequestDigest(prep.Request), Request: prep.Request,
 					Preview: prep.Prepared.Preview, Reasons: prep.Prepared.Decision.Reasons, Since: workflow.Now(ctx),
 				}
+				tell(ctx, in.Workflow.Name, approvalPending(*pending, pending.Since.Add(timeout)))
 				approval = awaitApproval(ctx, approvals, *pending, timeout)
+				if approval.By == approvalTimeoutActor {
+					tell(ctx, in.Workflow.Name, approvalTimedOut(*pending))
+				}
 				pending = nil
 			}
 
@@ -161,6 +173,9 @@ func RequestDigest(req writeguard.Request) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// approvalTimeoutActor rejects approvals nobody answered in time.
+const approvalTimeoutActor = "turgon/approval-timeout"
+
 // awaitApproval blocks until a decision for the pending request arrives or
 // the timeout passes; a timeout is recorded as a rejection. Signals for
 // another step or another version of the request are ignored, so a decision
@@ -187,7 +202,7 @@ func awaitApproval(ctx workflow.Context, ch workflow.ReceiveChannel, p PendingAp
 			got = &policy.Approval{Status: status, By: sig.By, Note: sig.Note}
 		})
 		sel.AddFuture(timer, func(workflow.Future) {
-			got = &policy.Approval{Status: policy.ApprovalRejected, By: "turgon/approval-timeout"}
+			got = &policy.Approval{Status: policy.ApprovalRejected, By: approvalTimeoutActor}
 		})
 		sel.Select(ctx)
 	}

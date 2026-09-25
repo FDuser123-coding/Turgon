@@ -43,6 +43,10 @@ spec:
             {{- end }}
           env:
             {{- include "turgon.commonEnv" $ | nindent 12 }}
+            {{- with $.Values.workers.consoleURL }}
+            - name: TURGON_CONSOLE_URL
+              value: {{ . | quote }}
+            {{- end }}
           {{- with $.Values.workers.secretEnvFrom }}
           envFrom:
             {{- range . }}

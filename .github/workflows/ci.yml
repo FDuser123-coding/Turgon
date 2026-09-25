@@ -104,7 +104,8 @@ jobs:
                 --set 'agents.gateway.audiences={turgon}' --set agents.gateway.ingress.enabled=true
                 --set agents.gateway.ingress.host=agents.example.com
                 --set-file specs.stripe-payments-to-erp=/tmp/stripe.json --set workers.webhooks.enabled=true
-                --set workers.webhooks.ingress.enabled=true --set workers.webhooks.ingress.host=hooks.example.com)
+                --set workers.webhooks.ingress.enabled=true --set workers.webhooks.ingress.host=hooks.example.com
+                --set workers.consoleURL=https://turgon.example.com)
           helm lint deploy/helm/turgon "${args[@]}"
           helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" > /tmp/rendered.yaml
           ~/go/bin/kubeconform -strict -summary -kubernetes-version 1.31.0 \

@@ -205,6 +205,33 @@ In Kubernetes, `workers.webhooks.enabled` opens the port on each worker behind a
 Each spec runs on its own Temporal task queue (`turgon-<spec name>`), so workers for different
 specs can share a cluster.
 
+### Notifications
+
+Workers tell people when a run needs them, so nobody has to watch the console:
+
+| Event | Who acts | Link |
+|---|---|---|
+| A write waits for approval (a recipe's, or one an agent asked for: the message names the agent and the user it acts for) | an approver, before the deadline shown | the run |
+| Nobody decided in time (the write was rejected) | an approver, who can retry the run | the run |
+| A record matches no master record | a data steward | the steward queue |
+| A step failed and its earlier writes could not be undone | an operator, to reconcile | the run |
+
+Channels are set with environment variables, because webhook URLs are credentials:
+`TURGON_NOTIFY_SLACK_WEBHOOK_URL` (a Slack incoming webhook, Block Kit message with an "Open
+in Turgon" button), `TURGON_NOTIFY_TEAMS_WEBHOOK_URL` (a Teams workflow webhook, Adaptive
+Card) and `TURGON_NOTIFY_WEBHOOK_URL` with `TURGON_NOTIFY_WEBHOOK_SECRET` (the notification
+as JSON, signed `Turgon-Signature: t=…,v1=<HMAC-SHA256 of "t.body">`). `--console-url` (or
+`TURGON_CONSOLE_URL`, `workers.consoleURL` in the chart) makes the links.
+
+- Messages say what waits and where to act, never payload values: customer data stays in the
+  console, behind its sign-in. Values that do appear are escaped, so a source record cannot
+  inject Slack mentions or links.
+- Notifying is best effort: a channel that keeps failing is retried a few times and then
+  skipped, and the run goes on. A chat outage never holds up a write.
+- Runs that were already waiting when workers were upgraded carry on without notifying
+  (a workflow version gate); `pkg/engine/testdata/histories` holds histories recorded from
+  real runs before and after the change, which the tests replay against the current code.
+
 ### Console
 
 `turgon console` serves the web console: the approval queue (each pending write with its
@@ -431,6 +458,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references, the webhook inbox |
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
 | `pkg/agent` | §7.7, §8 | MCP server and A2A agent: business read tools, and write tools that start approval-gated writes; gateway identity, per-call policy and audit; agentgateway configuration |
+| `pkg/notify` | §7.3, §8 | Notifications when a run needs a person: Slack, Microsoft Teams, or a signed JSON webhook, with console links |
 | `pkg/identity` | §7.3 | Record matching: normalized identifying attributes, Fellegi-Sunter scoring with Jaro-Winkler names, suggestions and the automatic-match decision |
 | `pkg/console` | §7.3, §12 | Console API (runs, approvals, the data-steward queue, audit, catalog), proxy/dev authentication, embedded web app |
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |

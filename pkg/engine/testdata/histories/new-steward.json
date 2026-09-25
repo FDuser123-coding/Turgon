@@ -1,0 +1,564 @@
+{
+  "events": [
+    {
+      "eventId": "1",
+      "eventTime": "2026-09-25T14:40:06.420725701Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+      "taskId": "1048882",
+      "workflowExecutionStartedEventAttributes": {
+        "workflowType": {
+          "name": "turgon.integration"
+        },
+        "taskQueue": {
+          "name": "turgon-hubspot-won-deals-to-erp",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJzcGVjRGlnZXN0Ijoic2hhMjU2OjZjMmQzN2FkYjE2ODlhMzkzYWYyZmIyZTgzZDgyM2YzNzI3MzMyZGM2MzBiY2Q0Y2M1OTA2NmVkOTM2NjQ5ZDYiLCJ3b3JrZmxvdyI6eyJuYW1lIjoiaHVic3BvdC13b24tZGVhbHMtdG8tZXJwIiwidHJpZ2dlciI6eyJlbmRwb2ludCI6Imh1YnNwb3QtY3JtIiwiY29ubmVjdG9yIjoicmVzdCIsImV2ZW50IjoiRGVhbC5Xb24iLCJpbnRlcmZhY2UiOiJwb2xsaW5nIiwidG9waWMiOiJ0dXJnb24uaHVic3BvdC1jcm0uZGVhbC13b24ifSwic3RlcHMiOlt7Im5hbWUiOiIwMS1tYXAiLCJtYXAiOnsibWFwcGluZyI6Imh1YnNwb3QtZGVhbC10by1vcmRlckAxLjAuMCIsImZyb20iOiJodWJzcG90LWNybS5EZWFsIiwidG8iOiJtb2RlbC5TYWxlc09yZGVyIiwiZmllbGRzIjp7ImN1cnJlbmN5IjoiJHVwcGVyY2FzZShwcm9wZXJ0aWVzLmRlYWxfY3VycmVuY3lfY29kZSkiLCJjdXN0b21lclJlZiI6IiRsb3dlcmNhc2UocHJvcGVydGllcy5jdXN0b21lcl9lbWFpbCkiLCJleHRlcm5hbElkIjoiJ0hVQlNQT1QtJyBcdTAwMjYgaWQiLCJodWJzcG90SWQiOiJpZCIsIm5ldFZhbHVlIjoiJG51bWJlcihwcm9wZXJ0aWVzLmFtb3VudCkiLCJvcmRlckRhdGUiOiIkc3Vic3RyaW5nKHByb3BlcnRpZXMuY2xvc2VkYXRlLCAwLCAxMCkifX19LHsibmFtZSI6IjAyLXJlc29sdmUiLCJyZXNvbHZlIjp7ImVudGl0eSI6Im1vZGVsLkN1c3RvbWVyIiwic3RyYXRlZ3kiOiJwcm9iYWJpbGlzdGljIiwiYXV0b01hdGNoQWJvdmUiOjAuOTUsIm1hdGNoIjpbeyJmaWVsZCI6ImN1c3RvbWVyUmVmIiwia2luZCI6ImVtYWlsIn0seyJmaWVsZCI6ImN1c3RvbWVyUmVmIiwia2luZCI6ImRvbWFpbiJ9XX19LHsibmFtZSI6IjAzLXdyaXRlIiwid3JpdGUiOnsiZW5kcG9pbnQiOiJlcnAtZGIiLCJjb25uZWN0b3IiOiJwb3N0Z3JlcyIsIm9wZXJhdGlvbiI6ImNyZWF0ZS1zYWxlcy1vcmRlciIsImludGVyZmFjZSI6ImpkYmMiLCJyaXNrIjoiaGlnaCIsImVudGl0eSI6IlNhbGVzT3JkZXIiLCJpZGVtcG90ZW5jeUtleSI6Imh1YnNwb3QtZGVhbC17eyBzb3VyY2UuaWQgfX0iLCJzaW11bGF0aW9uIjoicm9sbGJhY2siLCJhcHByb3ZhbCI6InBvbGljeSIsImNvbXBlbnNhdGlvbiI6ImNhbmNlbC1zYWxlcy1vcmRlciIsIm91dHB1dCI6ImVycE9yZGVyIn19LHsibmFtZSI6IjA0LW1hcCIsIm1hcCI6eyJtYXBwaW5nIjoic2FsZXMtb3JkZXItdG8taHVic3BvdC1saW5rQDEuMC4wIiwiZnJvbSI6Im1vZGVsLlNhbGVzT3JkZXIiLCJ0byI6Im1vZGVsLkRlYWwiLCJmaWVsZHMiOnsiZGVhbElkIjoiaHVic3BvdElkIiwiZXJwT3JkZXJOdW1iZXIiOiIkc3RyaW5nKGVycE9yZGVyLmlkKSJ9fX0seyJuYW1lIjoiMDUtd3JpdGUiLCJ3cml0ZSI6eyJlbmRwb2ludCI6Imh1YnNwb3QtY3JtIiwiY29ubmVjdG9yIjoicmVzdCIsIm9wZXJhdGlvbiI6ImxpbmstZGVhbCIsImludGVyZmFjZSI6InJlc3QtYXBpIiwicmlzayI6ImxvdyIsImVudGl0eSI6IkRlYWwiLCJpZGVtcG90ZW5jeUtleSI6Imh1YnNwb3QtZGVhbC17eyBzb3VyY2UuaWQgfX0iLCJzaW11bGF0aW9uIjoicHJldmlldyIsImFwcHJvdmFsIjoicG9saWN5IiwiY29tcGVuc2F0aW9uIjoidW5saW5rLWRlYWwifX1dLCJzbG8iOnsicDk1TGF0ZW5jeSI6IjEwcyJ9LCJwb2xpY2llcyI6WyJ3cml0ZWJhY2stZGVmYXVsdCJdfSwiZXZlbnQiOnsiaWQiOiIxNzkwMzQ3MTMwNCIsInBvc2l0aW9uIjoxNzkwMzQ3MTMwOTA0LCJuYW1lIjoiRGVhbC5Xb24iLCJwYXlsb2FkIjp7ImFyY2hpdmVkIjpmYWxzZSwiY3JlYXRlZEF0IjoiMjAyNi0wOS0yNVQxNDozODo1MC45MDRaIiwiaWQiOiIxNzkwMzQ3MTMwNCIsInByb3BlcnRpZXMiOnsiYW1vdW50IjoiMzAwIiwiY2xvc2VkYXRlIjoiMjAyNi0wOS0yNVQxNDo0MDowNS41NDhaIiwiY3JlYXRlZGF0ZSI6IjIwMjYtMDktMjVUMTQ6Mzg6NTAuOTA0WiIsImN1c3RvbWVyX2VtYWlsIjoic29tZW9uZUBuZXdjby5leGFtcGxlIiwiZGVhbF9jdXJyZW5jeV9jb2RlIjoiRVVSIiwiZGVhbG5hbWUiOiJEZWFsIGZvciBzb21lb25lQG5ld2NvLmV4YW1wbGUiLCJkZWFsc3RhZ2UiOiJjbG9zZWR3b24iLCJoc19sYXN0bW9kaWZpZWRkYXRlIjoiMjAyNi0wOS0yNVQxNDozODo1MC45MDRaIiwiaHNfb2JqZWN0X2lkIjoiMTc5MDM0NzEzMDQifSwidXBkYXRlZEF0IjoiMjAyNi0wOS0yNVQxNDozODo1MC45MDRaIn19LCJhcHByb3ZhbFRpbWVvdXQiOjI1OTIwMDAwMDAwMDAwMCwidGFza1F1ZXVlIjoidHVyZ29uLWh1YnNwb3Qtd29uLWRlYWxzLXRvLWVycCJ9"
+            }
+          ]
+        },
+        "workflowExecutionTimeout": "0s",
+        "workflowRunTimeout": "0s",
+        "workflowTaskTimeout": "10s",
+        "originalExecutionRunId": "01a0d902-5f14-7b0f-996c-ffd07f978703",
+        "identity": "2334@vm@",
+        "firstExecutionRunId": "01a0d902-5f14-7b0f-996c-ffd07f978703",
+        "attempt": 1,
+        "firstWorkflowTaskBackoff": "0s",
+        "header": {},
+        "workflowId": "hubspot-won-deals-to-erp/17903471304"
+      }
+    },
+    {
+      "eventId": "2",
+      "eventTime": "2026-09-25T14:40:06.420777445Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048883",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "turgon-hubspot-won-deals-to-erp",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "3",
+      "eventTime": "2026-09-25T14:40:06.435626702Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048896",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "2",
+        "identity": "2334@vm@",
+        "requestId": "f0977e91-1497-443e-acc1-5f8d0fe87047",
+        "historySizeBytes": "2621",
+        "workerVersion": {
+          "buildId": "5a30f9669f11edf89f02a35706c5b3d4"
+        }
+      }
+    },
+    {
+      "eventId": "4",
+      "eventTime": "2026-09-25T14:40:06.444876607Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048906",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "2",
+        "startedEventId": "3",
+        "identity": "2334@vm@",
+        "workerVersion": {
+          "buildId": "5a30f9669f11edf89f02a35706c5b3d4"
+        },
+        "sdkMetadata": {
+          "langUsedFlags": [
+            3
+          ],
+          "sdkName": "temporal-go",
+          "sdkVersion": "1.45.0"
+        },
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "5",
+      "eventTime": "2026-09-25T14:40:06.444929679Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId": "1048907",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "5",
+        "activityType": {
+          "name": "Map"
+        },
+        "taskQueue": {
+          "name": "turgon-hubspot-won-deals-to-erp",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {},
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJjb25maWciOnsibWFwcGluZyI6Imh1YnNwb3QtZGVhbC10by1vcmRlckAxLjAuMCIsImZyb20iOiJodWJzcG90LWNybS5EZWFsIiwidG8iOiJtb2RlbC5TYWxlc09yZGVyIiwiZmllbGRzIjp7ImN1cnJlbmN5IjoiJHVwcGVyY2FzZShwcm9wZXJ0aWVzLmRlYWxfY3VycmVuY3lfY29kZSkiLCJjdXN0b21lclJlZiI6IiRsb3dlcmNhc2UocHJvcGVydGllcy5jdXN0b21lcl9lbWFpbCkiLCJleHRlcm5hbElkIjoiJ0hVQlNQT1QtJyBcdTAwMjYgaWQiLCJodWJzcG90SWQiOiJpZCIsIm5ldFZhbHVlIjoiJG51bWJlcihwcm9wZXJ0aWVzLmFtb3VudCkiLCJvcmRlckRhdGUiOiIkc3Vic3RyaW5nKHByb3BlcnRpZXMuY2xvc2VkYXRlLCAwLCAxMCkifX0sImRvYyI6eyJhcmNoaXZlZCI6ZmFsc2UsImNyZWF0ZWRBdCI6IjIwMjYtMDktMjVUMTQ6Mzg6NTAuOTA0WiIsImlkIjoiMTc5MDM0NzEzMDQiLCJwcm9wZXJ0aWVzIjp7ImFtb3VudCI6IjMwMCIsImNsb3NlZGF0ZSI6IjIwMjYtMDktMjVUMTQ6NDA6MDUuNTQ4WiIsImNyZWF0ZWRhdGUiOiIyMDI2LTA5LTI1VDE0OjM4OjUwLjkwNFoiLCJjdXN0b21lcl9lbWFpbCI6InNvbWVvbmVAbmV3Y28uZXhhbXBsZSIsImRlYWxfY3VycmVuY3lfY29kZSI6IkVVUiIsImRlYWxuYW1lIjoiRGVhbCBmb3Igc29tZW9uZUBuZXdjby5leGFtcGxlIiwiZGVhbHN0YWdlIjoiY2xvc2Vkd29uIiwiaHNfbGFzdG1vZGlmaWVkZGF0ZSI6IjIwMjYtMDktMjVUMTQ6Mzg6NTAuOTA0WiIsImhzX29iamVjdF9pZCI6IjE3OTAzNDcxMzA0In0sInVwZGF0ZWRBdCI6IjIwMjYtMDktMjVUMTQ6Mzg6NTAuOTA0WiJ9fQ=="
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "0s",
+        "scheduleToStartTimeout": "0s",
+        "startToCloseTimeout": "60s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "4",
+        "retryPolicy": {
+          "initialInterval": "1s",
+          "backoffCoefficient": 2,
+          "maximumInterval": "60s",
+          "maximumAttempts": 8,
+          "nonRetryableErrorTypes": [
+            "TurgonDenied",
+            "TurgonRejected",
+            "TurgonInvalid",
+            "TurgonUnresolved",
+            "TurgonMapping"
+          ]
+        },
+        "useWorkflowBuildId": true
+      }
+    },
+    {
+      "eventId": "6",
+      "eventTime": "2026-09-25T14:40:06.448979525Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId": "1048917",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "5",
+        "identity": "2334@vm@",
+        "requestId": "ad00f45c-13d1-48ec-afc9-153067c43eed",
+        "attempt": 1,
+        "workerVersion": {
+          "buildId": "5a30f9669f11edf89f02a35706c5b3d4"
+        }
+      }
+    },
+    {
+      "eventId": "7",
+      "eventTime": "2026-09-25T14:40:06.459570891Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId": "1048918",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJjdXJyZW5jeSI6IkVVUiIsImN1c3RvbWVyUmVmIjoic29tZW9uZUBuZXdjby5leGFtcGxlIiwiZXh0ZXJuYWxJZCI6IkhVQlNQT1QtMTc5MDM0NzEzMDQiLCJodWJzcG90SWQiOiIxNzkwMzQ3MTMwNCIsIm5ldFZhbHVlIjozMDAsIm9yZGVyRGF0ZSI6IjIwMjYtMDktMjUifQ=="
+            }
+          ]
+        },
+        "scheduledEventId": "5",
+        "startedEventId": "6",
+        "identity": "2334@vm@"
+      }
+    },
+    {
+      "eventId": "8",
+      "eventTime": "2026-09-25T14:40:06.459576328Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048919",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "vm:75b1318c-54fe-4840-bad9-5fd05e2fe6af",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "turgon-hubspot-won-deals-to-erp"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "9",
+      "eventTime": "2026-09-25T14:40:06.463744144Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048927",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "8",
+        "identity": "2334@vm@",
+        "requestId": "b81d9bd0-0d7f-4ed4-86a0-963ae19c72ff",
+        "historySizeBytes": "4335",
+        "workerVersion": {
+          "buildId": "5a30f9669f11edf89f02a35706c5b3d4"
+        }
+      }
+    },
+    {
+      "eventId": "10",
+      "eventTime": "2026-09-25T14:40:06.473830750Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048939",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "8",
+        "startedEventId": "9",
+        "identity": "2334@vm@",
+        "workerVersion": {
+          "buildId": "5a30f9669f11edf89f02a35706c5b3d4"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "11",
+      "eventTime": "2026-09-25T14:40:06.473871762Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId": "1048940",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "11",
+        "activityType": {
+          "name": "Resolve"
+        },
+        "taskQueue": {
+          "name": "turgon-hubspot-won-deals-to-erp",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {},
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJjb25maWciOnsiZW50aXR5IjoibW9kZWwuQ3VzdG9tZXIiLCJzdHJhdGVneSI6InByb2JhYmlsaXN0aWMiLCJhdXRvTWF0Y2hBYm92ZSI6MC45NSwibWF0Y2giOlt7ImZpZWxkIjoiY3VzdG9tZXJSZWYiLCJraW5kIjoiZW1haWwifSx7ImZpZWxkIjoiY3VzdG9tZXJSZWYiLCJraW5kIjoiZG9tYWluIn1dfSwic3lzdGVtIjoiaHVic3BvdC1jcm0iLCJkb2MiOnsiY3VycmVuY3kiOiJFVVIiLCJjdXN0b21lclJlZiI6InNvbWVvbmVAbmV3Y28uZXhhbXBsZSIsImV4dGVybmFsSWQiOiJIVUJTUE9ULTE3OTAzNDcxMzA0IiwiaHVic3BvdElkIjoiMTc5MDM0NzEzMDQiLCJuZXRWYWx1ZSI6MzAwLCJvcmRlckRhdGUiOiIyMDI2LTA5LTI1In19"
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "0s",
+        "scheduleToStartTimeout": "0s",
+        "startToCloseTimeout": "60s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "10",
+        "retryPolicy": {
+          "initialInterval": "1s",
+          "backoffCoefficient": 2,
+          "maximumInterval": "60s",
+          "maximumAttempts": 8,
+          "nonRetryableErrorTypes": [
+            "TurgonDenied",
+            "TurgonRejected",
+            "TurgonInvalid",
+            "TurgonUnresolved",
+            "TurgonMapping"
+          ]
+        },
+        "useWorkflowBuildId": true
+      }
+    },
+    {
+      "eventId": "12",
+      "eventTime": "2026-09-25T14:40:06.481115175Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId": "1048953",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "11",
+        "identity": "2334@vm@",
+        "requestId": "689a772b-18d3-43f7-91db-51cb866b35f4",
+        "attempt": 1,
+        "workerVersion": {
+          "buildId": "5a30f9669f11edf89f02a35706c5b3d4"
+        }
+      }
+    },
+    {
+      "eventId": "13",
+      "eventTime": "2026-09-25T14:40:06.490623722Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_FAILED",
+      "taskId": "1048954",
+      "activityTaskFailedEventAttributes": {
+        "failure": {
+          "message": "Customer \"someone@newco.example\" from hubspot-crm has no master record; it needs a data steward",
+          "source": "GoSDK",
+          "applicationFailureInfo": {
+            "type": "TurgonUnresolved",
+            "nonRetryable": true,
+            "details": {
+              "payloads": [
+                {
+                  "metadata": {
+                    "encoding": "anNvbi9wbGFpbg=="
+                  },
+                  "data": "eyJlbnRpdHkiOiJDdXN0b21lciIsInN5c3RlbSI6Imh1YnNwb3QtY3JtIiwicmVmIjoic29tZW9uZUBuZXdjby5leGFtcGxlIiwiYXR0cmlidXRlcyI6eyJkb21haW4iOiJuZXdjby5leGFtcGxlIiwiZW1haWwiOiJzb21lb25lQG5ld2NvLmV4YW1wbGUifX0="
+                }
+              ]
+            }
+          }
+        },
+        "scheduledEventId": "11",
+        "startedEventId": "12",
+        "identity": "2334@vm@",
+        "retryState": "RETRY_STATE_NON_RETRYABLE_FAILURE"
+      }
+    },
+    {
+      "eventId": "14",
+      "eventTime": "2026-09-25T14:40:06.490629381Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048955",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "vm:75b1318c-54fe-4840-bad9-5fd05e2fe6af",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "turgon-hubspot-won-deals-to-erp"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "15",
+      "eventTime": "2026-09-25T14:40:06.497146583Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048961",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "14",
+        "identity": "2334@vm@",
+        "requestId": "fc5d2d38-92be-4050-a9fc-729cdb203416",
+        "historySizeBytes": "5700",
+        "workerVersion": {
+          "buildId": "5a30f9669f11edf89f02a35706c5b3d4"
+        }
+      }
+    },
+    {
+      "eventId": "16",
+      "eventTime": "2026-09-25T14:40:06.504106541Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048971",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "14",
+        "startedEventId": "15",
+        "identity": "2334@vm@",
+        "workerVersion": {
+          "buildId": "5a30f9669f11edf89f02a35706c5b3d4"
+        },
+        "sdkMetadata": {
+          "langUsedFlags": [
+            1
+          ]
+        },
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "17",
+      "eventTime": "2026-09-25T14:40:06.504179124Z",
+      "eventType": "EVENT_TYPE_MARKER_RECORDED",
+      "taskId": "1048972",
+      "markerRecordedEventAttributes": {
+        "markerName": "Version",
+        "details": {
+          "change-id": {
+            "payloads": [
+              {
+                "metadata": {
+                  "encoding": "anNvbi9wbGFpbg=="
+                },
+                "data": "Im5vdGlmeS1wZW9wbGUi"
+              }
+            ]
+          },
+          "version": {
+            "payloads": [
+              {
+                "metadata": {
+                  "encoding": "anNvbi9wbGFpbg=="
+                },
+                "data": "MQ=="
+              }
+            ]
+          }
+        },
+        "workflowTaskCompletedEventId": "16"
+      }
+    },
+    {
+      "eventId": "18",
+      "eventTime": "2026-09-25T14:40:06.506382807Z",
+      "eventType": "EVENT_TYPE_UPSERT_WORKFLOW_SEARCH_ATTRIBUTES",
+      "taskId": "1048973",
+      "upsertWorkflowSearchAttributesEventAttributes": {
+        "workflowTaskCompletedEventId": "16",
+        "searchAttributes": {
+          "indexedFields": {
+            "TemporalChangeVersion": {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg==",
+                "type": "S2V5d29yZExpc3Q="
+              },
+              "data": "WyJub3RpZnktcGVvcGxlLTEiXQ=="
+            }
+          }
+        }
+      }
+    },
+    {
+      "eventId": "19",
+      "eventTime": "2026-09-25T14:40:06.506415278Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId": "1048974",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "19",
+        "activityType": {
+          "name": "Notify"
+        },
+        "taskQueue": {
+          "name": "turgon-hubspot-won-deals-to-erp",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {},
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJraW5kIjoic3Rld2FyZC5uZWVkZWQiLCJ3b3JrZmxvdyI6Imh1YnNwb3Qtd29uLWRlYWxzLXRvLWVycCIsInJ1bklkIjoiaHVic3BvdC13b24tZGVhbHMtdG8tZXJwLzE3OTAzNDcxMzA0IiwidGl0bGUiOiJBIEN1c3RvbWVyIGZyb20gaHVic3BvdC1jcm0gbmVlZHMgYSBkYXRhIHN0ZXdhcmQiLCJ0ZXh0IjoiVGhlIHJlY29yZCBtYXRjaGVzIG5vIG1hc3RlciByZWNvcmQgd2l0aCBlbm91Z2ggY2VydGFpbnR5LiBMaW5rIGl0IGluIHRoZSBzdGV3YXJkIHF1ZXVlIGFuZCB0aGUgcnVuIGNvbnRpbnVlcy4iLCJmYWN0cyI6W3sibmFtZSI6IkVudGl0eSIsInZhbHVlIjoiQ3VzdG9tZXIifSx7Im5hbWUiOiJTdWdnZXN0aW9ucyIsInZhbHVlIjoiMCJ9LHsibmFtZSI6IlN5c3RlbSIsInZhbHVlIjoiaHVic3BvdC1jcm0ifV0sImF0IjoiMjAyNi0wOS0yNVQxNDo0MDowNi40OTcxNDY1ODNaIn0="
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "0s",
+        "scheduleToStartTimeout": "0s",
+        "startToCloseTimeout": "30s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "16",
+        "retryPolicy": {
+          "initialInterval": "2s",
+          "backoffCoefficient": 2,
+          "maximumInterval": "30s",
+          "maximumAttempts": 5
+        },
+        "useWorkflowBuildId": true
+      }
+    },
+    {
+      "eventId": "20",
+      "eventTime": "2026-09-25T14:40:06.510578609Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId": "1048991",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "19",
+        "identity": "2334@vm@",
+        "requestId": "27e55705-f7d0-49cc-901e-1911342afc54",
+        "attempt": 1,
+        "workerVersion": {
+          "buildId": "5a30f9669f11edf89f02a35706c5b3d4"
+        }
+      }
+    },
+    {
+      "eventId": "21",
+      "eventTime": "2026-09-25T14:40:06.522722670Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId": "1048992",
+      "activityTaskCompletedEventAttributes": {
+        "scheduledEventId": "19",
+        "startedEventId": "20",
+        "identity": "2334@vm@"
+      }
+    },
+    {
+      "eventId": "22",
+      "eventTime": "2026-09-25T14:40:06.522728052Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048993",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "vm:75b1318c-54fe-4840-bad9-5fd05e2fe6af",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "turgon-hubspot-won-deals-to-erp"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "23",
+      "eventTime": "2026-09-25T14:40:06.531741865Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048998",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "22",
+        "identity": "2334@vm@",
+        "requestId": "2f05e58a-2c7d-4244-a25f-086426b5e092",
+        "historySizeBytes": "7004",
+        "workerVersion": {
+          "buildId": "5a30f9669f11edf89f02a35706c5b3d4"
+        }
+      }
+    },
+    {
+      "eventId": "24",
+      "eventTime": "2026-09-25T14:40:06.547117823Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1049009",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "22",
+        "startedEventId": "23",
+        "identity": "2334@vm@",
+        "workerVersion": {
+          "buildId": "5a30f9669f11edf89f02a35706c5b3d4"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "25",
+      "eventTime": "2026-09-25T14:40:06.547197515Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_FAILED",
+      "taskId": "1049010",
+      "workflowExecutionFailedEventAttributes": {
+        "failure": {
+          "message": "activity error",
+          "source": "GoSDK",
+          "cause": {
+            "message": "Customer \"someone@newco.example\" from hubspot-crm has no master record; it needs a data steward",
+            "source": "GoSDK",
+            "applicationFailureInfo": {
+              "type": "TurgonUnresolved",
+              "nonRetryable": true,
+              "details": {
+                "payloads": [
+                  {
+                    "metadata": {
+                      "encoding": "anNvbi9wbGFpbg=="
+                    },
+                    "data": "eyJlbnRpdHkiOiJDdXN0b21lciIsInN5c3RlbSI6Imh1YnNwb3QtY3JtIiwicmVmIjoic29tZW9uZUBuZXdjby5leGFtcGxlIiwiYXR0cmlidXRlcyI6eyJkb21haW4iOiJuZXdjby5leGFtcGxlIiwiZW1haWwiOiJzb21lb25lQG5ld2NvLmV4YW1wbGUifX0="
+                  }
+                ]
+              }
+            }
+          },
+          "activityFailureInfo": {
+            "scheduledEventId": "11",
+            "startedEventId": "12",
+            "identity": "2334@vm@",
+            "activityType": {
+              "name": "Resolve"
+            },
+            "activityId": "11",
+            "retryState": "RETRY_STATE_NON_RETRYABLE_FAILURE"
+          }
+        },
+        "retryState": "RETRY_STATE_RETRY_POLICY_NOT_SET",
+        "workflowTaskCompletedEventId": "24"
+      }
+    }
+  ]
+}

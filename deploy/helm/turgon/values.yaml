@@ -35,8 +35,14 @@ workers:
   pollInterval: 2s
   approvalTimeout: 72h
   # Secrets whose keys become environment variables. Connection secrets are
-  # read from TURGON_SECRET_* variables (see `turgon secrets <spec>`).
+  # read from TURGON_SECRET_* variables (see `turgon secrets <spec>`), and
+  # notification channels from TURGON_NOTIFY_SLACK_WEBHOOK_URL,
+  # TURGON_NOTIFY_TEAMS_WEBHOOK_URL or TURGON_NOTIFY_WEBHOOK_URL with
+  # TURGON_NOTIFY_WEBHOOK_SECRET: workers tell people when an approval
+  # waits, a record needs a steward, or writes could not be undone.
   secretEnvFrom: []
+  # The console's public URL, linked from notifications.
+  consoleURL: ""
   resources:
     requests: { cpu: 100m, memory: 128Mi }
     limits: { memory: 512Mi }
