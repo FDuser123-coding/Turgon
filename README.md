@@ -633,6 +633,55 @@ plain-language fix for each failure. `deploy/flux/turgon.yaml` shows pull-based 
 cosign verification and automatic rollback. The image is built by the `Dockerfile` (distroless,
 non-root, static binary).
 
+### Governance: signed specs, mapping review, trained matching
+
+**Signed runtime specs.** A compiled spec carries everything a worker enforces, including the
+recipe's OPA policy packs. Its digest only catches accidental changes: anyone who can edit the
+ConfigMap can loosen a policy and recompute the digest.
+- The pipeline that compiles specs signs them with an Ed25519 key. The signature covers the
+  name, the certification level and the digest.
+- Workers, MCP servers and the gateway config load only specs signed by a trusted key. Changing a
+  policy, or relabelling a spec's level, therefore has to go through that pipeline.
+- A spec may carry several signatures, for key rotation.
+
+```sh
+bin/turgon keygen --out pipeline                        # pipeline.key (secret store), pipeline.pub
+bin/turgon compile -c examples shop-orders-to-erp -o shop.json --sign-key pipeline.key
+bin/turgon --trusted-keys pipeline.pub run -s shop.json  # or TURGON_TRUSTED_KEYS; unsigned specs are refused
+helm upgrade turgon deploy/helm/turgon --reuse-values --set-file specSigning.trustedKeys=pipeline.pub
+```
+
+**Mapping review in the console.** Mapped fields below the confidence threshold wait in the
+catalog's review queue.
+- A data steward approves or rejects each one on the Catalog page. A rejection needs a reason, so
+  the mapping's author can fix it.
+- A decision holds for one expression of one mapping version: changing the expression puts the
+  field back in the queue.
+- Decisions are stored in Turgon's database and audited under the steward's name. Only fields
+  actually in the queue can be reviewed.
+- The console's reports apply the decisions. So does the compile pipeline, with
+  `turgon compile --reviews-db "$TURGON_DATABASE_URL"`: an approved field no longer blocks its
+  recipe, and a rejected one fails it with the steward's reason. The `approved: true` flag in
+  mapping files remains the GitOps alternative.
+
+**Identity matching trained per deployment.** Matching uses a Fellegi-Sunter model. How much
+"same company email domain" or "same name" says about two records depends on the data. For
+example, a marketplace that masks buyers behind one relay domain makes a shared domain nearly
+meaningless.
+
+`turgon identity train` estimates each comparison's weights from the deployment's own links:
+- records linked to one master record are matches, and records of different ones are not;
+- where data is thin, the estimates lean on the defaults;
+- both models are evaluated on held-out master records, and the trained one is stored only if it
+  is at least as precise.
+
+Resolve steps then use it, and the training is audited.
+
+```sh
+bin/turgon identity train --entity Customer --threshold 0.95 --dry-run   # report only
+bin/turgon identity train --entity Customer --threshold 0.95             # store for workers
+```
+
 ### Releases and verifying them
 
 Pushing a tag such as `v0.2.0` runs `.github/workflows/release.yml`. It tests, builds a multi-arch
@@ -737,6 +786,6 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 In rough roadmap order (§16, §19): SAP events by SAP Event Mesh in place of polling; Salesforce Pub/Sub API change capture and Bulk API reads;
 the Turgon operator; an appliance build (§11);
-Debezium change capture in place of outbox polling; training identity-matching weights per deployment, and an external Splink service; signed OPA bundles; the metadata
-graph and discovery; A2A streaming and push notifications; approving mapping fields from the console's review queue; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
+Debezium change capture in place of outbox polling; an external Splink service; the metadata
+graph and discovery; A2A streaming and push notifications; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

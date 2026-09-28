@@ -33,7 +33,7 @@ export function App() {
   else if (path === "/runs") page = <Runs />;
   else if (path.startsWith("/runs/")) page = <RunDetail id={decodeURIComponent(path.slice("/runs/".length))} user={user} />;
   else if (path === "/audit") page = <Audit />;
-  else if (path === "/catalog") page = <Catalog />;
+  else if (path === "/catalog") page = <Catalog user={user} />;
   else page = <p>Not found.</p>;
 
   const tab = (to: string, label: string, badge?: number) => {

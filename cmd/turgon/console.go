@@ -93,6 +93,7 @@ func consoleCmd() *cobra.Command {
 				}
 				// Stewards write cross-references, audited in the shared log.
 				cfg.Xref, cfg.Recorder = pgstore.New(pool), pgstore.NewAuditLog(pool)
+				cfg.Reviews = pgstore.New(pool).Reviews()
 				cfg.Retry = runs
 			}
 			for _, a := range auditLogs {

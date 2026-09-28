@@ -45,6 +45,9 @@ type Config struct {
 	Recorder audit.Recorder
 	// Retry lets operators start failed runs again (audited in Recorder).
 	Retry Retrier
+	// Reviews keeps stewards' decisions on the catalog's mapping review
+	// queue (audited in Recorder).
+	Reviews ReviewStore
 	// Assets overrides the embedded web app; for tests and development.
 	Assets fs.FS
 }
@@ -71,6 +74,7 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("GET /api/catalog", s.catalog)
 	s.mux.HandleFunc("GET /api/steward", s.stewardQueue)
 	s.mux.HandleFunc("POST /api/steward/links", s.stewardLink)
+	s.mux.HandleFunc("POST /api/reviews", s.reviewField)
 	s.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such endpoint")
 	})
@@ -354,7 +358,11 @@ func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, out)
 		return
 	}
-	v := verifier.New(cat, verifier.Options{})
+	opts, err := s.verifierOptions(r.Context())
+	if err != nil {
+		out.Error = "mapping reviews: " + err.Error()
+	}
+	v := verifier.New(cat, opts)
 	for _, obj := range cat.All() {
 		switch obj.GetTypeMeta().Kind {
 		case v1alpha1.KindRecipe, v1alpha1.KindStackBlueprint:
@@ -362,6 +370,26 @@ func (s *Server) catalog(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// queued returns the review queue of a recipe or blueprint, including its
+// children's (a blueprint's recipes).
+func queued(v *verifier.Verifier, obj v1alpha1.Object) []verifier.ReviewItem {
+	switch obj.GetTypeMeta().Kind {
+	case v1alpha1.KindRecipe, v1alpha1.KindStackBlueprint:
+	default:
+		return nil
+	}
+	var items []verifier.ReviewItem
+	var walk func(r *verifier.Report)
+	walk = func(r *verifier.Report) {
+		items = append(items, r.ReviewQueue...)
+		for _, c := range r.Children {
+			walk(c)
+		}
+	}
+	walk(v.Verify(obj))
+	return items
 }
 
 // static serves the single-page app, falling back to index.html.

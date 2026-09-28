@@ -113,6 +113,8 @@ jobs:
           go run ./cmd/turgon compile -c examples shop-orders-to-erp -o /tmp/shop.json
           go run ./cmd/turgon compile -c examples salesforce-won-deals-to-erp -o /tmp/sf.json
           go run ./cmd/turgon compile -c examples stripe-payments-to-erp -o /tmp/stripe.json
+          go run ./cmd/turgon keygen --out /tmp/ci-signing
+          go run ./cmd/turgon sign /tmp/shop.json --key /tmp/ci-signing.key
       - name: Lint, render and validate the chart
         run: |
           set -o pipefail
@@ -138,6 +140,10 @@ jobs:
             --set temporal.tls.existingSecret=temporal-mtls --set temporal.tls.caKey=ca.crt --set temporal.tls.certKey=tls.crt \
             --set temporal.tls.keyKey=tls.key --set temporal.existingSecret=turgon-temporal > /tmp/rendered-tls.yaml
           grep -q 'secretName: temporal-mtls' /tmp/rendered-tls.yaml
+          # Specs loaded only if signed by a trusted key.
+          helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" \
+            --set-file specSigning.trustedKeys=/tmp/ci-signing.pub > /tmp/rendered-signed.yaml
+          grep -q 'TURGON_TRUSTED_KEYS' /tmp/rendered-signed.yaml
           # Metrics scraping and alerts, with one latency SLO alert per recipe.
           helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" --set monitoring.podMonitor.enabled=true \
             --set monitoring.rules.enabled=true > /tmp/rendered-monitoring.yaml
@@ -160,7 +166,7 @@ jobs:
             -schema-location default \
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
             /tmp/rendered.yaml /tmp/rendered-oidc.yaml /tmp/rendered-tls.yaml /tmp/rendered-monitoring.yaml \
-            /tmp/rendered-backup.yaml /tmp/rendered-restore.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
+            /tmp/rendered-backup.yaml /tmp/rendered-restore.yaml /tmp/rendered-signed.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
       - name: Lint the Dockerfile
         run: hadolint Dockerfile
 

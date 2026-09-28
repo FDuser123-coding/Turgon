@@ -91,6 +91,12 @@ type Matcher interface {
 	Link(ctx context.Context, entity, system, sourceID, masterID string, attrs identity.Attributes) error
 }
 
+// MatchModels gives the matching model trained on a deployment's own links
+// (turgon identity train); without one, the default model scores.
+type MatchModels interface {
+	MatchModel(ctx context.Context, entity string) (identity.Model, bool, error)
+}
+
 // Resolve links the document to a master record. The document names the
 // source record in <entity>Ref (customerRef) and gains <entity>Id.
 //
@@ -126,7 +132,17 @@ func (x *Activities) Resolve(ctx context.Context, in ResolveInput) (map[string]a
 			if err != nil {
 				return nil, err // transient: retry
 			}
-			suggestions = identity.Suggest(attrs, candidates, 3)
+			model := identity.Default
+			if mm, ok := x.Resolver.(MatchModels); ok {
+				trained, found, err := mm.MatchModel(ctx, entity)
+				if err != nil {
+					return nil, err // transient: retry
+				}
+				if found {
+					model = trained
+				}
+			}
+			suggestions = model.Suggest(attrs, candidates, 3)
 		}
 		master, certain := identity.Decide(suggestions, in.Config.AutoMatchAbove)
 		if !certain || in.Config.Strategy != v1alpha1.StrategyProbabilistic {

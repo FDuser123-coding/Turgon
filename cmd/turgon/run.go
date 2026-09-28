@@ -129,7 +129,8 @@ func envOr(key, def string) string {
 }
 
 // loadSpec reads a runtime spec and refuses one whose body does not match
-// its digest: the worker runs exactly what the compiler produced.
+// its digest, or, with --trusted-keys, one no trusted key signed: the
+// worker runs exactly what the signing pipeline produced.
 func loadSpec(path string) (*compiler.RuntimeSpec, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -144,6 +145,9 @@ func loadSpec(path string) (*compiler.RuntimeSpec, error) {
 	}
 	if got := compiler.Digest(spec.Spec); got != spec.Metadata.Digest {
 		return nil, fmt.Errorf("%s: digest mismatch (spec says %s, body hashes to %s); refusing to run a modified spec", path, spec.Metadata.Digest, got)
+	}
+	if err := verifySignature(path, &spec); err != nil {
+		return nil, err
 	}
 	return &spec, nil
 }

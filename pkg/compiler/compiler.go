@@ -41,6 +41,16 @@ type RuntimeMeta struct {
 	Level  string `json:"level"`
 	// Digest is the SHA-256 of the canonical JSON encoding of Spec.
 	Digest string `json:"digest"`
+	// Signatures are made over the name, level and digest (pkg/signing);
+	// workers with trusted keys run only specs one of them signed.
+	Signatures []Signature `json:"signatures,omitempty"`
+}
+
+// Signature is one signer's signature of a spec.
+type Signature struct {
+	KeyID     string `json:"keyId"`
+	Algorithm string `json:"algorithm"`
+	Value     string `json:"value"`
 }
 
 type RuntimeBody struct {

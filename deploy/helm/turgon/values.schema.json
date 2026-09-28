@@ -114,6 +114,11 @@
         }
       }
     },
+    "specSigning": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": { "trustedKeys": { "type": "string", "pattern": "^$|-----BEGIN PUBLIC KEY-----" } }
+    },
     "monitoring": {
       "type": "object",
       "additionalProperties": false,

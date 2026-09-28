@@ -58,6 +58,14 @@ database:
       serverName: ""             # the archive to restore from (default: <release>-turgon-db)
       targetTime: ""             # point in time, e.g. "2026-09-28 10:00:00+00"; empty restores the latest
 
+# Signed runtime specs: with public keys here, workers, MCP servers and
+# tests load only specs one of them signed (turgon keygen, then
+# turgon compile --sign-key in the pipeline that builds specs). The specs
+# carry the policy packs, so loosening a policy means going through that
+# pipeline. PEM, one or more "PUBLIC KEY" blocks.
+specSigning:
+  trustedKeys: ""
+
 # Compiled runtime specs, one worker Deployment each. Pass files with
 #   --set-file specs.shop-orders-to-erp=runtime-spec.json
 # Keys must be DNS labels. Specs are verified against their digest at start.

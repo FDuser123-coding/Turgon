@@ -75,9 +75,9 @@ spec:
           volumeMounts:
             - { name: specs, mountPath: /specs, readOnly: true }
             - { name: tmp, mountPath: /tmp }
-            {{- include "turgon.temporalTLSMount" $ | nindent 12 }}
+            {{- include "turgon.sharedMounts" $ | nindent 12 }}
       volumes:
-        {{- include "turgon.temporalTLSVolume" $ | nindent 8 }}
+        {{- include "turgon.sharedVolumes" $ | nindent 8 }}
         - name: specs
           configMap:
             name: {{ include "turgon.fullname" $ }}-specs

@@ -39,11 +39,16 @@ spec:
           args:
             {{- include "turgon.gatewayConfigArgs" . | nindent 12 }}
             - --output=/config/config.yaml
+          {{- with include "turgon.signingEnv" . }}
+          env:
+            {{- . | nindent 12 }}
+          {{- end }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           volumeMounts:
             - { name: specs, mountPath: /specs, readOnly: true }
             - { name: config, mountPath: /config }
+            {{- include "turgon.sharedMounts" . | nindent 12 }}
       containers:
         - name: gateway
           image: "{{ $g.image.repository }}:{{ $g.image.tag }}"
@@ -97,10 +102,10 @@ spec:
           volumeMounts:
             - { name: specs, mountPath: /specs, readOnly: true }
             - { name: tmp, mountPath: /tmp }
-            {{- include "turgon.temporalTLSMount" $ | nindent 12 }}
+            {{- include "turgon.sharedMounts" $ | nindent 12 }}
         {{- end }}
       volumes:
-        {{- include "turgon.temporalTLSVolume" . | nindent 8 }}
+        {{- include "turgon.sharedVolumes" . | nindent 8 }}
         - name: specs
           configMap:
             name: {{ include "turgon.fullname" . }}-specs

@@ -46,6 +46,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   value: {{ .Values.temporal.address | quote }}
 - name: TURGON_TEMPORAL_NAMESPACE
   value: {{ .Values.temporal.namespace | quote }}
+{{- include "turgon.signingEnv" . }}
 {{- with .Values.temporal.tls }}
 {{- if .enabled }}
 - name: TURGON_TEMPORAL_TLS
@@ -76,16 +77,33 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- end -}}
 
-{{/* The Temporal TLS files, for containers that talk to Temporal. */}}
-{{- define "turgon.temporalTLSMount" -}}
+{{/* Files every Turgon container may need: the Temporal TLS files, and
+     the public keys runtime specs must be signed with. */}}
+{{- define "turgon.sharedMounts" -}}
 {{- with .Values.temporal.tls }}
 {{- if or .caKey .certKey }}
 - { name: temporal-tls, mountPath: /etc/turgon/temporal-tls, readOnly: true }
 {{- end }}
 {{- end }}
+{{- if .Values.specSigning.trustedKeys }}
+- { name: trusted-keys, mountPath: /etc/turgon/trusted-keys, readOnly: true }
+{{- end }}
 {{- end -}}
 
-{{- define "turgon.temporalTLSVolume" -}}
+{{/* Runtime specs are loaded only if a trusted key signed them. */}}
+{{- define "turgon.signingEnv" -}}
+{{- if .Values.specSigning.trustedKeys }}
+- name: TURGON_TRUSTED_KEYS
+  value: /etc/turgon/trusted-keys/keys.pem
+{{- end }}
+{{- end -}}
+
+{{- define "turgon.sharedVolumes" -}}
+{{- if .Values.specSigning.trustedKeys }}
+- name: trusted-keys
+  configMap:
+    name: {{ include "turgon.fullname" . }}-trusted-keys
+{{- end }}
 {{- with .Values.temporal.tls }}
 {{- if or .caKey .certKey }}
 - name: temporal-tls

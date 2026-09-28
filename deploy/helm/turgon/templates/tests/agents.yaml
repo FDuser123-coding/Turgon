@@ -21,11 +21,16 @@ spec:
       args:
         {{- include "turgon.gatewayConfigArgs" . | nindent 8 }}
         - --output=/config/config.yaml
+      {{- with include "turgon.signingEnv" . }}
+      env:
+        {{- . | nindent 8 }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.securityContext | nindent 8 }}
       volumeMounts:
         - { name: specs, mountPath: /specs, readOnly: true }
         - { name: config, mountPath: /config }
+        {{- include "turgon.sharedMounts" . | nindent 8 }}
   containers:
     - name: validate
       image: "{{ $g.image.repository }}:{{ $g.image.tag }}"
@@ -36,6 +41,7 @@ spec:
         - { name: config, mountPath: /config, readOnly: true }
         - { name: tmp, mountPath: /tmp }
   volumes:
+    {{- include "turgon.sharedVolumes" . | nindent 4 }}
     - name: specs
       configMap:
         name: {{ include "turgon.fullname" . }}-specs
