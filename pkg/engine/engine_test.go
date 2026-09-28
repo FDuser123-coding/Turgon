@@ -25,7 +25,9 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/connector/postgres"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest"
+	"github.com/fduser123-coding/turgon/pkg/connector/rest/dataversetest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/hubspottest"
+	"github.com/fduser123-coding/turgon/pkg/connector/rest/netsuitetest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/shoptest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/stripetest"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce"
@@ -849,6 +851,120 @@ func newHubSpotFixture(t *testing.T) (*fixture, *hubspottest.HubSpot) {
 		t.Fatal(err)
 	}
 	return f, hs
+}
+
+// newDynamicsFixture runs the hubspot-won-deals-to-dynamics recipe
+// against the fake HubSpot account and the fake Dataverse environment.
+func newDynamicsFixture(t *testing.T) (*fixture, *hubspottest.HubSpot, *dataversetest.Dataverse) {
+	t.Helper()
+	hs := hubspottest.New("pat-eu1-turgon")
+	t.Cleanup(hs.Close)
+	dv := dataversetest.New("turgon-app", "s3cret")
+	t.Cleanup(dv.Close)
+	f := newFixtureFor(t, "hubspot-won-deals-to-dynamics", connector.StaticSecrets{
+		"openbao://hubspot-crm/private-app-token": "pat-eu1-turgon",
+		"openbao://dynamics-crm/app-registration": `{"clientId": "turgon-app", "clientSecret": "s3cret"}`,
+	}, func(cfg string) string {
+		cfg = strings.ReplaceAll(cfg, "https://api.hubapi.com", hs.URL())
+		cfg = strings.ReplaceAll(cfg, "https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/token", dv.TokenURL(dv.URL()))
+		return strings.ReplaceAll(cfg, "https://contoso.crm4.dynamics.com/api/data/v9.2", dv.URL()+dataversetest.API)
+	})
+	if err := f.store.PutXref(context.Background(), "Customer", "hubspot-crm", "ada@lovelace-gmbh.example", dataversetest.LovelaceGmbH); err != nil {
+		t.Fatal(err)
+	}
+	return f, hs, dv
+}
+
+func TestHubSpotWonDealBecomesDynamicsOrder(t *testing.T) {
+	f, hs, dv := newDynamicsFixture(t)
+	id := hs.AddDeal(hubspotDeal("Ada@Lovelace-GmbH.example", "1500.50"))
+	res, err, pending := f.run(f.dispatch()[0], approve("04-write"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The approver saw the request Dataverse would get.
+	if len(pending) != 1 || !strings.Contains(string(pending[0].Preview), `"customerid_account@odata.bind":"/accounts(`+dataversetest.LovelaceGmbH+`)"`) {
+		t.Fatalf("pending = %+v", pending)
+	}
+	o := dv.OrderByKey("hubspot-deal-" + id)
+	if o == nil || o["totalamount"] != 1500.5 || o["_customerid_value"] != dataversetest.LovelaceGmbH || o["name"] != "HUBSPOT-"+id {
+		t.Fatalf("Dataverse order = %v", o)
+	}
+	if got := hs.Deal(id)["erp_order_number"]; got != o["salesorderid"] {
+		t.Fatalf("deal erp_order_number = %v, want the order GUID %v (writes %+v)", got, o["salesorderid"], res.Writes)
+	}
+	if n := dv.Orders(); n != 1 {
+		t.Fatalf("orders = %d", n)
+	}
+}
+
+func TestHubSpotRejectionDeletesTheDynamicsOrder(t *testing.T) {
+	f, hs, dv := newDynamicsFixture(t)
+	hs.AddDeal(hubspotDeal("Ada@Lovelace-GmbH.example", "990"))
+	hs.FailUpdates = true
+	_, err, _ := f.run(f.dispatch()[0], approve("04-write"))
+	if errType(err) != ErrTypeInvalid {
+		t.Fatalf("err = %v (%s)", err, errType(err))
+	}
+	if dv.Orders() != 0 {
+		t.Fatal("the Dynamics order was not deleted after HubSpot rejected the link")
+	}
+}
+
+// newNetSuiteFixture runs the shopify-store-orders-to-netsuite recipe
+// against the fake Shopify store and the fake NetSuite account.
+func newNetSuiteFixture(t *testing.T) (*fixture, *shoptest.Shop, *netsuitetest.Account, int64) {
+	t.Helper()
+	shop := shoptest.New("shpat_test")
+	t.Cleanup(shop.Close)
+	creds := rest.OAuth1Credentials{ConsumerKey: "ck", ConsumerSecret: "cs", TokenID: "ti", TokenSecret: "ts"}
+	ns := netsuitetest.New("1234567_SB1", creds)
+	t.Cleanup(ns.Close)
+	f := newFixtureFor(t, "shopify-store-orders-to-netsuite", connector.StaticSecrets{
+		"openbao://shopify-store/token": "shpat_test",
+		"openbao://netsuite-erp/tba":    `{"consumerKey": "ck", "consumerSecret": "cs", "tokenId": "ti", "tokenSecret": "ts"}`,
+	}, func(cfg string) string {
+		cfg = strings.ReplaceAll(cfg, "https://turgon-demo.myshopify.com/admin/api/"+shoptest.Version, shop.URL())
+		return strings.ReplaceAll(cfg, "https://1234567-sb1.suitetalk.api.netsuite.com/services", ns.URL()+"/services")
+	})
+	if err := f.store.PutXref(context.Background(), "Customer", "shopify-store", "ada@example.com", "1001"); err != nil {
+		t.Fatal(err)
+	}
+	id := shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-09-24T09:30:00-04:00",
+		"subtotal_price": "705.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-2", "quantity": 3}},
+	})
+	return f, shop, ns, id
+}
+
+func TestShopifyOrderBecomesNetSuiteOrder(t *testing.T) {
+	f, shop, ns, id := newNetSuiteFixture(t)
+	_, err, pending := f.run(f.dispatch()[0], approve("04-write"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || !strings.Contains(string(pending[0].Preview), `"items":[{"item":{"id":"102"},"quantity":3}]`) {
+		t.Fatalf("pending = %+v", pending)
+	}
+	o := ns.OrderByExternalID(fmt.Sprintf("SHOPIFY-%d", id))
+	if o == nil || o["total"] != 705.0 || o["tranDate"] != "2026-09-24" || o["entity"].(map[string]any)["id"] != "1001" {
+		t.Fatalf("NetSuite order = %v", o)
+	}
+	if got := shop.Order(id)["note"]; got != "ERP order "+o["id"].(string) {
+		t.Fatalf("Shopify note = %v", got)
+	}
+}
+
+func TestShopifyRejectionDeletesTheNetSuiteOrder(t *testing.T) {
+	f, shop, ns, _ := newNetSuiteFixture(t)
+	shop.FailUpdates = true
+	_, err, _ := f.run(f.dispatch()[0], approve("04-write"))
+	if errType(err) != ErrTypeInvalid {
+		t.Fatalf("err = %v (%s)", err, errType(err))
+	}
+	if ns.Orders() != 0 {
+		t.Fatal("the NetSuite order was not deleted after Shopify rejected the note")
+	}
 }
 
 func hubspotDeal(email, amount string) map[string]string {

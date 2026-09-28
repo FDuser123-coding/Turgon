@@ -82,6 +82,9 @@ type Event struct {
 	Order string `json:"order,omitempty"`
 	// Pagination pages a list by the last item's ID.
 	Pagination *Pagination `json:"pagination,omitempty"`
+	// Headers are sent with this event's requests only, e.g. NetSuite's
+	// "Prefer: transient" for SuiteQL.
+	Headers map[string]string `json:"headers,omitempty"`
 	// Webhook lets the event also arrive pushed by the API, to a worker
 	// that listens for webhooks; the list request then reconciles what was
 	// not delivered.
@@ -104,11 +107,23 @@ type Operation struct {
 	// Method is GET for reads; POST, PUT, PATCH or DELETE for writes.
 	Method string `json:"method"`
 	// Path may use {{field}} from the payload (a read's is {{id}});
-	// values are escaped as path segments.
+	// values are escaped as path segments, and a value quoted in the
+	// template ('{{field}}', as OData keys are) has its quotes doubled.
+	// {{idempotencyKey}} is the write's idempotency key, for APIs that
+	// upsert by an external ID (NetSuite eid:…, Dataverse alternate keys).
 	Path string `json:"path"`
+	// Headers are sent with this operation's requests only, e.g.
+	// Dataverse's "Prefer: return=representation".
+	Headers map[string]string `json:"headers,omitempty"`
+	// IDFrom names a response header holding the written record's URL,
+	// for APIs that answer a write with 204 and no body (NetSuite's
+	// Location, Dataverse's OData-EntityId). The result is then
+	// {"id": <last path segment, or the key in its parentheses>, "url": ...}.
+	IDFrom string `json:"idFrom,omitempty"`
 	// Fields maps API fields to payload fields (writes) or to the names a
 	// read returns them under. Empty sends the whole payload / returns the
-	// whole record.
+	// whole record. A dot in an API field nests it (metadata.key); "\."
+	// is a literal dot, as in OData's customerid_account@odata\.bind.
 	Fields map[string]string `json:"fields,omitempty"`
 	// Wrap nests the body under a key, e.g. {"order": {...}}.
 	Wrap string `json:"wrap,omitempty"`
@@ -149,7 +164,19 @@ type UpdateResult struct {
 var (
 	varRE   = regexp.MustCompile(`\{\{\s*([A-Za-z_][A-Za-z0-9_.]*)\s*\}\}`)
 	fieldRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.]*$`)
+	// apiFieldRE also allows OData annotations (@odata\.bind).
+	apiFieldRE = regexp.MustCompile(`^[A-Za-z_@][A-Za-z0-9_.@\\]*$`)
 )
+
+// checkHeaders refuses headers that would carry a credential.
+func (c Config) checkHeaders(where string, h map[string]string) error {
+	for k := range h {
+		if strings.EqualFold(k, "Authorization") || (c.Auth.Header != "" && strings.EqualFold(k, c.Auth.Header)) {
+			return fmt.Errorf("%sheader %s carries a credential; use the connection's secret", where, k)
+		}
+	}
+	return nil
+}
 
 func (c Config) validate() error {
 	u, err := url.Parse(c.BaseURL)
@@ -159,10 +186,8 @@ func (c Config) validate() error {
 	if err := c.Auth.validate(); err != nil {
 		return err
 	}
-	for k := range c.Headers {
-		if strings.EqualFold(k, "Authorization") || strings.EqualFold(k, c.Auth.Header) {
-			return fmt.Errorf("header %s carries a credential; use the connection's secret", k)
-		}
+	if err := c.checkHeaders("", c.Headers); err != nil {
+		return err
 	}
 	for name, e := range c.Events {
 		if !strings.HasPrefix(e.Path, "/") {
@@ -194,6 +219,9 @@ func (c Config) validate() error {
 		if p := e.Pagination; p != nil && (p.Param == "" || p.More == "") {
 			return fmt.Errorf("event %s: pagination needs param and more", name)
 		}
+		if err := c.checkHeaders("event "+name+": ", e.Headers); err != nil {
+			return err
+		}
 		if e.Webhook != nil {
 			if err := e.Webhook.validate(); err != nil {
 				return fmt.Errorf("event %s: webhook: %w", name, err)
@@ -213,8 +241,16 @@ func (c Config) validate() error {
 		default:
 			return fmt.Errorf("operation %s: method must be GET, POST, PUT, PATCH or DELETE", name)
 		}
+		if err := c.checkHeaders("operation "+name+": ", op.Headers); err != nil {
+			return err
+		}
+		switch op.IDFrom {
+		case "", "Location", "OData-EntityId":
+		default:
+			return fmt.Errorf("operation %s: idFrom must be Location or OData-EntityId", name)
+		}
 		for api, field := range op.Fields {
-			if !fieldRE.MatchString(api) || !fieldRE.MatchString(field) {
+			if !apiFieldRE.MatchString(api) || !fieldRE.MatchString(field) {
 				return fmt.Errorf("operation %s: invalid field mapping %q: %q", name, api, field)
 			}
 		}
@@ -314,6 +350,12 @@ func (e *APIError) permanent() bool {
 
 // do sends a request and decodes a JSON response into out, if any.
 func (c *Conn) do(ctx context.Context, method, path string, query url.Values, header http.Header, body any, out any) error {
+	_, err := c.doH(ctx, method, path, query, header, body, out)
+	return err
+}
+
+// doH is do, returning the response's headers.
+func (c *Conn) doH(ctx context.Context, method, path string, query url.Values, header http.Header, body any, out any) (http.Header, error) {
 	var payload []byte
 	contentType := "application/json"
 	switch b := body.(type) {
@@ -323,7 +365,7 @@ func (c *Conn) do(ctx context.Context, method, path string, query url.Values, he
 	default:
 		var err error
 		if payload, err = json.Marshal(b); err != nil {
-			return err
+			return nil, err
 		}
 	}
 	target := c.cfg.BaseURL + path
@@ -333,7 +375,7 @@ func (c *Conn) do(ctx context.Context, method, path string, query url.Values, he
 	for attempt := 0; ; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(payload))
 		if err != nil {
-			return err
+			return nil, err
 		}
 		req.Header.Set("Accept", "application/json")
 		if body != nil {
@@ -346,11 +388,11 @@ func (c *Conn) do(ctx context.Context, method, path string, query url.Values, he
 			req.Header[k] = v
 		}
 		if err := c.auth.apply(ctx, req); err != nil {
-			return err
+			return nil, err
 		}
 		resp, err := c.http.Do(req)
 		if err != nil {
-			return fmt.Errorf("%s %s: %w", method, path, err) // transient: retried
+			return nil, fmt.Errorf("%s %s: %w", method, path, err) // transient: retried
 		}
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 		resp.Body.Close()
@@ -363,14 +405,14 @@ func (c *Conn) do(ctx context.Context, method, path string, query url.Values, he
 			if len(msg) > 300 {
 				msg = msg[:300] + "…"
 			}
-			return &APIError{Method: method, Path: path, Status: resp.StatusCode, Body: msg}
+			return nil, &APIError{Method: method, Path: path, Status: resp.StatusCode, Body: msg}
 		}
 		if out != nil && len(bytes.TrimSpace(data)) > 0 {
 			dec := json.NewDecoder(bytes.NewReader(data))
 			dec.UseNumber()
-			return dec.Decode(out)
+			return resp.Header, dec.Decode(out)
 		}
-		return nil
+		return resp.Header, nil
 	}
 }
 
@@ -433,7 +475,7 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 	truncated := false
 	for page := 1; ; page++ {
 		var resp any
-		if err := c.do(ctx, method, e.Path, q, nil, body, &resp); err != nil {
+		if err := c.do(ctx, method, e.Path, q, headerOf(e.Headers), body, &resp); err != nil {
 			return nil, err
 		}
 		list, ok := lookup(resp, e.Items).([]any)
@@ -562,27 +604,61 @@ func decodePayload(payload json.RawMessage) (map[string]any, error) {
 }
 
 // render fills a path template from vars, escaping each value as a path
-// segment, and returns the values it used.
+// segment, and returns the values it used. A value quoted in the template
+// ('{{key}}', as in OData key predicates) has its quotes doubled, so it
+// cannot end the literal.
 func render(tmpl string, vars map[string]any) (string, map[string]any, error) {
 	used := map[string]any{}
 	var missing []string
-	out := varRE.ReplaceAllStringFunc(tmpl, func(m string) string {
-		name := varRE.FindStringSubmatch(m)[1]
+	var b strings.Builder
+	last := 0
+	for _, loc := range varRE.FindAllStringSubmatchIndex(tmpl, -1) {
+		b.WriteString(tmpl[last:loc[0]])
+		last = loc[1]
+		name := tmpl[loc[2]:loc[3]]
 		v := lookup(vars, name)
 		s := scalar(v)
 		if s == "" || s == "." || s == ".." {
 			// Escaping leaves dot segments as they are, and servers resolve
 			// them: an ID of ".." would address the parent resource.
 			missing = append(missing, name)
-			return ""
+			continue
 		}
 		used[name] = v
-		return url.PathEscape(s)
-	})
+		if loc[0] > 0 && tmpl[loc[0]-1] == '\'' {
+			s = strings.ReplaceAll(s, "'", "''")
+		}
+		b.WriteString(url.PathEscape(s))
+	}
+	b.WriteString(tmpl[last:])
 	if len(missing) > 0 {
 		return "", nil, fmt.Errorf("%w: path %s needs %s (not empty, \".\" or \"..\")", writeguard.ErrInvalid, tmpl, strings.Join(missing, ", "))
 	}
-	return out, used, nil
+	return b.String(), used, nil
+}
+
+// headerOf turns configured headers into request headers.
+func headerOf(h map[string]string) http.Header {
+	if len(h) == 0 {
+		return nil
+	}
+	out := http.Header{}
+	for k, v := range h {
+		out.Set(k, v)
+	}
+	return out
+}
+
+// idFrom reads a record's ID from the URL a write answered with:
+// .../salesOrder/123 or .../salesorders(3f2c...).
+func idFrom(u string) string {
+	u = strings.TrimRight(u, "/")
+	if strings.HasSuffix(u, ")") {
+		if i := strings.LastIndex(u, "("); i >= 0 {
+			return strings.Trim(u[i+1:len(u)-1], "'")
+		}
+	}
+	return u[strings.LastIndex(u, "/")+1:]
 }
 
 // values maps a write's API fields (dotted for nested ones, such as
@@ -642,11 +718,14 @@ func replaceNull(v any, with string) any {
 	return v
 }
 
-// nest turns dotted keys into nested objects.
+// nest turns dotted keys into nested objects; `\.` is a literal dot.
 func nest(flat map[string]any) map[string]any {
 	out := map[string]any{}
 	for k, v := range flat {
-		parts := strings.Split(k, ".")
+		parts := strings.Split(strings.ReplaceAll(k, `\.`, "\x00"), ".")
+		for i := range parts {
+			parts[i] = strings.ReplaceAll(parts[i], "\x00", ".")
+		}
 		m := out
 		for _, p := range parts[:len(parts)-1] {
 			child, ok := m[p].(map[string]any)
@@ -711,15 +790,31 @@ func (c *Conn) current(ctx context.Context, op Operation, vars map[string]any) (
 }
 
 // Simulate previews a captured update: the record's current values and
-// the values the write would set. Other writes cannot be dry-run through
-// a generic API.
+// the values the write would set. A generic API cannot dry-run other
+// writes; a create is previewed as the request it would send, which also
+// checks the payload has every field the API needs.
 func (c *Conn) Simulate(ctx context.Context, name string, payload json.RawMessage) (json.RawMessage, error) {
 	op, err := c.operation(name)
 	if err != nil {
 		return nil, err
 	}
 	if op.Capture == nil {
-		return nil, writeguard.ErrSimulationUnsupported
+		if op.Restore || op.Method == http.MethodDelete || op.Method == http.MethodGet {
+			return nil, writeguard.ErrSimulationUnsupported
+		}
+		doc, err := decodePayload(payload)
+		if err != nil {
+			return nil, err
+		}
+		vals, err := op.values(doc)
+		if err != nil {
+			return nil, err
+		}
+		body := op.request(vals)
+		if f, ok := body.(formBody); ok {
+			body = f.v
+		}
+		return json.Marshal(map[string]any{"mode": "request", "request": op.Method + " " + op.Path, "body": body})
 	}
 	doc, err := decodePayload(payload)
 	if err != nil {
@@ -784,19 +879,38 @@ func (c *Conn) Commit(ctx context.Context, name, key string, payload json.RawMes
 			captured = previous(rec, vals)
 		}
 	}
+	if key != "" && strings.Contains(op.Path, "idempotencyKey") {
+		withKey := make(map[string]any, len(vars)+1)
+		for k, v := range vars {
+			withKey[k] = v
+		}
+		withKey["idempotencyKey"] = key
+		vars = withKey
+	}
 	path, params, err := render(op.Path, vars)
 	if err != nil {
 		return nil, err
 	}
-	var header http.Header
+	header := headerOf(op.Headers)
 	if op.IdempotencyHeader != "" && key != "" {
-		header = http.Header{http.CanonicalHeaderKey(op.IdempotencyHeader): {key}}
+		if header == nil {
+			header = http.Header{}
+		}
+		header.Set(op.IdempotencyHeader, key)
 	}
 	var resp any
-	if err := c.do(ctx, op.Method, path, nil, header, body, &resp); err != nil {
+	respHeader, err := c.doH(ctx, op.Method, path, nil, header, body, &resp)
+	if err != nil {
 		return nil, classify(err)
 	}
 	result := lookup(resp, op.Result)
+	if op.IDFrom != "" && result == nil {
+		u := respHeader.Get(op.IDFrom)
+		if u == "" {
+			return nil, fmt.Errorf("rest: %s answered without a body or a %s header", name, op.IDFrom)
+		}
+		result = map[string]any{"id": idFrom(u), "url": u}
+	}
 	switch {
 	case captured != nil:
 		return json.Marshal(UpdateResult{Params: params, Previous: captured, Applied: vals, Response: result})
@@ -841,7 +955,7 @@ func (c *Conn) Read(ctx context.Context, name, id string) (json.RawMessage, erro
 		return nil, writeguard.ErrNotFound
 	}
 	var resp any
-	err = c.do(ctx, http.MethodGet, path, nil, nil, nil, &resp)
+	err = c.do(ctx, http.MethodGet, path, nil, headerOf(op.Headers), nil, &resp)
 	var apiErr *APIError
 	if errors.As(err, &apiErr) && (apiErr.Status == http.StatusNotFound || apiErr.Status == http.StatusGone) {
 		return nil, writeguard.ErrNotFound

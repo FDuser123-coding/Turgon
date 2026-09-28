@@ -2,12 +2,19 @@ package rest
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash"
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,17 +28,25 @@ import (
 //	basic   "user:password"
 //	oauth2  {"clientId": "...", "clientSecret": "..."}; the client
 //	        credentials grant against TokenURL, refreshed before expiry
+//	oauth1  {"consumerKey", "consumerSecret", "tokenId", "tokenSecret"};
+//	        OAuth 1.0a request signing with HMAC-SHA256, as NetSuite's
+//	        token-based authentication takes it, with Realm (the account ID)
 //	none    no credential
 type Auth struct {
 	Type     string   `json:"type"`
 	Header   string   `json:"header,omitempty"`
 	TokenURL string   `json:"tokenURL,omitempty"`
 	Scopes   []string `json:"scopes,omitempty"`
+	Realm    string   `json:"realm,omitempty"`
 }
 
 func (a Auth) validate() error {
 	switch a.Type {
 	case "bearer", "basic", "none":
+	case "oauth1":
+		if a.Realm == "" {
+			return fmt.Errorf("auth: oauth1 needs a realm (the NetSuite account ID, e.g. 1234567_SB1)")
+		}
 	case "header":
 		if a.Header == "" || strings.EqualFold(a.Header, "Authorization") {
 			return fmt.Errorf("auth: header needs a header name other than Authorization (use bearer)")
@@ -42,7 +57,7 @@ func (a Auth) validate() error {
 			return fmt.Errorf("auth: oauth2 needs an http(s) tokenURL")
 		}
 	default:
-		return fmt.Errorf("auth: type must be bearer, header, basic, oauth2 or none, got %q", a.Type)
+		return fmt.Errorf("auth: type must be bearer, header, basic, oauth2, oauth1 or none, got %q", a.Type)
 	}
 	return nil
 }
@@ -53,6 +68,8 @@ type authenticator struct {
 	http   *http.Client
 
 	clientID, clientSecret string
+	oauth1                 oauth1Creds
+	now                    func() time.Time
 
 	mu      sync.Mutex
 	token   string
@@ -79,6 +96,11 @@ func newAuthenticator(cfg Auth, secret string, client *http.Client) (*authentica
 			return nil, fmt.Errorf(`auth: the oauth2 secret must be {"clientId": "...", "clientSecret": "..."}`)
 		}
 		a.clientID, a.clientSecret = creds.ClientID, creds.ClientSecret
+	case "oauth1":
+		c := &a.oauth1
+		if err := json.Unmarshal([]byte(a.secret), c); err != nil || c.ConsumerKey == "" || c.ConsumerSecret == "" || c.TokenID == "" || c.TokenSecret == "" {
+			return nil, fmt.Errorf(`auth: the oauth1 secret must be {"consumerKey": "...", "consumerSecret": "...", "tokenId": "...", "tokenSecret": "..."}`)
+		}
 	}
 	return a, nil
 }
@@ -105,8 +127,87 @@ func (a *authenticator) apply(ctx context.Context, req *http.Request) error {
 			return err
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
+	case "oauth1":
+		now := time.Now
+		if a.now != nil {
+			now = a.now
+		}
+		req.Header.Set("Authorization", SignOAuth1(req.Method, req.URL, a.cfg.Realm, a.oauth1, now(), nonce()))
 	}
 	return nil
+}
+
+type oauth1Creds struct {
+	ConsumerKey    string `json:"consumerKey"`
+	ConsumerSecret string `json:"consumerSecret"`
+	TokenID        string `json:"tokenId"`
+	TokenSecret    string `json:"tokenSecret"`
+}
+
+// OAuth1Credentials are the four secrets of a token-based integration.
+type OAuth1Credentials = oauth1Creds
+
+func nonce() string {
+	b := make([]byte, 16)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// oauthEscape percent-encodes as RFC 5849 §3.6 requires: everything but
+// unreserved characters, with uppercase hex.
+func oauthEscape(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if ('A' <= c && c <= 'Z') || ('a' <= c && c <= 'z') || ('0' <= c && c <= '9') || c == '-' || c == '.' || c == '_' || c == '~' {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
+}
+
+// SignOAuth1 returns the Authorization header of an OAuth 1.0a request
+// signed with HMAC-SHA256 (RFC 5849 §3.4, with SHA-256 as NetSuite takes
+// it). The query string is signed; a JSON body is not.
+func SignOAuth1(method string, u *url.URL, realm string, c OAuth1Credentials, t time.Time, nonce string) string {
+	return signOAuth1(sha256.New, "HMAC-SHA256", method, u, realm, c, t, nonce)
+}
+
+func signOAuth1(h func() hash.Hash, sigMethod, method string, u *url.URL, realm string, c OAuth1Credentials, t time.Time, nonce string) string {
+	oauth := map[string]string{
+		"oauth_consumer_key":     c.ConsumerKey,
+		"oauth_token":            c.TokenID,
+		"oauth_signature_method": sigMethod,
+		"oauth_timestamp":        strconv.FormatInt(t.Unix(), 10),
+		"oauth_nonce":            nonce,
+		"oauth_version":          "1.0",
+	}
+	var pairs []string
+	for k, v := range oauth {
+		pairs = append(pairs, oauthEscape(k)+"="+oauthEscape(v))
+	}
+	for k, vs := range u.Query() {
+		for _, v := range vs {
+			pairs = append(pairs, oauthEscape(k)+"="+oauthEscape(v))
+		}
+	}
+	sort.Strings(pairs)
+	base := strings.ToUpper(method) + "&" + oauthEscape(strings.ToLower(u.Scheme)+"://"+strings.ToLower(u.Host)+u.EscapedPath()) + "&" + oauthEscape(strings.Join(pairs, "&"))
+	mac := hmac.New(h, []byte(oauthEscape(c.ConsumerSecret)+"&"+oauthEscape(c.TokenSecret)))
+	mac.Write([]byte(base))
+	oauth["oauth_signature"] = base64.StdEncoding.EncodeToString(mac.Sum(nil))
+	keys := make([]string, 0, len(oauth))
+	for k := range oauth {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	header := `OAuth realm="` + oauthEscape(realm) + `"`
+	for _, k := range keys {
+		header += ", " + k + `="` + oauthEscape(oauth[k]) + `"`
+	}
+	return header
 }
 
 // current returns a valid access token, fetching one when needed.

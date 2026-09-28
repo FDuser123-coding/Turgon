@@ -1,0 +1,59 @@
+# Sales on Microsoft Dynamics 365 (Dataverse Web API), with an app
+# registration's client credentials (the secret, {"clientId", "clientSecret"})
+# and an application user in the environment. Orders are upserted by the
+# alternate key turgon_externalref, so a retried write finds its order;
+# Dataverse answers 204 and the order's URL, whose GUID becomes the result.
+# Order lines are write-in products (no product catalog needed).
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata: { name: dynamics-crm }
+spec:
+  connector: rest@^1
+  secretRef: openbao://dynamics-crm/app-registration
+  entities: [SalesOrder, Customer]
+  # Service protection allows 6,000 requests per 5 minutes and 52
+  # concurrent requests per user; stay well under both.
+  limits: { maxConcurrentCalls: 8, requestsPerSecond: 15 }
+  events:
+    - { name: SalesOrder.Changed, entity: SalesOrder, interface: polling }
+  operations:
+    - { name: create-sales-order, entity: SalesOrder, direction: write, interface: rest-api, risk: high, compensation: delete-sales-order }
+    - { name: delete-sales-order, entity: SalesOrder, direction: write, interface: rest-api, risk: high }
+    - { name: get-customer, entity: Customer, direction: read, interface: rest-api, risk: read }
+  config:
+    baseURL: https://contoso.crm4.dynamics.com/api/data/v9.2
+    auth:
+      type: oauth2
+      tokenURL: https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/token
+      scopes: [https://contoso.crm4.dynamics.com/.default]
+    headers: { OData-MaxVersion: "4.0", OData-Version: "4.0" }
+    checkPath: /WhoAmI
+    events:
+      SalesOrder.Changed:
+        path: /salesorders
+        params:
+          $select: salesorderid,name,turgon_externalref,totalamount,modifiedon
+          $filter: "modifiedon gt {{position}}"
+          $orderby: modifiedon asc
+          $top: "{{limit}}"
+        items: value
+        id: salesorderid
+        position: modifiedon
+        positionFormat: rfc3339
+    operations:
+      create-sales-order:
+        method: PATCH
+        path: "/salesorders(turgon_externalref='{{idempotencyKey}}')"
+        fields:
+          name: name
+          description: description
+          "customerid_account@odata\\.bind": accountBind
+          order_details: dynamicsLines
+        idFrom: OData-EntityId
+      delete-sales-order:
+        method: DELETE
+        path: "/salesorders({{id}})"
+      get-customer:
+        method: GET
+        path: "/accounts({{id}})"
+        fields: { name: name, accountnumber: accountNumber, statecode: state }

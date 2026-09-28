@@ -92,8 +92,15 @@ configuration only: each Connection declares its events, reads and writes as HTT
   undo it exactly in a saga (`nullValue: ""` clears a field for APIs such as HubSpot that do
   not take null). A create is undone by a request templated from its own result
   (`DELETE /invoices/{{id}}`).
-- **Auth**: a bearer token, an API-key header, basic, or OAuth 2.0 client credentials (refreshed
-  before expiry and after a 401), always from the connection's secret.
+- **Auth**: a bearer token, an API-key header, basic, OAuth 2.0 client credentials (refreshed
+  before expiry and after a 401), or OAuth 1.0a request signing with HMAC-SHA256 (NetSuite's
+  token-based authentication), always from the connection's secret.
+- **APIs that upsert by an external key** take the write's idempotency key in the path
+  (`{{idempotencyKey}}`), quoted safely inside OData key literals. A retried write then finds its
+  record. **APIs that answer 204 with no body** give the record's ID in a header
+  (`idFrom: Location` or `OData-EntityId`), and the compensating delete is templated from it.
+- **Creates are previewed** as the request they would send, so approvers see the exact body, and a
+  payload missing a field fails before anyone approves.
 - Client errors fail the step at once; rate limits and server errors are retried.
 - **Limits**: each connection declares its API's own rate and concurrency limits
   (`spec.limits`), which the verifier checks the recipe's peak load against and the rate governor
@@ -167,6 +174,43 @@ echo "won grace@lovelace-gmbh.example 900" >> hs.cmds             # goes to the 
 
 The deal needs two custom properties: `customer_email` (a HubSpot workflow can copy it from the
 deal's primary contact) and `erp_order_number`.
+
+### Dynamics 365 and NetSuite: ERPs through the REST connector
+
+Two more ERPs need no new connector, only configuration of `rest`
+(`examples/connections/dynamics-crm.yaml`, `netsuite-erp.yaml`):
+
+- **Dynamics 365 (Dataverse Web API).**
+  - **Auth:** an app registration's client credentials against Entra ID.
+  - **Creating orders:** sales orders are upserted by an alternate key,
+    `PATCH /salesorders(turgon_externalref='<key>')`, with the account bound by
+    `customerid_account@odata.bind`. Lines are write-in products, so no product catalog is needed.
+  - **Result:** the order's GUID comes from `OData-EntityId`.
+  - **Events:** changed orders are polled on `modifiedon`.
+- **NetSuite (SuiteTalk REST).**
+  - **Auth:** token-based authentication (OAuth 1.0a, HMAC-SHA256, the account as realm).
+  - **Creating orders:** sales orders are upserted by external ID,
+    `PUT /salesOrder/eid:<key>`. Items are referenced by internal ID through a mapping table
+    kept per deployment.
+  - **Result:** the order's ID comes from `Location`.
+  - **Events:** changed orders are read with SuiteQL (`Prefer: transient`).
+
+`hubspot-won-deals-to-dynamics` turns won HubSpot deals into Dynamics orders and records the
+order's GUID on the deal. `shopify-store-orders-to-netsuite` is the Shopify saga with NetSuite.
+Without the systems, run the test fakes:
+
+```sh
+go build -o bin/fakedynamics ./internal/tools/fakedynamics    # http://127.0.0.1:9700, client turgon-app / demo
+go build -o bin/fakenetsuite ./internal/tools/fakenetsuite    # http://127.0.0.1:9900, account 1234567_SB1
+sed -i 's|https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/token|http://127.0.0.1:9700/oauth2/v2.0/token|; s|https://contoso.crm4.dynamics.com|http://127.0.0.1:9700|' \
+  my-catalog/connections/dynamics-crm.yaml
+sed -i 's|https://1234567-sb1.suitetalk.api.netsuite.com|http://127.0.0.1:9900|' my-catalog/connections/netsuite-erp.yaml
+export TURGON_SECRET_DYNAMICS_CRM_APP_REGISTRATION='{"clientId":"turgon-app","clientSecret":"demo"}'
+export TURGON_SECRET_NETSUITE_ERP_TBA='{"consumerKey":"ck-demo","consumerSecret":"cs-demo","tokenId":"ti-demo","tokenSecret":"ts-demo"}'
+bin/turgon xref set --entity Customer --system shopify-store --source ada@example.com --master 1001
+bin/turgon xref set --entity Customer --system hubspot-crm --source ada@lovelace-gmbh.example \
+  --master 6a1c0e2f-8b3d-4f5a-9c7e-1d2b3a4c5e6f
+```
 
 ### SAP S/4HANA: sales orders through SAP's released APIs
 

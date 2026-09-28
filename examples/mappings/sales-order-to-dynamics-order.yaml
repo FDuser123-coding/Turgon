@@ -1,0 +1,20 @@
+# A sales order in Dataverse's shape: the account it binds to, and the
+# order value as one write-in line (Dynamics needs no product catalog for
+# it). HubSpot's deal ID rides along for the write-back.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: sales-order-to-dynamics-order
+  version: 1.0.0
+spec:
+  from: model.SalesOrder
+  to: model.SalesOrder
+  fields:
+    - { target: name,        expression: "externalId",                              origin: human, confidence: 1.0 }
+    - { target: description, expression: "'From ' & externalId & ', ' & currency", origin: human, confidence: 0.95 }
+    - { target: accountBind, expression: "'/accounts(' & customerId & ')'",         origin: human, confidence: 1.0 }
+    - target: dynamicsLines
+      expression: "[{ 'isproductoverridden': true, 'productdescription': 'Deal ' & externalId, 'quantity': 1, 'priceperunit': netValue }]"
+      origin: human
+      confidence: 0.95
+    - { target: hubspotId,   expression: "hubspotId",                               origin: human, confidence: 1.0 }
