@@ -16,7 +16,7 @@ import (
 
 func consoleCmd() *cobra.Command {
 	var tf temporalFlags
-	var listen, authMode, devUser, approverGroup, stewardGroup, operatorGroup, viewerGroup, dbURL string
+	var listen, metricsAddr, authMode, devUser, approverGroup, stewardGroup, operatorGroup, viewerGroup, dbURL string
 	var oidcIssuer, oidcClientID, oidcGroupsClaim, publicURL string
 	var oidcScopes []string
 	var sessionTTL time.Duration
@@ -107,10 +107,14 @@ func consoleCmd() *cobra.Command {
 			}
 			s := console.New(cfg)
 			fmt.Fprintf(cmd.ErrOrStderr(), "turgon console on http://%s (auth: %s)\n", listen, authMode)
+			if metricsAddr != "" {
+				go serveMetrics(cmd.Context(), metricsAddr, cmd.ErrOrStderr())
+			}
 			return s.Serve(listen)
 		},
 	}
 	tf.register(cmd)
+	cmd.Flags().StringVar(&metricsAddr, "metrics-listen", "", "serve Prometheus /metrics on this address, e.g. :9090")
 	cmd.Flags().StringVar(&listen, "listen", "127.0.0.1:8080", "address to listen on")
 	cmd.Flags().StringSliceVarP(&catalogs, "catalog", "c", nil, "catalog directories to show verifier reports for")
 	cmd.Flags().StringSliceVar(&auditLogs, "audit-log", nil, `audit logs to show and verify: "postgres" or file paths`)

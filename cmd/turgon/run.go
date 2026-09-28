@@ -34,6 +34,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/connector/sap"
 	"github.com/fduser123-coding/turgon/pkg/engine"
 	"github.com/fduser123-coding/turgon/pkg/identity"
+	"github.com/fduser123-coding/turgon/pkg/metrics"
 	"github.com/fduser123-coding/turgon/pkg/notify"
 	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
 )
@@ -83,6 +84,8 @@ func (f *temporalFlags) dial() (client.Client, error) {
 		}
 		engine.EncryptPayloads(codec)
 	}
+	// The SDK's metrics, and those workflows record, go to /metrics.
+	opts.MetricsHandler = metrics.Temporal()
 	opts.DataConverter = engine.DataConverter()
 	opts.FailureConverter = engine.FailureConverter()
 	return client.Dial(opts)
@@ -298,7 +301,7 @@ func runCmd() *cobra.Command {
 	cmd.Flags().StringVar(&dbURL, "database-url", os.Getenv("TURGON_DATABASE_URL"), "Postgres URL for Turgon's state")
 	cmd.Flags().StringVar(&auditPath, "audit-log", "postgres", `audit log: "postgres" (shared by all workers) or a file path`)
 	cmd.Flags().DurationVar(&poll, "poll", 2*time.Second, "event source poll interval")
-	cmd.Flags().StringVar(&healthAddr, "health-listen", "", "serve /healthz and /readyz on this address, e.g. :8081")
+	cmd.Flags().StringVar(&healthAddr, "health-listen", "", "serve /healthz, /readyz and /metrics on this address, e.g. :8081")
 	cmd.Flags().StringVar(&webhookAddr, "webhook-listen", "", "receive events configured for webhooks on this address, e.g. :8082 (POST /webhooks/<endpoint>/<event>)")
 	cmd.Flags().StringVar(&pollers, "pollers", "auto", `task queue pollers per kind: "auto" scales them with the load (5 to 100), or a fixed number`)
 	cmd.Flags().StringVar(&consoleURL, "console-url", os.Getenv("TURGON_CONSOLE_URL"), "the console's URL, linked from notifications, e.g. https://turgon.example.com")
@@ -450,7 +453,7 @@ func retryCmd() *cobra.Command {
 }
 
 func xrefCmd() *cobra.Command {
-	var dbURL, entity, system, source, master, email, name string
+	var dbURL, entity, system, source, master, email, name, by string
 	cmd := &cobra.Command{Use: "xref", Short: "Manage identity cross-references"}
 	set := &cobra.Command{
 		Use:   "set",
@@ -471,7 +474,15 @@ func xrefCmd() *cobra.Command {
 			attrs := identity.Extract(map[string]any{"email": email, "name": name}, []v1alpha1.MatchField{
 				{Field: "email", Kind: v1alpha1.MatchEmail}, {Field: "email", Kind: v1alpha1.MatchDomain}, {Field: "name", Kind: v1alpha1.MatchName},
 			})
-			return pgstore.New(pool).Link(ctx, entity, system, source, master, attrs)
+			if err := pgstore.New(pool).Link(ctx, entity, system, source, master, attrs); err != nil {
+				return err
+			}
+			// Linking decides which master record later writes go to: it is
+			// audited like a steward's link in the console.
+			_, err = pgstore.NewAuditLog(pool).Record(by, "xref.linked", map[string]any{
+				"entity": entity, "system": system, "ref": source, "master": master, "via": "cli",
+			})
+			return err
 		},
 	}
 	set.Flags().StringVar(&dbURL, "database-url", os.Getenv("TURGON_DATABASE_URL"), "Postgres URL for Turgon's state")
@@ -481,6 +492,7 @@ func xrefCmd() *cobra.Command {
 	set.Flags().StringVar(&master, "master", "", "master record ID")
 	set.Flags().StringVar(&email, "email", "", "the record's email address, kept for matching")
 	set.Flags().StringVar(&name, "name", "", "the record's name, kept for matching")
+	set.Flags().StringVar(&by, "by", os.Getenv("USER"), "who links, for the audit log")
 	for _, f := range []string{"entity", "system", "source", "master"} {
 		_ = set.MarkFlagRequired(f)
 	}
@@ -509,11 +521,27 @@ func secretsCmd() *cobra.Command {
 	}
 }
 
+// serveMetrics serves /metrics on its own address, for the console and the
+// MCP servers, whose main listener sits behind authentication.
+func serveMetrics(ctx context.Context, addr string, logw io.Writer) {
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", metrics.Handler())
+	srv := &http.Server{Addr: addr, Handler: mux, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: time.Minute}
+	go func() {
+		<-ctx.Done()
+		_ = srv.Close()
+	}()
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		fmt.Fprintf(logw, "turgon: metrics endpoint: %v\n", err)
+	}
+}
+
 // serveHealth answers Kubernetes probes: /healthz while the process runs,
 // /readyz while Turgon's database answers.
 func serveHealth(ctx context.Context, addr string, pool *pgxpool.Pool, logw io.Writer) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { fmt.Fprintln(w, "ok") })
+	mux.Handle("/metrics", metrics.Handler())
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
 		pctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()

@@ -1,21 +1,105 @@
 {{- if .Values.database.cloudNativePG.enabled }}
+{{- $db := .Values.database.cloudNativePG }}
+{{- $name := printf "%s-db" (include "turgon.fullname" .) }}
+{{- $store := printf "%s-backups" (include "turgon.fullname" .) }}
+{{- if and $db.recovery.enabled (not $db.backup.enabled) }}
+{{- fail "database.cloudNativePG.recovery needs database.cloudNativePG.backup: the object store it restores from" }}
+{{- end }}
+{{- if and $db.recovery.enabled (eq ($db.backup.serverName | default $name) ($db.recovery.serverName | default $name)) }}
+{{- fail "a restored cluster must archive under a new name: set database.cloudNativePG.backup.serverName to something other than the archive it restores from" }}
+{{- end }}
+{{- if $db.backup.enabled }}
+# The object store the Barman Cloud plugin archives WAL and base backups to.
+apiVersion: barmancloud.cnpg.io/v1
+kind: ObjectStore
+metadata:
+  name: {{ $store }}
+  labels:
+    {{- include "turgon.labels" . | nindent 4 }}
+spec:
+  retentionPolicy: {{ $db.backup.retentionPolicy | quote }}
+  configuration:
+    destinationPath: {{ required "database.cloudNativePG.backup.destinationPath is required" $db.backup.destinationPath | quote }}
+    {{- with $db.backup.endpointURL }}
+    endpointURL: {{ . | quote }}
+    {{- end }}
+    s3Credentials:
+      accessKeyId:
+        name: {{ required "database.cloudNativePG.backup.credentialsSecret is required" $db.backup.credentialsSecret }}
+        key: ACCESS_KEY_ID
+      secretAccessKey:
+        name: {{ $db.backup.credentialsSecret }}
+        key: ACCESS_SECRET_KEY
+    wal:
+      compression: gzip
+    data:
+      compression: gzip
+---
+{{- end }}
 # Requires the CloudNativePG operator. It creates the Secret
 # <release>-turgon-db-app with the connection URI the pods use.
 apiVersion: postgresql.cnpg.io/v1
 kind: Cluster
 metadata:
-  name: {{ include "turgon.fullname" . }}-db
+  name: {{ $name }}
   labels:
     {{- include "turgon.labels" . | nindent 4 }}
 spec:
-  instances: {{ .Values.database.cloudNativePG.instances }}
+  instances: {{ $db.instances }}
   bootstrap:
+    {{- if $db.recovery.enabled }}
+    # Restored from a backup; the operator replays WAL up to the target.
+    recovery:
+      source: origin
+      database: turgon
+      owner: turgon
+      {{- with $db.recovery.targetTime }}
+      recoveryTarget:
+        targetTime: {{ . | quote }}
+      {{- end }}
+    {{- else }}
     initdb:
       database: turgon
       owner: turgon
+    {{- end }}
   storage:
-    size: {{ .Values.database.cloudNativePG.storage.size }}
-    {{- with .Values.database.cloudNativePG.storage.storageClass }}
+    size: {{ $db.storage.size }}
+    {{- with $db.storage.storageClass }}
     storageClass: {{ . }}
     {{- end }}
+  {{- if $db.backup.enabled }}
+  plugins:
+    - name: barman-cloud.cloudnative-pg.io
+      isWALArchiver: true
+      parameters:
+        barmanObjectName: {{ $store }}
+        serverName: {{ $db.backup.serverName | default $name }}
+  {{- end }}
+  {{- if $db.recovery.enabled }}
+  externalClusters:
+    - name: origin
+      plugin:
+        name: barman-cloud.cloudnative-pg.io
+        parameters:
+          barmanObjectName: {{ $store }}
+          serverName: {{ $db.recovery.serverName | default $name }}
+  {{- end }}
+{{- if $db.backup.enabled }}
+---
+apiVersion: postgresql.cnpg.io/v1
+kind: ScheduledBackup
+metadata:
+  name: {{ $name }}-daily
+  labels:
+    {{- include "turgon.labels" . | nindent 4 }}
+spec:
+  schedule: {{ $db.backup.schedule | quote }}
+  backupOwnerReference: self
+  immediate: true
+  cluster:
+    name: {{ $name }}
+  method: plugin
+  pluginConfiguration:
+    name: barman-cloud.cloudnative-pg.io
+{{- end }}
 {{- end }}

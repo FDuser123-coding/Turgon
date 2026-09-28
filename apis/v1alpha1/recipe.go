@@ -1,6 +1,8 @@
 package v1alpha1
 
 import (
+	"time"
+
 	"fmt"
 	"regexp"
 	"strings"
@@ -208,6 +210,12 @@ func (r *Recipe) Validate() FieldErrors {
 			}
 		default:
 			es.add(path, "exactly one of map, resolve or write must be set")
+		}
+	}
+	if r.Spec.SLO != nil && r.Spec.SLO.P95Latency != "" {
+		// The latency alert is built from it.
+		if d, err := time.ParseDuration(r.Spec.SLO.P95Latency); err != nil || d <= 0 {
+			es.add("spec.slo.p95Latency", "must be a positive duration such as 2s or 500ms, got %q", r.Spec.SLO.P95Latency)
 		}
 	}
 	if r.Spec.Capacity != nil && r.Spec.Capacity.PeakPerSecond <= 0 {

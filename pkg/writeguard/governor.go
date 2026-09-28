@@ -117,6 +117,12 @@ func (b *breaker) allow() error {
 	return ErrCircuitOpen
 }
 
+func (b *breaker) isOpen() bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.open
+}
+
 func (b *breaker) success() {
 	b.mu.Lock()
 	defer b.mu.Unlock()

@@ -1,0 +1,84 @@
+{{- if .Values.monitoring.rules.enabled }}
+{{- $r := .Values.monitoring.rules }}
+# Requires the Prometheus Operator. Latency is measured without the time
+# runs wait for people (turgon_run_active_seconds), so an SLO holds Turgon
+# and the target systems to account, not approvers.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: {{ include "turgon.fullname" . }}
+  labels:
+    {{- include "turgon.labels" . | nindent 4 }}
+    {{- with $r.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  groups:
+    - name: turgon-slo
+      rules:
+        {{- range $name := keys .Values.specs | sortAlpha }}
+        {{- $spec := index $.Values.specs $name | fromJson }}
+        {{- range $m := $spec.spec.monitors }}
+        {{- if and (eq $m.kind "latency-p95") $m.targetSeconds }}
+        - alert: TurgonRecipeLatencySLO
+          expr: |
+            histogram_quantile(0.95, sum by (le) (rate(turgon_run_active_seconds_bucket{workflow={{ $m.workflow | quote }}}[30m])))
+              > {{ $m.targetSeconds }}
+          for: 15m
+          labels: { severity: warning, workflow: {{ $m.workflow | quote }} }
+          annotations:
+            summary: "{{ $m.workflow }}: p95 run time above its {{ $m.target }} SLO"
+            description: "95% of {{ $m.workflow }} runs should finish within {{ $m.target }}, not counting approvals. Check the target systems' latency (turgon_write_duration_seconds) and open circuit breakers."
+        {{- end }}
+        {{- end }}
+        {{- end }}
+    - name: turgon
+      rules:
+        - alert: TurgonRunsFailing
+          expr: |
+            (sum by (workflow) (increase(turgon_runs_finished_total{outcome="failed"}[1h]))
+              / sum by (workflow) (increase(turgon_runs_finished_total[1h]))) > {{ $r.runFailureRatio }}
+            and sum by (workflow) (increase(turgon_runs_finished_total{outcome="failed"}[1h])) >= 3
+          for: 10m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ "{{ $labels.workflow }}" }}: more than {{ mulf $r.runFailureRatio 100 }}% of runs failed in the last hour"
+            description: "See the failed runs in the console; turgon_runs_finished_total's reason label says why."
+        - alert: TurgonCompensationFailed
+          expr: sum by (workflow) (increase(turgon_runs_finished_total{reason="TurgonCompensationFailed"}[15m])) > 0
+          labels: { severity: critical }
+          annotations:
+            summary: "{{ "{{ $labels.workflow }}" }}: a saga could not undo its writes"
+            description: "A run failed and at least one compensation failed too, so a target system holds a partial result. An operator must act; the run's notification lists the writes."
+        - alert: TurgonRecordsWaitForSteward
+          expr: sum by (workflow) (increase(turgon_runs_finished_total{reason="TurgonUnresolved"}[1h])) > 0
+          labels: { severity: info }
+          annotations:
+            summary: "{{ "{{ $labels.workflow }}" }}: runs wait for a data steward"
+            description: "Source records without a master record; link them in the console's steward queue and the runs retry."
+        - alert: TurgonApprovalsTimingOut
+          expr: sum by (workflow) (increase(turgon_approvals_total{decision="timed_out"}[24h])) > 0
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ "{{ $labels.workflow }}" }}: writes were rejected because nobody approved them in time"
+        - alert: TurgonPollingStalled
+          expr: time() - max by (workflow) (turgon_last_poll_success_timestamp_seconds) > {{ mul $r.pollStalledMinutes 60 }}
+          for: 5m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ "{{ $labels.workflow }}" }}: its source has not been polled successfully for {{ $r.pollStalledMinutes }} minutes"
+            description: "Events are not being read. turgon_poll_errors_total and the worker's log say why; `turgon check` explains connection problems."
+        - alert: TurgonCircuitOpen
+          expr: max by (target) (turgon_breaker_open) == 1
+          for: {{ $r.breakerOpenMinutes }}m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ "{{ $labels.target }}" }}: writes are refused after repeated failures"
+            description: "The target failed repeatedly; the breaker retries after its cooldown. Check the system's health and turgon_writes_total{status=\"failed\"}."
+        - alert: TurgonWebhookRejections
+          expr: sum by (endpoint, event) (increase(turgon_webhooks_total{result="unauthenticated"}[15m])) > {{ $r.webhookRejections }}
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ "{{ $labels.endpoint }}/{{ $labels.event }}" }}: many webhook deliveries with bad signatures"
+            description: "Either the signing secret changed at the provider, or someone is posting forged deliveries."
+{{- end }}

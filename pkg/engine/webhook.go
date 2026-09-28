@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/fduser123-coding/turgon/pkg/connector"
+	"github.com/fduser123-coding/turgon/pkg/metrics"
 )
 
 // MaxWebhookBody bounds a delivery (Stripe and Shopify payloads are far
@@ -31,17 +32,23 @@ func WebhookHandler(rt *Runtime, inbox Inbox, delivered func()) http.Handler {
 			webhookReply(w, http.StatusNotFound, "no webhook event "+endpoint+"/"+event+" in this spec")
 			return
 		}
+		// Only configured endpoints and events become labels, so requests
+		// to arbitrary paths cannot grow the metric's series.
+		count := func(result string) { metrics.Webhooks.WithLabelValues(endpoint, event, result).Inc() }
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxWebhookBody))
 		if err != nil {
+			count("invalid")
 			webhookReply(w, http.StatusRequestEntityTooLarge, "delivery too large")
 			return
 		}
 		events, err := hook.Receive(r.Header, body, time.Now())
 		switch {
 		case errors.Is(err, connector.ErrUnauthenticated):
+			count("unauthenticated")
 			webhookReply(w, http.StatusUnauthorized, "signature is missing, invalid or expired")
 			return
 		case err != nil:
+			count("invalid")
 			webhookReply(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -52,9 +59,15 @@ func WebhookHandler(rt *Runtime, inbox Inbox, delivered func()) http.Handler {
 			defer cancel()
 			if n, err = inbox.Deliver(ctx, InboxSource(endpoint, event), events); err != nil {
 				// Not acknowledged, so the provider delivers it again.
+				count("error")
 				webhookReply(w, http.StatusServiceUnavailable, "could not store the delivery; retry")
 				return
 			}
+		}
+		if len(events) == 0 {
+			count("ignored")
+		} else {
+			count("accepted")
 		}
 		if n > 0 && delivered != nil {
 			delivered()

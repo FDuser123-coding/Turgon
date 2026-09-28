@@ -42,7 +42,32 @@
         "existingSecretKey": { "type": "string", "minLength": 1 },
         "cloudNativePG": {
           "type": "object",
-          "properties": { "enabled": { "type": "boolean" }, "instances": { "type": "integer", "minimum": 1 } }
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "instances": { "type": "integer", "minimum": 1 },
+            "backup": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "destinationPath": { "type": "string" },
+                "endpointURL": { "type": "string" },
+                "credentialsSecret": { "type": "string" },
+                "retentionPolicy": { "type": "string", "pattern": "^[1-9][0-9]*[dwm]$" },
+                "schedule": { "type": "string" },
+                "serverName": { "type": "string" }
+              }
+            },
+            "recovery": {
+              "type": "object",
+              "additionalProperties": false,
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "serverName": { "type": "string" },
+                "targetTime": { "type": "string" }
+              }
+            }
+          }
         }
       }
     },
@@ -85,6 +110,34 @@
                 "existingSecret": { "type": "string" }
               }
             }
+          }
+        }
+      }
+    },
+    "monitoring": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "podMonitor": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "interval": { "type": "string", "pattern": "^[0-9]+(ms|s|m|h)$" },
+            "labels": { "type": "object", "additionalProperties": { "type": "string" } }
+          }
+        },
+        "scrapeFrom": { "type": "array" },
+        "rules": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "labels": { "type": "object", "additionalProperties": { "type": "string" } },
+            "runFailureRatio": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
+            "pollStalledMinutes": { "type": "integer", "minimum": 1 },
+            "breakerOpenMinutes": { "type": "integer", "minimum": 1 },
+            "webhookRejections": { "type": "integer", "minimum": 1 }
           }
         }
       }

@@ -11,6 +11,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/audit"
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
+	"github.com/fduser123-coding/turgon/pkg/metrics"
 	"github.com/fduser123-coding/turgon/pkg/policy"
 	"github.com/fduser123-coding/turgon/pkg/policy/opa"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
@@ -217,8 +218,11 @@ func (d *Dispatcher) Poll(ctx context.Context) (int, error) {
 		src := d.Runtime.Sources[wf.Trigger.Endpoint]
 		if _, hooked := d.Runtime.Webhooks[wf.Trigger.Endpoint][wf.Trigger.Event]; !hooked || d.Inbox == nil {
 			n, err := d.drain(ctx, wf, name, func(after int64) ([]connector.Event, error) {
-				return src.Poll(ctx, wf.Trigger.Event, after, batch)
+				evs, err := src.Poll(ctx, wf.Trigger.Event, after, batch)
+				polled(wf.Name, err)
+				return evs, err
 			})
+			metrics.Events.WithLabelValues(wf.Name, "poll").Add(float64(n))
 			started += n
 			errs = append(errs, err)
 			continue
@@ -229,7 +233,9 @@ func (d *Dispatcher) Poll(ctx context.Context) (int, error) {
 		// that failed (an approval rejected) is not started again.
 		inbox := InboxSource(wf.Trigger.Endpoint, wf.Trigger.Event)
 		if last, ok := d.lastPolled[name]; !ok || now().Sub(last) >= reconcile {
-			if err := d.reconcile(ctx, src, wf, name, inbox, batch); err != nil {
+			err := d.reconcile(ctx, src, wf, name, inbox, batch)
+			polled(wf.Name, err)
+			if err != nil {
 				errs = append(errs, err)
 			} else {
 				d.lastPolled[name] = now()
@@ -238,10 +244,21 @@ func (d *Dispatcher) Poll(ctx context.Context) (int, error) {
 		n, err := d.drain(ctx, wf, name+"#inbox", func(after int64) ([]connector.Event, error) {
 			return d.Inbox.Inbox(ctx, inbox, wf.Trigger.Event, after, batch)
 		})
+		// Webhook deliveries, and what reconciling polls found missing.
+		metrics.Events.WithLabelValues(wf.Name, "inbox").Add(float64(n))
 		started += n
 		errs = append(errs, err)
 	}
 	return started, errors.Join(errs...)
+}
+
+// polled records a poll of a workflow's source.
+func polled(workflow string, err error) {
+	if err != nil {
+		metrics.PollErrors.WithLabelValues(workflow).Inc()
+		return
+	}
+	metrics.LastPoll.WithLabelValues(workflow).SetToCurrentTime()
 }
 
 // reconcile polls a webhook event's source into its inbox, one batch at a

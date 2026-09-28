@@ -35,6 +35,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/connector/sap"
 	"github.com/fduser123-coding/turgon/pkg/connector/sap/saptest"
 	"github.com/fduser123-coding/turgon/pkg/identity"
+	"github.com/fduser123-coding/turgon/pkg/metrics"
 	"github.com/fduser123-coding/turgon/pkg/policy"
 	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
 	"github.com/fduser123-coding/turgon/pkg/verifier"
@@ -205,6 +206,7 @@ func (f *fixture) dispatch() []RunInput {
 func (f *fixture) run(in RunInput, signals ...ApprovalSignal) (RunResult, error, []PendingApproval) {
 	f.t.Helper()
 	var s testsuite.WorkflowTestSuite
+	s.SetMetricsHandler(metrics.Temporal())
 	env := s.NewTestWorkflowEnvironment()
 	Register(env, f.rt.Activities)
 	var seen []PendingApproval

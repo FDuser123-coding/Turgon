@@ -525,6 +525,82 @@ helm upgrade turgon deploy/helm/turgon -n integrations --reuse-values \
   --set temporal.tls.caKey=ca.crt --set temporal.tls.certKey=tls.crt --set temporal.tls.keyKey=tls.key
 ```
 
+#### Metrics and alerts
+
+Every process serves Prometheus metrics at `/metrics`. Workers serve them on their health port,
+and the console and MCP servers use `--metrics-listen`.
+
+| Metric | What it counts |
+|---|---|
+| `turgon_runs_finished_total{workflow,outcome,reason}` | Finished runs; `reason` is why a run failed (`TurgonInvalid`, `TurgonUnresolved`, `TurgonCompensationFailed`, …). |
+| `turgon_run_active_seconds{workflow}` | A run's duration **without** the time it waited for people. Recipe latency SLOs use this, so they measure Turgon and the target systems, not approvers. |
+| `turgon_approvals_total{workflow,decision}`, `turgon_approval_wait_seconds` | Decisions (approved, rejected, timed_out) and how long people took. |
+| `turgon_writes_total{target,operation,status}`, `turgon_write_duration_seconds` | Governed writes by outcome (committed, duplicate, denied, rejected, failed, compensated), and target latency. |
+| `turgon_breaker_open{target}` | 1 while a target's circuit breaker refuses writes. |
+| `turgon_events_total{workflow,via}`, `turgon_poll_errors_total`, `turgon_last_poll_success_timestamp_seconds` | Events read by polling or from the webhook inbox, and whether polling works. |
+| `turgon_webhooks_total{endpoint,event,result}` | Deliveries: accepted, ignored, unauthenticated, invalid. Only configured endpoints become labels. |
+
+The Temporal SDK's own metrics (`temporal_*`: task latencies, pollers, workflow outcomes by task
+queue) go to the same endpoint.
+
+With `--set monitoring.podMonitor.enabled=true --set monitoring.rules.enabled=true`, the chart
+adds a PodMonitor and a PrometheusRule. The rule includes **one latency alert per recipe**, from
+the `slo.p95Latency` compiled into its spec, plus these alerts:
+
+- Runs failing above a ratio.
+- A saga that could not undo its writes (critical).
+- Records waiting for a data steward.
+- Approvals timing out.
+- Stalled polling.
+- An open circuit breaker.
+- Bursts of forged webhooks.
+
+CI checks the rules with `promtool` and tests the alerts against synthetic series
+(`deploy/helm/turgon/ci/alerts-test.yaml`).
+
+#### Backup and restore
+
+Turgon's state lives in its Postgres database: idempotency records, cursors, the webhook inbox,
+cross-references and the audit log. Temporal keeps runs in its own database, which you back up
+with Temporal.
+
+With the chart's CloudNativePG cluster, enable continuous backup to S3-compatible storage. It
+uses the Barman Cloud plugin, installed next to the operator. WAL is archived continuously and a
+base backup is taken daily:
+
+```sh
+kubectl -n integrations create secret generic turgon-backup-s3 \
+  --from-literal=ACCESS_KEY_ID=... --from-literal=ACCESS_SECRET_KEY=...
+helm upgrade turgon deploy/helm/turgon -n integrations --reuse-values \
+  --set database.cloudNativePG.backup.enabled=true \
+  --set database.cloudNativePG.backup.destinationPath=s3://turgon-backups/prod \
+  --set database.cloudNativePG.backup.credentialsSecret=turgon-backup-s3
+```
+
+To restore, install a release whose cluster is created from the backup. Omit `targetTime` to
+restore the latest state, or give one to restore to that point:
+
+```sh
+helm install turgon-restored deploy/helm/turgon -n integrations -f my-values.yaml \
+  --set database.cloudNativePG.recovery.enabled=true \
+  --set database.cloudNativePG.recovery.serverName=turgon-turgon-db \
+  --set 'database.cloudNativePG.recovery.targetTime=2026-09-28 10:00:00+00' \
+  --set database.cloudNativePG.backup.serverName=turgon-turgon-db-2   # archive under a new name
+```
+
+The chart refuses a restored cluster that would archive over the backup it came from.
+
+After any restore, check the audit log's hash chain and compare its head with one recorded
+elsewhere:
+
+```sh
+bin/turgon audit verify --database-url "$RESTORED_DATABASE_URL"
+```
+
+For a Postgres you run yourself, `scripts/restore-drill.sh SOURCE_URL SCRATCH_URL` rehearses a
+logical backup and restore. It checks that the restored audit chain has the same head, that
+every table has the same row count, and that an entry edited in the copy is caught. CI runs it.
+
 #### Agents behind agentgateway
 
 With `agents.enabled`, the chart runs [agentgateway](https://agentgateway.dev) (v1.5.0) in front

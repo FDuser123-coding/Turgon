@@ -1,0 +1,25 @@
+{{- if .Values.monitoring.podMonitor.enabled }}
+# Requires the Prometheus Operator. Scrapes /metrics on every Turgon pod:
+# a port a pod does not have is skipped.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "turgon.fullname" . }}
+  labels:
+    {{- include "turgon.labels" . | nindent 4 }}
+    {{- with .Values.monitoring.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "turgon.selector" . | nindent 6 }}
+  podMetricsEndpoints:
+    - { port: health, path: /metrics, interval: {{ .Values.monitoring.podMonitor.interval }} }
+    - { port: metrics, path: /metrics, interval: {{ .Values.monitoring.podMonitor.interval }} }
+    {{- if .Values.agents.enabled }}
+    {{- range $i, $name := include "turgon.agentSpecs" . | fromJsonArray }}
+    - { port: metrics-{{ $i }}, path: /metrics, interval: {{ $.Values.monitoring.podMonitor.interval }} }
+    {{- end }}
+    {{- end }}
+{{- end }}

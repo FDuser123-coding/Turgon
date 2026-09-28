@@ -15,6 +15,7 @@ import (
 
 	"github.com/fduser123-coding/turgon/apis/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/audit"
+	"github.com/fduser123-coding/turgon/pkg/metrics"
 	"github.com/fduser123-coding/turgon/pkg/policy"
 )
 
@@ -301,6 +302,12 @@ func (g *Guard) Prepare(ctx context.Context, req Request) (Prepared, error) {
 // reported NeedsApproval. Policy is evaluated again with the approval, so a
 // decision can never be carried over from a different request.
 func (g *Guard) Commit(ctx context.Context, req Request, approval *policy.Approval) (Outcome, error) {
+	out, err := g.commitRequest(ctx, req, approval)
+	metrics.Writes.WithLabelValues(req.Target, req.Operation, string(out.Status)).Inc()
+	return out, err
+}
+
+func (g *Guard) commitRequest(ctx context.Context, req Request, approval *policy.Approval) (Outcome, error) {
 	t, err := g.target(req)
 	if err != nil {
 		return Outcome{Status: StatusFailed}, err
@@ -408,8 +415,11 @@ func (g *Guard) commit(ctx context.Context, t *target, actor, op, key string, re
 	if err != nil {
 		return nil, err
 	}
+	start := time.Now()
 	result, err := t.Target.Commit(ctx, op, key, req.Payload)
 	release()
+	metrics.WriteDuration.WithLabelValues(req.Target, op).Observe(time.Since(start).Seconds())
+	defer func() { metrics.BreakerOpen.WithLabelValues(req.Target).Set(b2f(t.brk.isOpen())) }()
 	if err != nil {
 		t.brk.failure()
 		_, _ = g.cfg.Audit.Record(actor, "writeback.failed", map[string]any{"target": req.Target, "operation": op, "key": key, "error": err.Error()})
@@ -459,8 +469,17 @@ func (g *Guard) compensate(ctx context.Context, req Request, result json.RawMess
 	}
 	res, err := g.commit(ctx, t, "turgon/saga", creq.Operation, creq.IdempotencyKey, creq)
 	if err != nil {
+		metrics.Writes.WithLabelValues(req.Target, creq.Operation, string(StatusFailed)).Inc()
 		_ = g.cfg.Store.Abort(key)
 		return err
 	}
+	metrics.Writes.WithLabelValues(req.Target, creq.Operation, "compensated").Inc()
 	return g.cfg.Store.Complete(key, Outcome{Status: StatusCommitted, Result: res})
+}
+
+func b2f(b bool) float64 {
+	if b {
+		return 1
+	}
+	return 0
 }
