@@ -19,7 +19,7 @@ import (
 )
 
 func main() {
-	addr := flag.String("listen", "127.0.0.1:9500", "address to listen on")
+	addr := flag.String("listen", "127.0.0.1:9600", "address to listen on")
 	user := flag.String("user", "TURGON_COMM", "communication user")
 	password := flag.String("password", "demo", "its password")
 	client := flag.String("client", "", "SAP client the system requires (sap-client), e.g. 100")

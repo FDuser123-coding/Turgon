@@ -202,8 +202,8 @@ the test fake of the three APIs:
 
 ```sh
 go build -o bin/fakesap ./internal/tools/fakesap
-touch sap.cmds && (tail -f sap.cmds | bin/fakesap -client 100 &)   # http://127.0.0.1:9500, TURGON_COMM / demo
-sed -i 's|    baseURL: https://my300000-api.s4hana.cloud.sap|    baseURL: http://127.0.0.1:9500\n    client: "100"|' \
+touch sap.cmds && (tail -f sap.cmds | bin/fakesap -client 100 &)   # http://127.0.0.1:9600, TURGON_COMM / demo
+sed -i 's|    baseURL: https://my300000-api.s4hana.cloud.sap|    baseURL: http://127.0.0.1:9600\n    client: "100"|' \
   my-catalog/connections/s4-prod.yaml                          # with the Shopify fake set up as above
 bin/turgon compile -c my-catalog shopify-store-orders-to-s4 -o s4.json
 export TURGON_SECRET_S4_PROD_COMM_USER=TURGON_COMM:demo
