@@ -1,0 +1,41 @@
+# SAP S/4HANA (Cloud, and on-premise 1909 or later) through its released
+# OData v2 APIs, the interfaces SAP sanctions for integration. Like rest,
+# the entities, events and operations come from each Connection
+# (pkg/connector/sap). SAP ECC keeps the BAPI connector (sap-ecc).
+apiVersion: turgon.dev/v1alpha1
+kind: ConnectorManifest
+metadata:
+  name: sap-odata
+  version: 1.0.0
+spec:
+  system: "SAP S/4HANA Cloud and S/4HANA 1909+, OData v2 APIs"
+  runtime: native
+  auth:
+    # A communication user (basic), or OAuth 2.0 client credentials.
+    methods: [basic, oauth2-client-credentials]
+    secretRef: openbao://sap/s4/comm-user
+  discovery:
+    - kind: odata-metadata
+  interfaces:
+    read:
+      - kind: odata
+    write:
+      # Creates are dry-run by the API's simulation service where one
+      # exists (API_SALES_ORDER_SIMULATION_SRV): priced and checked, not saved.
+      - kind: odata
+        simulation: testrun
+    events:
+      # $filter on the entity's change timestamp (LastChangeDateTime).
+      - kind: odata-poll
+    prohibited:
+      - kind: direct-database
+        reason: "runtime database license; SAP supports integration only through released APIs"
+      - kind: odp-rfc
+        reason: "SAP Note 3255746"
+  limits:
+    # Conservative defaults; each connection sets its system's limits.
+    maxConcurrentCalls: 4
+    requestsPerSecond: 10
+  metering:
+    # Documents created through APIs count toward SAP Digital Access.
+    sapDigitalAccess: true

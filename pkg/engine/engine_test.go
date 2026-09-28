@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http/httptest"
 	"os"
 	"sort"
 	"strings"
@@ -29,6 +30,8 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/stripetest"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce/sftest"
+	"github.com/fduser123-coding/turgon/pkg/connector/sap"
+	"github.com/fduser123-coding/turgon/pkg/connector/sap/saptest"
 	"github.com/fduser123-coding/turgon/pkg/identity"
 	"github.com/fduser123-coding/turgon/pkg/policy"
 	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
@@ -114,7 +117,7 @@ func newFixtureWith(t *testing.T, recipe string, extra connector.StaticSecrets, 
 		secrets[k] = v
 	}
 	rt, err := New(ctx, spec, Options{
-		Registry: connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory, rest.Name: rest.Factory},
+		Registry: connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory, rest.Name: rest.Factory, sap.Name: sap.Factory},
 		Secrets:  secrets,
 		Store:    store,
 		Resolver: store,
@@ -600,6 +603,66 @@ func TestShopifyRejectionCancelsTheERPOrder(t *testing.T) {
 	}
 	if shop.Order(id)["note"] != nil {
 		t.Fatal("Shopify order changed")
+	}
+}
+
+// newS4Fixture runs the shopify-store-orders-to-s4 recipe against the fake
+// Shopify store and the fake S/4HANA system.
+func newS4Fixture(t *testing.T) (*fixture, *shoptest.Shop, *saptest.S4, int64) {
+	t.Helper()
+	shop := shoptest.New("shpat_test")
+	t.Cleanup(shop.Close)
+	s4 := saptest.New("TURGON_COMM", "s3cret", "")
+	srv := httptest.NewServer(s4)
+	t.Cleanup(srv.Close)
+	f := newFixtureFor(t, "shopify-store-orders-to-s4", connector.StaticSecrets{
+		"openbao://shopify-store/token": "shpat_test", "openbao://s4-prod/comm-user": "TURGON_COMM:s3cret",
+	}, func(cfg string) string {
+		cfg = strings.ReplaceAll(cfg, "https://turgon-demo.myshopify.com/admin/api/"+shoptest.Version, shop.URL())
+		return strings.ReplaceAll(cfg, "https://my300000-api.s4hana.cloud.sap", srv.URL)
+	})
+	if err := f.store.PutXref(context.Background(), "Customer", "shopify-store", "ada@example.com", "C-100"); err != nil {
+		t.Fatal(err)
+	}
+	id := shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-09-24T09:30:00-04:00",
+		"subtotal_price": "705.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-2", "quantity": 3}},
+	})
+	return f, shop, s4, id
+}
+
+func TestShopifyOrderBecomesS4Order(t *testing.T) {
+	f, shop, s4, id := newS4Fixture(t)
+	res, err, pending := f.run(f.dispatch()[0], approve("03-write"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The approver saw SAP's simulation: SAP's price for the order.
+	if len(pending) != 1 || !strings.Contains(string(pending[0].Preview), `"TotalNetAmount":"705.00"`) || !strings.Contains(string(pending[0].Preview), `"mode":"testrun"`) {
+		t.Fatalf("pending = %+v", pending)
+	}
+	orders := s4.Orders()
+	if len(orders) != 1 || len(res.Writes) != 2 {
+		t.Fatalf("S/4 orders %v, writes %+v", orders, res.Writes)
+	}
+	o := s4.Order(orders[0])
+	if o["SoldToParty"] != "C-100" || o["PurchaseOrderByCustomer"] != fmt.Sprintf("SHOPIFY-%d", id) || o["SalesOrderDate"] != "/Date(1790208000000)/" {
+		t.Fatalf("S/4 order = %v", o)
+	}
+	if got := shop.Order(id)["note"]; got != "ERP order "+orders[0] {
+		t.Fatalf("Shopify note = %v", got)
+	}
+}
+
+func TestShopifyRejectionDeletesTheS4Order(t *testing.T) {
+	f, shop, s4, _ := newS4Fixture(t)
+	shop.FailUpdates = true
+	_, err, _ := f.run(f.dispatch()[0], approve("03-write"))
+	if errType(err) != ErrTypeInvalid {
+		t.Fatalf("err = %v (%s)", err, errType(err))
+	}
+	if n := s4.Requests["DELETE API_SALES_ORDER_SRV/A_SalesOrder('1')"]; n != 1 || len(s4.Orders()) != 0 {
+		t.Fatalf("the S/4 order was not deleted: orders %v, requests %v", s4.Orders(), s4.Requests)
 	}
 }
 

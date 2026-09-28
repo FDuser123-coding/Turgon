@@ -1,0 +1,60 @@
+# The ERP on SAP S/4HANA, through its released OData APIs with a
+# communication user (the secret, "user:password"; in S/4HANA Cloud from a
+# communication arrangement for scenarios SAP_COM_0109 sales orders,
+# SAP_COM_0008 business partners). Sales orders are created by deep insert
+# with their items, after a dry run by the simulation service; the Shopify
+# order's ID goes into PurchaseOrderByCustomer, so a retried create finds
+# the order instead of making a second one. Changed orders are events.
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata: { name: s4-prod }
+spec:
+  connector: sap-odata@^1
+  secretRef: openbao://s4-prod/comm-user
+  entities: [SalesOrder, Customer]
+  limits: { maxConcurrentCalls: 4, requestsPerSecond: 10 }
+  events:
+    - { name: SalesOrder.Changed, entity: SalesOrder, interface: odata-poll }
+  operations:
+    - { name: create-sales-order, entity: SalesOrder, direction: write, interface: odata, risk: high, compensation: delete-sales-order }
+    - { name: delete-sales-order, entity: SalesOrder, direction: write, interface: odata, risk: high }
+    - { name: get-customer, entity: Customer, direction: read, interface: odata, risk: read }
+  config:
+    baseURL: https://my300000-api.s4hana.cloud.sap
+    auth: { type: basic }
+    events:
+      SalesOrder.Changed:
+        service: API_SALES_ORDER_SRV
+        entitySet: A_SalesOrder
+        key: SalesOrder
+        filter: "SalesOrderType eq 'OR'"
+        expand: [to_Item]
+    operations:
+      create-sales-order:
+        action: create
+        service: API_SALES_ORDER_SRV
+        entitySet: A_SalesOrder
+        key: SalesOrder
+        constants: { SalesOrderType: OR, SalesOrganization: "1710", DistributionChannel: "10", OrganizationDivision: "00" }
+        fields: { SoldToParty: customerId, SalesOrderDate: orderDate }
+        types: { SalesOrderDate: date }
+        items:
+          navigation: to_Item
+          from: lines
+          fields: { Material: material, RequestedQuantity: quantity }
+          types: { RequestedQuantity: decimal }
+        reference: PurchaseOrderByCustomer
+        simulate: { service: API_SALES_ORDER_SIMULATION_SRV, entitySet: A_SalesOrderSimulation }
+      # Undoes a create in a saga. SAP refuses once the order has
+      # follow-on documents (a delivery), and the saga then stops for a person.
+      delete-sales-order:
+        action: delete
+        service: API_SALES_ORDER_SRV
+        entitySet: A_SalesOrder
+        key: SalesOrder
+      get-customer:
+        action: get
+        service: API_BUSINESS_PARTNER
+        entitySet: A_Customer
+        key: Customer
+        fields: { CustomerName: name, CustomerAccountGroup: accountGroup, DeletionIndicator: blocked }
