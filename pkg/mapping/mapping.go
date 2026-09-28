@@ -51,6 +51,16 @@ func Check(expr string) error {
 	return err
 }
 
+// FieldError is a field whose expression failed on a document. Its error
+// can quote the document's values.
+type FieldError struct {
+	Field string
+	Err   error
+}
+
+func (e *FieldError) Error() string { return fmt.Sprintf("mapping field %s: %v", e.Field, e.Err) }
+func (e *FieldError) Unwrap() error { return e.Err }
+
 // Apply evaluates every field against doc. Fields whose expression yields
 // no result (JSONata "undefined") are omitted, not set to null.
 func (m *Mapper) Apply(doc any) (map[string]any, error) {
@@ -61,7 +71,7 @@ func (m *Mapper) Apply(doc any) (map[string]any, error) {
 			if isUndefined(err) {
 				continue
 			}
-			return nil, fmt.Errorf("mapping field %s: %w", f.target, err)
+			return nil, &FieldError{Field: f.target, Err: err}
 		}
 		out[f.target] = v
 	}

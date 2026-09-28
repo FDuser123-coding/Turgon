@@ -36,6 +36,7 @@ spec:
             - --audit-log=postgres
             - --health-listen=:8081
             - --poll={{ $.Values.workers.pollInterval }}
+            - --pollers={{ $.Values.workers.pollers }}
             - --approval-timeout={{ $.Values.workers.approvalTimeout }}
             {{- if $.Values.workers.webhooks.enabled }}
             - --webhook-listen=:8082
@@ -74,7 +75,9 @@ spec:
           volumeMounts:
             - { name: specs, mountPath: /specs, readOnly: true }
             - { name: tmp, mountPath: /tmp }
+            {{- include "turgon.temporalTLSMount" $ | nindent 12 }}
       volumes:
+        {{- include "turgon.temporalTLSVolume" $ | nindent 8 }}
         - name: specs
           configMap:
             name: {{ include "turgon.fullname" $ }}-specs

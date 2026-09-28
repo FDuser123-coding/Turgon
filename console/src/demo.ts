@@ -94,11 +94,18 @@ export function createDemoApi() {
     },
   };
 
-  const unresolved = (id: string, minutesAgo: number, link: StewardItem["runs"][number]["link"], payload: unknown): RunDetail => ({
-    id, runId: `u-${id}`, workflow: id.slice(0, id.lastIndexOf("/")), status: "failed", started: at(minutesAgo), closed: at(minutesAgo - 0.1),
-    failureType: "TurgonUnresolved", failure: `${link.entity} "${link.ref}" from ${link.system} has no master record; it needs a data steward`,
-    event: { id: id.slice(id.lastIndexOf("/") + 1), position: 1, name: link.system === "stripe-billing" ? "Invoice.Paid" : "Order.Created", payload },
-  });
+  // The record each unresolved run waits for. Like the real engine, the
+  // failure message does not quote it: the link lives in the failure's
+  // details, which payload encryption covers.
+  const links = new Map<string, Link>();
+  const unresolved = (id: string, minutesAgo: number, link: Link, payload: unknown): RunDetail => {
+    links.set(id, link);
+    return {
+      id, runId: `u-${id}`, workflow: id.slice(0, id.lastIndexOf("/")), status: "failed", started: at(minutesAgo), closed: at(minutesAgo - 0.1),
+      failureType: "TurgonUnresolved", failure: `a ${link.entity} from ${link.system} has no master record; it needs a data steward`,
+      event: { id: id.slice(id.lastIndexOf("/") + 1), position: 1, name: link.system === "stripe-billing" ? "Invoice.Paid" : "Order.Created", payload },
+    };
+  };
   const grace = { entity: "Customer", system: "shopify-store", ref: "grace@lovelace-gmbh.example" };
   const cusNew = { entity: "Customer", system: "stripe-billing", ref: "cus_Q8newCustomer" };
 
@@ -173,10 +180,7 @@ export function createDemoApi() {
   const delay = <T,>(v: T) => new Promise<T>((r) => setTimeout(() => r(structuredClone(v)), 120));
   const summary = ({ id, runId, workflow, status, started, closed, pending }: RunDetail): RunSummary => ({ id, runId, workflow, status, started, closed, pending });
 
-  const linkOf = (r: RunDetail): Link | null => {
-    const m = r.failureType === "TurgonUnresolved" ? /^(\S+) "(.+)" from (\S+) has no master record/.exec(r.failure ?? "") : null;
-    return m ? { entity: m[1] ?? "", ref: m[2] ?? "", system: m[3] ?? "" } : null;
-  };
+  const linkOf = (r: RunDetail): Link | null => (r.failureType === "TurgonUnresolved" ? links.get(r.id) ?? null : null);
   // What the matcher would suggest: the demo store's company domain is known.
   const suggestionsFor = (l: Link) =>
     l.ref.endsWith("@lovelace-gmbh.example") ? [{ master: "C-100", score: 0.877, reasons: ["same company email domain"] }] : [];

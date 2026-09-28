@@ -85,10 +85,12 @@ spec:
             {{- toYaml .Values.console.resources | nindent 12 }}
           volumeMounts:
             - { name: tmp, mountPath: /tmp }
+            {{- include "turgon.temporalTLSMount" . | nindent 12 }}
             {{- if .Values.console.catalogConfigMap }}
             - { name: catalog, mountPath: /catalog, readOnly: true }
             {{- end }}
       volumes:
+        {{- include "turgon.temporalTLSVolume" . | nindent 8 }}
         - name: tmp
           emptyDir: { sizeLimit: 16Mi }
         {{- if .Values.console.catalogConfigMap }}

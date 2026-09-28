@@ -205,6 +205,27 @@ In Kubernetes, `workers.webhooks.enabled` opens the port on each worker behind a
 Each spec runs on its own Temporal task queue (`turgon-<spec name>`), so workers for different
 specs can share a cluster.
 
+### Performance
+
+`scripts/loadtest.sh [payments]` measures Stripe-to-ERP cash application end to end: signed
+webhooks from the fake Stripe, the worker, the write guard with previews and read-back
+confirmation, the ERP in Postgres and the write-back to Stripe. On a 4-core machine with the
+Temporal dev server in memory, 1,000 payments arriving at once:
+
+| | Throughput | Run latency p50 / p95 / p99 |
+|---|---|---|
+| `--pollers auto` (default) | 36.5 payments/s | 0.86 s / 1.54 s / 1.66 s |
+| `--pollers 2` (the Temporal SDK's default) | 31.6 payments/s | 9.9 s / 15.5 s / 16.5 s |
+
+At that rate the Temporal server uses three of the four cores and the worker less than one:
+Temporal is the limit, and it scales on its own cluster. Map and resolve steps run as local
+activities, in the worker and within the workflow's own task, so a run costs Temporal 5
+workflow tasks and 4 activity tasks. A connection's declared rate limit applies before any of
+this: each payment makes several Stripe requests (the preview, the update and its read-back),
+so the example connection's 20 requests a second, not Turgon, sets the pace against real
+Stripe; the load test lifts that limit to measure Turgon. The dev server's on-disk SQLite, by contrast, allows only a few
+runs a second, so load tests run it in memory.
+
 ### Notifications
 
 Workers tell people when a run needs them, so nobody has to watch the console:
@@ -388,6 +409,30 @@ To receive webhooks, add the signing secrets to the connection secrets and
 `--set workers.webhooks.enabled=true --set workers.webhooks.ingress.enabled=true
 --set workers.webhooks.ingress.host=hooks.example.com`; the ingress routes only
 `/webhooks/<endpoint>/<event>` for the events configured for webhooks.
+
+#### Temporal: TLS and encrypted payloads
+
+Everything Turgon passes through Temporal (events, mapped records, write requests and results,
+failures) is stored in Temporal's database and shown in its UI. Set `TURGON_PAYLOAD_KEYS` to
+encrypt it with AES-256-GCM before it leaves Turgon: a comma-separated list of `id:key`, each key
+32 random bytes in base64 (`head -c 32 /dev/urandom | base64`). The first key encrypts; every key
+listed decrypts, so to rotate put a new key first and drop an old one once no run you still need
+used it. Turgon's workers, console and MCP servers must share the keys. Temporal's own UI then
+shows ciphertext; the console decrypts. Failure messages are encrypted too, and the messages of
+map and resolve steps never quote a record (what they would quote is in the encrypted details).
+
+Connect to Temporal over TLS with `--temporal-tls`, a CA with `--temporal-ca`, mutual TLS with
+`--temporal-cert` and `--temporal-key`, and to Temporal Cloud with `TURGON_TEMPORAL_API_KEY`
+(each flag also reads `TURGON_TEMPORAL_*`). In the chart:
+
+```sh
+kubectl -n integrations create secret generic turgon-temporal \
+  --from-literal=payloadKeys="2026-09:$(head -c 32 /dev/urandom | base64)"   # and apiKey=... for Temporal Cloud
+helm upgrade turgon deploy/helm/turgon -n integrations --reuse-values \
+  --set temporal.existingSecret=turgon-temporal \
+  --set temporal.tls.enabled=true --set temporal.tls.existingSecret=temporal-mtls \
+  --set temporal.tls.caKey=ca.crt --set temporal.tls.certKey=tls.crt --set temporal.tls.keyKey=tls.key
+```
 
 #### Agents behind agentgateway
 

@@ -15,6 +15,20 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
 )
 
+// activityRetry retries activities that failed for a passing reason;
+// decisions and invalid input are final.
+var activityRetry = &temporal.RetryPolicy{
+	InitialInterval:        time.Second,
+	BackoffCoefficient:     2,
+	MaximumInterval:        time.Minute,
+	MaximumAttempts:        8,
+	NonRetryableErrorTypes: []string{ErrTypeDenied, ErrTypeRejected, ErrTypeInvalid, ErrTypeUnresolved, ErrTypeMapping},
+}
+
+// localStepsVersion gates running map and resolve steps as local
+// activities, which older runs' histories recorded as activities.
+const localStepsVersion = "local-map-resolve"
+
 // DefaultApprovalTimeout is how long a run waits for a person.
 const DefaultApprovalTimeout = 72 * time.Hour
 
@@ -31,13 +45,7 @@ type committedWrite struct {
 func IntegrationWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: time.Minute,
-		RetryPolicy: &temporal.RetryPolicy{
-			InitialInterval:        time.Second,
-			BackoffCoefficient:     2,
-			MaximumInterval:        time.Minute,
-			MaximumAttempts:        8,
-			NonRetryableErrorTypes: []string{ErrTypeDenied, ErrTypeRejected, ErrTypeInvalid, ErrTypeUnresolved, ErrTypeMapping},
-		},
+		RetryPolicy:         activityRetry,
 	})
 	logger := workflow.GetLogger(ctx)
 	timeout := in.ApprovalTimeout
@@ -89,43 +97,59 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			ErrTypeCompensationFailed, err)
 	}
 
-	for _, step := range in.Workflow.Steps {
-		failedStep = step.Name
+	// Map and resolve steps are short and touch no target system, so they
+	// run as local activities: in the worker, recorded in the workflow's
+	// own task instead of a round trip each through the Temporal server.
+	// Runs started before this change replay them as they ran.
+	local := workflow.GetVersion(ctx, localStepsVersion, workflow.DefaultVersion, 1) == 1
+	step := func(name string, input, out any) error {
+		if !local {
+			return workflow.ExecuteActivity(ctx, name, input).Get(ctx, out)
+		}
+		lctx := workflow.WithLocalActivityOptions(ctx, workflow.LocalActivityOptions{
+			StartToCloseTimeout: time.Minute,
+			RetryPolicy:         activityRetry,
+		})
+		return workflow.ExecuteLocalActivity(lctx, name, input).Get(lctx, out)
+	}
+
+	for _, st := range in.Workflow.Steps {
+		failedStep = st.Name
 		switch {
 		// Results decode into a fresh map: decoding into doc would merge
 		// keys into it (and into source, which doc starts as).
-		case step.Map != nil:
+		case st.Map != nil:
 			var next map[string]any
-			if err := workflow.ExecuteActivity(ctx, a.Map, MapInput{Config: *step.Map, Doc: doc}).Get(ctx, &next); err != nil {
+			if err := step("Map", MapInput{Config: *st.Map, Doc: doc}, &next); err != nil {
 				return fail(err)
 			}
 			doc = next
-		case step.Resolve != nil:
+		case st.Resolve != nil:
 			var next map[string]any
-			in := ResolveInput{Config: *step.Resolve, System: in.Workflow.Trigger.Endpoint, Doc: doc}
-			if err := workflow.ExecuteActivity(ctx, a.Resolve, in).Get(ctx, &next); err != nil {
+			rin := ResolveInput{Config: *st.Resolve, System: in.Workflow.Trigger.Endpoint, Doc: doc}
+			if err := step("Resolve", rin, &next); err != nil {
 				return fail(err)
 			}
 			doc = next
-		case step.Write != nil:
+		case st.Write != nil:
 			var prep PrepareOutput
-			pin := PrepareInput{Workflow: in.Workflow.Name, Step: step.Name, Config: *step.Write, Source: source, Doc: doc}
+			pin := PrepareInput{Workflow: in.Workflow.Name, Step: st.Name, Config: *st.Write, Source: source, Doc: doc}
 			if err := workflow.ExecuteActivity(ctx, a.PrepareWrite, pin).Get(ctx, &prep); err != nil {
 				return fail(err)
 			}
-			rec := WriteRecord{Step: step.Name, Endpoint: step.Write.Endpoint, Operation: step.Write.Operation}
+			rec := WriteRecord{Step: st.Name, Endpoint: st.Write.Endpoint, Operation: st.Write.Operation}
 			if d := prep.Prepared.Duplicate; d != nil {
 				rec.Status, rec.Result = d.Status, d.Result
 				// Written before this run: not ours to compensate.
 				result.Writes = append(result.Writes, rec)
-				doc = withOutput(doc, step.Write.Output, d.Result)
+				doc = withOutput(doc, st.Write.Output, d.Result)
 				continue
 			}
 
 			var approval *policy.Approval
 			if prep.Prepared.NeedsApproval {
 				pending = &PendingApproval{
-					Step: step.Name, Digest: RequestDigest(prep.Request), Request: prep.Request,
+					Step: st.Name, Digest: RequestDigest(prep.Request), Request: prep.Request,
 					Preview: prep.Prepared.Preview, Reasons: prep.Prepared.Decision.Reasons, Since: workflow.Now(ctx),
 				}
 				tell(ctx, in.Workflow.Name, approvalPending(*pending, pending.Since.Add(timeout)))
@@ -143,8 +167,8 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 			}
 			rec.Status, rec.Result = out.Status, out.Result
 			result.Writes = append(result.Writes, rec)
-			done = append(done, committedWrite{step: step.Name, request: prep.Request, result: out.Result})
-			doc = withOutput(doc, step.Write.Output, out.Result)
+			done = append(done, committedWrite{step: st.Name, request: prep.Request, result: out.Result})
+			doc = withOutput(doc, st.Write.Output, out.Result)
 		}
 	}
 	return result, nil

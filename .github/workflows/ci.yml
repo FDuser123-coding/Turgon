@@ -35,6 +35,8 @@ jobs:
         run: go vet ./...
       - name: Test (unit, Postgres integration, Temporal workflow)
         run: go test -race ./...
+      - name: Known vulnerabilities in reachable code
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
       - name: Validate, verify and compile the example catalog
         run: |
           go run ./cmd/turgon validate examples
@@ -113,10 +115,15 @@ jobs:
             --set console.auth.oidc.issuer=https://login.example.com --set console.auth.oidc.clientID=turgon \
             --set console.auth.oidc.url=https://turgon.example.com --set console.auth.oidc.existingSecret=turgon-console-oidc \
             > /tmp/rendered-oidc.yaml
+          # Temporal over mutual TLS, with an API key and payload encryption.
+          helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" --set temporal.tls.enabled=true \
+            --set temporal.tls.existingSecret=temporal-mtls --set temporal.tls.caKey=ca.crt --set temporal.tls.certKey=tls.crt \
+            --set temporal.tls.keyKey=tls.key --set temporal.existingSecret=turgon-temporal > /tmp/rendered-tls.yaml
+          grep -q 'secretName: temporal-mtls' /tmp/rendered-tls.yaml
           ~/go/bin/kubeconform -strict -summary -kubernetes-version 1.31.0 \
             -schema-location default \
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-            /tmp/rendered.yaml /tmp/rendered-oidc.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
+            /tmp/rendered.yaml /tmp/rendered-oidc.yaml /tmp/rendered-tls.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
       - name: Lint the Dockerfile
         run: hadolint Dockerfile
 

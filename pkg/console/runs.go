@@ -13,7 +13,7 @@ import (
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
 	"go.temporal.io/sdk/client"
-	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/temporal"
 
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/engine"
@@ -155,7 +155,7 @@ func (t TemporalRuns) Get(ctx context.Context, id string) (RunDetail, error) {
 		d.Pending, _ = t.Pending(ctx, id)
 		return d, nil
 	}
-	dc := converter.GetDefaultDataConverter()
+	dc := engine.DataConverter()
 	it := t.Client.GetWorkflowHistory(ctx, id, d.RunID, false, enums.HISTORY_EVENT_FILTER_TYPE_CLOSE_EVENT)
 	for it.HasNext() {
 		ev, err := it.Next()
@@ -171,11 +171,20 @@ func (t TemporalRuns) Get(ctx context.Context, id string) (RunDetail, error) {
 		if a := ev.GetWorkflowExecutionFailedEventAttributes(); a != nil {
 			// Temporal wraps the cause ("activity error"); the application
 			// error with its type and message is the innermost useful one.
-			for c := a.GetFailure(); c != nil; c = c.GetCause() {
-				if info := c.GetApplicationFailureInfo(); info != nil && info.GetType() != "" {
-					d.FailureType, d.Failure = info.GetType(), c.GetMessage()
+			// Decoding goes through the failure converter: with payload
+			// encryption, messages are encrypted too.
+			for e := engine.FailureConverter().FailureToError(a.GetFailure()); e != nil; e = errors.Unwrap(e) {
+				var app *temporal.ApplicationError
+				if errors.As(e, &app) && app == e && app.Type() != "" {
+					d.FailureType, d.Failure = app.Type(), app.Message()
+					// Some failures keep what they quote from records in
+					// their details, which only Turgon can decrypt.
+					var detail string
+					if app.HasDetails() && app.Details(&detail) == nil && detail != "" {
+						d.Failure += ": " + detail
+					}
 				} else if d.Failure == "" {
-					d.Failure = c.GetMessage()
+					d.Failure = e.Error()
 				}
 			}
 		}

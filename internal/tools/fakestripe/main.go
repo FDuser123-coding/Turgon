@@ -29,7 +29,9 @@ func main() {
 	st := stripetest.NewStripe(*key)
 	// IDs and event times keep increasing across restarts, as in a real
 	// account, so a demo never re-reads what an earlier demo handled.
-	st.StartAt(int(time.Now().Unix()%100_000_000), time.Now())
+	// Numbered from milliseconds, a restart never reaches the numbers an
+	// earlier run used, even after thousands of invoices.
+	st.StartAt(int(time.Now().UnixMilli()%100_000_000_000), time.Now())
 	if *hookURL != "" {
 		st.SendWebhooks(*hookURL, *hookSecret)
 	}
