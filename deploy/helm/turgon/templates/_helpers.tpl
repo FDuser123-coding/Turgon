@@ -184,3 +184,40 @@ affinity:
 - --rate-limit={{ . }}
 {{- end }}
 {{- end -}}
+
+{{/* The operator's pod template for workers (a PodTemplateSpec). */}}
+{{- define "turgon.workerTemplate" -}}
+metadata:
+  labels:
+    {{- include "turgon.selector" . | nindent 4 }}
+spec:
+  {{- include "turgon.podSettings" . | nindent 2 }}
+  containers:
+    - name: worker
+      image: {{ include "turgon.image" . }}
+      imagePullPolicy: {{ .Values.image.pullPolicy }}
+      env:
+        {{- include "turgon.commonEnv" . | nindent 8 }}
+        {{- with .Values.workers.consoleURL }}
+        - name: TURGON_CONSOLE_URL
+          value: {{ . | quote }}
+        {{- end }}
+      {{- with .Values.workers.secretEnvFrom }}
+      envFrom:
+        {{- range . }}
+        - secretRef:
+            name: {{ . }}
+        {{- end }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.securityContext | nindent 8 }}
+      resources:
+        {{- toYaml .Values.workers.resources | nindent 8 }}
+      volumeMounts:
+        - { name: tmp, mountPath: /tmp }
+        {{- include "turgon.sharedMounts" . | nindent 8 }}
+  volumes:
+    {{- include "turgon.sharedVolumes" . | nindent 4 }}
+    - name: tmp
+      emptyDir: { sizeLimit: 64Mi }
+{{- end -}}

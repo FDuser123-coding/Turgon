@@ -106,6 +106,21 @@ workers:
       annotations: {}
       tls: []                # e.g. [{secretName: turgon-webhooks-tls, hosts: [hooks.example.com]}]
 
+# The Turgon operator runs each spec as an Integration (turgon.dev/v1alpha1):
+# it verifies a spec before rolling it out and keeps the workers on the last
+# valid one otherwise, derives the webhook Service and Ingress and the SLO
+# alerts from the spec, and reports each Integration's state. With it
+# enabled, `specs` become Integrations instead of Deployments rendered here,
+# and more Integrations can be applied with kubectl (`turgon integration`).
+# The CRD is in the chart's crds/ directory.
+operator:
+  enabled: false
+  replicas: 1              # more stand by; one leads
+  defaultReplicas: 2       # workers per Integration that does not say
+  resources:
+    requests: { cpu: 50m, memory: 64Mi }
+    limits: { memory: 256Mi }
+
 console:
   enabled: true
   replicas: 1
