@@ -1,0 +1,36 @@
+# The Turgon console. By default it listens on loopback only with --auth dev;
+# set TURGON_CONSOLE_ARGS in /etc/turgon/turgon.env for single sign-on
+# (--auth oidc ...) or a reverse proxy (--auth proxy ...).
+[Unit]
+Description=Turgon console
+After=network-online.target turgon-temporal.service postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=turgon
+Group=turgon
+EnvironmentFile=/etc/turgon/turgon.env
+ExecStart=/opt/turgon/bin/turgon console --database-url ${TURGON_DATABASE_URL} --temporal ${TURGON_TEMPORAL_ADDRESS} --audit-log postgres $TURGON_CONSOLE_ARGS
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+ReadOnlyPaths=/etc/turgon
+
+[Install]
+WantedBy=multi-user.target

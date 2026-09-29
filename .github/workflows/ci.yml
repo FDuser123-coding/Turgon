@@ -200,6 +200,36 @@ jobs:
       - name: Lint the Dockerfile
         run: hadolint Dockerfile
 
+  appliance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build the offline bundle
+        run: scripts/build-appliance.sh ci amd64
+      - name: A tampered bundle is refused; an intact one installs
+        run: |
+          mkdir /tmp/bundle && tar -C /tmp/bundle -xzf dist/turgon-appliance-ci-linux-amd64.tar.gz
+          cd /tmp/bundle/turgon-appliance-ci-linux-amd64
+          echo "# tampered" >> turgon.env.example
+          if ./install.sh --root /tmp/root; then echo "a tampered bundle was installed"; exit 1; fi
+          sed -i '$d' turgon.env.example
+          ./install.sh --root /tmp/root
+          test "$(stat -c %a /tmp/root/etc/turgon/turgon.env)" = 640
+          /tmp/root/opt/turgon/bin/temporal --version | grep -q 'temporal version 1.4.1'
+          /tmp/root/opt/turgon/bin/turgon appliance run --help >/dev/null
+      - name: The systemd units are valid and sandboxed
+        run: |
+          set -o pipefail
+          sudo ln -s /tmp/root/opt/turgon /opt/turgon
+          sudo useradd --system --no-create-home turgon
+          systemd-analyze verify /tmp/root/etc/systemd/system/turgon-*.service
+          for u in /tmp/root/etc/systemd/system/turgon-*.service; do
+            systemd-analyze security --offline=yes --threshold=3 "$u" | tail -1
+          done
+
   licenses:
     runs-on: ubuntu-latest
     steps:

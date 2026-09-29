@@ -1,4 +1,4 @@
-.PHONY: all build console test test-integration vet fmt demo spec chart image licenses generate envtest
+.PHONY: all build console test test-integration vet fmt demo spec chart image licenses generate envtest appliance
 
 all: fmt vet test console build
 
@@ -63,3 +63,8 @@ image:
 # Check shipped dependencies against the license policy (needs go-licenses).
 licenses:
 	scripts/check-licenses.sh
+
+# The offline appliance bundle (dist/turgon-appliance-<version>-linux-amd64.tar.gz);
+# build the console first to embed it.
+appliance:
+	scripts/build-appliance.sh
