@@ -1,15 +1,31 @@
-.PHONY: all build console test test-integration vet fmt demo spec chart image licenses
+.PHONY: all build console test test-integration vet fmt demo spec chart image licenses generate envtest
 
 all: fmt vet test console build
 
 build:
 	go build -o bin/turgon ./cmd/turgon
+	go build -o bin/turgon-operator ./cmd/turgon-operator
+
+# Regenerate the operator's deep copies and the Integration CRD from
+# apis/operator (CI checks they are up to date).
+generate:
+	go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.19.0 object paths=./apis/operator/... \
+		crd:crdVersions=v1 output:crd:dir=deploy/helm/turgon/crds
+
+# The operator's tests run a real kube-apiserver and etcd (envtest):
+#   make envtest && export KUBEBUILDER_ASSETS=$$PWD/bin/envtest
+ENVTEST_K8S = 1.31.0
+envtest:
+	mkdir -p bin/envtest
+	curl -sSL https://github.com/kubernetes-sigs/controller-tools/releases/download/envtest-v$(ENVTEST_K8S)/envtest-v$(ENVTEST_K8S)-linux-amd64.tar.gz \
+		| tar xz --strip-components=2 -C bin/envtest
 
 # Build the web console into pkg/console/dist, which `build` embeds.
 console:
 	cd console && npm ci && npm test && npm run build
 
-# Unit tests; Postgres integration tests skip without TURGON_TEST_DATABASE_URL.
+# Unit tests; Postgres integration tests skip without TURGON_TEST_DATABASE_URL,
+# the operator's API server tests without KUBEBUILDER_ASSETS.
 test:
 	go test -race ./...
 

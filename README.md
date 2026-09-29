@@ -732,6 +732,48 @@ plain-language fix for each failure. `deploy/flux/turgon.yaml` shows pull-based 
 cosign verification and automatic rollback. The image is built by the `Dockerfile` (distroless,
 non-root, static binary).
 
+### The Turgon operator
+
+With `operator.enabled`, the chart installs `turgon-operator` and the `Integration` CRD
+(`turgon.dev/v1alpha1`, short name `tint`). Each spec in `specs` becomes an Integration. More
+can be applied with kubectl, e.g. from a CI pipeline that compiles and signs them:
+
+```sh
+bin/turgon compile -c catalog shop-orders-to-erp -o shop.json --sign-key signing.key
+bin/turgon integration -s shop.json --replicas 3 | kubectl apply -n turgon -f -
+kubectl get tint -n turgon
+# NAME                 SPEC                 LEVEL   READY   VALID   AVAILABLE
+# shop-orders-to-erp   shop-orders-to-erp   L1      3       True    True
+```
+
+- **A spec is checked before it is rolled out.**
+  - The operator parses the spec strictly: a field the schema doesn't know is refused.
+  - It checks the digest and, with `specSigning.trustedKeys`, the signature.
+  - A spec that fails any of these is not rolled out. The Integration reports
+    `SpecValid=False` with the reason, and a warning event is recorded.
+  - The workers keep running the last valid spec, so a tampered or unsigned spec never
+    replaces a working one.
+- **Versions are immutable.** Each spec version is its own immutable ConfigMap
+  (`<name>-spec-<digest>`). Pods of the old version keep their spec until the rolling update
+  replaces them. Old versions are deleted once every worker of the new one is ready.
+- **Derived from the spec.**
+  - The webhook Service and Ingress route exactly the paths of the spec's webhook events.
+    They are removed when a new spec has none.
+  - A PrometheusRule per Integration carries its latency SLO alerts
+    (`monitoring.rules.enabled`).
+- **Workers** come from a pod template the chart renders (image, database, Temporal,
+  secrets, security settings). The operator adds the spec, arguments, ports and probes.
+  `spec.replicas`, `spec.paused` (scale to zero; events wait at their sources),
+  `spec.resources` and `spec.webhooks` are set per Integration. A large spec can be read from
+  a ConfigMap with `spec.specFrom`; editing that ConfigMap rolls it out.
+- **Status** records the running spec's name, digest, level and signing key, its workflows,
+  ready workers, webhook paths, and the `SpecValid` and `Available` conditions.
+- **Permissions and availability.** The operator acts only in its namespace, with a Role
+  limited to what it manages. Several replicas elect a leader.
+
+`make envtest` fetches a kube-apiserver and etcd. With `KUBEBUILDER_ASSETS` pointing at them,
+`go test ./pkg/operator` runs the operator against a real API server.
+
 ### Governance: signed specs, mapping review, trained matching
 
 **Signed runtime specs.** A compiled spec carries everything a worker enforces, including the
@@ -833,6 +875,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/audit` | §9 | Append-only, hash-chained audit log with tamper detection |
 | `pkg/mapping` | §7.4 | JSONata evaluation of mapping sets |
 | `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow, and one for agent writes; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher; webhook receiver with a durable inbox, reconciled by polling |
+| `pkg/operator`, `cmd/turgon-operator`, `apis/operator` | §11 | The Kubernetes operator: the Integration CRD and its reconciler |
 | `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox and change capture events, rollback dry-runs, idempotent writes); `salesforce/` reads by SOQL and subscribes over the Pub/Sub API (`pubsub/`: the gRPC wire protocol) |
 | `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled list or search events (ascending, or newest-first paged back to the cursor), also received as signed webhooks (Stripe, Shopify, generic HMAC), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/`, `stripetest/` and `hubspottest/` fake the Shopify Admin, Stripe and HubSpot CRM APIs |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
@@ -884,7 +927,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 ## Not built yet
 
 In rough roadmap order (§16, §19): SAP events by SAP Event Mesh in place of polling; Salesforce Bulk API reads and managed subscriptions;
-the Turgon operator; an appliance build (§11);
+an appliance build (§11);
 change capture from databases other than Postgres (Debezium); an external Splink service; the metadata
 graph and discovery; A2A streaming and push notifications; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

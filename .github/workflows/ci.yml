@@ -38,7 +38,15 @@ jobs:
           docker exec ${{ job.services.postgres.id }} psql -U turgon -d turgon_test -c "ALTER SYSTEM SET wal_level = logical"
           docker restart ${{ job.services.postgres.id }}
           until docker exec ${{ job.services.postgres.id }} pg_isready -U turgon; do sleep 1; done
-      - name: Test (unit, Postgres integration, Temporal workflow)
+      - name: Generated code is up to date (operator deep copies and CRD)
+        run: |
+          make generate
+          git diff --exit-code apis deploy/helm/turgon/crds
+      - name: kube-apiserver and etcd for the operator's tests (envtest)
+        run: |
+          make envtest
+          echo "KUBEBUILDER_ASSETS=$PWD/bin/envtest" >> "$GITHUB_ENV"
+      - name: Test (unit, Postgres integration, Temporal workflow, operator)
         run: go test -race ./...
       - name: Known vulnerabilities in reachable code
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
@@ -169,11 +177,26 @@ jobs:
           if helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" "${backup[@]}" --set database.cloudNativePG.recovery.enabled=true >/dev/null 2>&1; then
             echo "a restore archiving over its source was not refused"; exit 1
           fi
+          # With the operator, specs become Integrations; the operator
+          # accepts what the chart renders for it.
+          helm template turgon deploy/helm/turgon -n turgon --kube-version 1.31.0 "${args[@]}" --set operator.enabled=true \
+            --set monitoring.rules.enabled=true --set-file specSigning.trustedKeys=/tmp/ci-signing.pub > /tmp/rendered-operator.yaml
+          # Only the shop spec is signed: with trusted keys the others are refused.
+          if go run ./cmd/turgon-operator --validate /tmp/rendered-operator.yaml --trusted-keys /tmp/ci-signing.pub; then
+            echo "unsigned specs were accepted"; exit 1
+          fi
+          helm template turgon deploy/helm/turgon -n turgon --kube-version 1.31.0 "${args[@]}" --set operator.enabled=true \
+            --set monitoring.rules.enabled=true > /tmp/rendered-operator-unsigned.yaml
+          go run ./cmd/turgon-operator --validate /tmp/rendered-operator-unsigned.yaml
+          mkdir -p /tmp/schemas
+          python3 -c 'import sys, yaml, json; c = yaml.safe_load(open(sys.argv[1])); json.dump(c["spec"]["versions"][0]["schema"]["openAPIV3Schema"], open(sys.argv[2], "w"))' \
+            deploy/helm/turgon/crds/turgon.dev_integrations.yaml /tmp/schemas/integration_v1alpha1.json
           ~/go/bin/kubeconform -strict -summary -kubernetes-version 1.31.0 \
-            -schema-location default \
+            -schema-location default -schema-location '/tmp/schemas/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
             /tmp/rendered.yaml /tmp/rendered-oidc.yaml /tmp/rendered-tls.yaml /tmp/rendered-monitoring.yaml \
-            /tmp/rendered-backup.yaml /tmp/rendered-restore.yaml /tmp/rendered-signed.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
+            /tmp/rendered-backup.yaml /tmp/rendered-restore.yaml /tmp/rendered-signed.yaml /tmp/rendered-operator.yaml \
+            /tmp/rendered-operator-unsigned.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
       - name: Lint the Dockerfile
         run: hadolint Dockerfile
 

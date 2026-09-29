@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hamba/avro/v2"
+	"github.com/iskorotkov/avro/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"

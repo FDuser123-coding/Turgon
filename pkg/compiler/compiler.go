@@ -6,6 +6,7 @@
 package compiler
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -553,4 +554,27 @@ func contains(list []string, s string) bool {
 		}
 	}
 	return false
+}
+
+// ParseSpec reads a runtime spec strictly: a field the spec's schema does
+// not have is an error, so no content can ride along under the digest and
+// signatures that this worker ignores but another version would act on.
+// It checks the kind and that the digest matches the body.
+func ParseSpec(data []byte) (*RuntimeSpec, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var s RuntimeSpec
+	if err := dec.Decode(&s); err != nil {
+		return nil, fmt.Errorf("not a valid runtime spec: %w", err)
+	}
+	if dec.More() {
+		return nil, errors.New("not a valid runtime spec: data after the spec")
+	}
+	if s.Kind != KindRuntimeSpec {
+		return nil, fmt.Errorf("a %q, not a RuntimeSpec; run turgon compile first", s.Kind)
+	}
+	if got := Digest(s.Spec); got != s.Metadata.Digest {
+		return nil, fmt.Errorf("digest mismatch (spec says %s, body hashes to %s); refusing a modified spec", s.Metadata.Digest, got)
+	}
+	return &s, nil
 }

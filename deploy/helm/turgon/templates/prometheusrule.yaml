@@ -14,6 +14,8 @@ metadata:
     {{- end }}
 spec:
   groups:
+    {{- /* With the operator, it creates these rules per Integration. */}}
+    {{- if and .Values.specs (not .Values.operator.enabled) }}
     - name: turgon-slo
       rules:
         {{- range $name := keys .Values.specs | sortAlpha }}
@@ -32,6 +34,7 @@ spec:
         {{- end }}
         {{- end }}
         {{- end }}
+    {{- end }}
     - name: turgon
       rules:
         - alert: TurgonRunsFailing

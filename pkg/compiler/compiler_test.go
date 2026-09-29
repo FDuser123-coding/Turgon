@@ -153,3 +153,55 @@ func TestPoliciesAreCompiledIn(t *testing.T) {
 		t.Fatalf("workflow policies = %v", got)
 	}
 }
+
+// Every example compiles to a spec that parses strictly; a field the
+// schema lacks, added anywhere, is refused even though the digest (which
+// covers only known fields) still matches.
+func TestParseSpecIsStrict(t *testing.T) {
+	cat, err := catalog.Load("../../examples")
+	if err != nil {
+		t.Fatal(err)
+	}
+	n := 0
+	for _, obj := range cat.All() {
+		switch obj.(type) {
+		case *v1alpha1.Recipe, *v1alpha1.StackBlueprint:
+		default:
+			continue
+		}
+		spec, _, err := Compile(cat, obj, verifier.Options{})
+		if err != nil {
+			continue // not deployable; covered elsewhere
+		}
+		data, _ := json.Marshal(spec)
+		if _, err := ParseSpec(data); err != nil {
+			t.Errorf("%s: %v", obj.GetMeta().Name, err)
+		}
+		n++
+	}
+	if n < 10 {
+		t.Fatalf("only %d specs compiled", n)
+	}
+	spec := compileNamed(t, cat, "shop-orders-to-erp")
+	data, _ := json.Marshal(spec)
+	for _, inject := range []struct{ after, add string }{
+		{`"simulation":"rollback"`, `,"simulate":false`},
+		{`"kind":"RuntimeSpec"`, `,"extra":1`},
+		{`"autoMatchAbove":1`, `,"autoMatchBelow":0`},
+	} {
+		bad := strings.Replace(string(data), inject.after, inject.after+inject.add, 1)
+		if bad == string(data) {
+			t.Fatalf("%s not in the spec", inject.after)
+		}
+		if _, err := ParseSpec([]byte(bad)); err == nil || !strings.Contains(err.Error(), "unknown field") {
+			t.Errorf("%s accepted: %v", inject.add, err)
+		}
+	}
+	if _, err := ParseSpec(append(data, []byte(`{}`)...)); err == nil {
+		t.Error("trailing data accepted")
+	}
+	tampered := strings.Replace(string(data), `"risk":"high"`, `"risk":"low"`, 1)
+	if _, err := ParseSpec([]byte(tampered)); err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Errorf("tampered: %v", err)
+	}
+}

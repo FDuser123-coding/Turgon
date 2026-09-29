@@ -1,0 +1,214 @@
+{{- if .Values.operator.enabled }}
+{{- $name := printf "%s-operator" (include "turgon.fullname" .) }}
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "turgon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+---
+# The operator acts in its own namespace only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "turgon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+rules:
+  - apiGroups: [turgon.dev]
+    resources: [integrations]
+    verbs: [get, list, watch]
+  - apiGroups: [turgon.dev]
+    resources: [integrations/status]
+    verbs: [get, update, patch]
+  - apiGroups: [""]
+    resources: [configmaps, services]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [apps]
+    resources: [deployments]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [networking.k8s.io]
+    resources: [ingresses]
+    verbs: [get, list, watch, create, update, patch, delete]
+  {{- if .Values.monitoring.rules.enabled }}
+  - apiGroups: [monitoring.coreos.com]
+    resources: [prometheusrules]
+    verbs: [get, list, watch, create, update, patch, delete]
+  {{- end }}
+  - apiGroups: [""]
+    resources: [events]
+    verbs: [create, patch]
+  - apiGroups: [events.k8s.io]
+    resources: [events]
+    verbs: [create, patch]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "turgon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ $name }}
+subjects:
+  - kind: ServiceAccount
+    name: {{ $name }}
+    namespace: {{ .Release.Namespace }}
+---
+# The workers' pod template: what every Integration's workers share. The
+# operator adds the spec, its arguments, ports and probes.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ $name }}-worker-template
+  labels:
+    {{- include "turgon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+data:
+  worker-template.yaml: |
+    {{- include "turgon.workerTemplate" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "turgon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+spec:
+  replicas: {{ .Values.operator.replicas }}
+  selector:
+    matchLabels:
+      {{- include "turgon.selector" . | nindent 6 }}
+      app.kubernetes.io/component: operator
+  template:
+    metadata:
+      labels:
+        {{- include "turgon.selector" . | nindent 8 }}
+        app.kubernetes.io/component: operator
+      annotations:
+        # Restart the operator when the workers' template changes, so it
+        # rolls the change out to every Integration.
+        turgon.dev/worker-template: {{ include "turgon.workerTemplate" . | sha256sum | trunc 16 }}
+    spec:
+      serviceAccountName: {{ $name }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: operator
+          image: {{ include "turgon.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: [/turgon-operator]
+          args:
+            - --worker-template=/etc/turgon-operator/worker-template.yaml
+            - --default-replicas={{ .Values.operator.defaultReplicas }}
+            - --worker-arg=--poll={{ .Values.workers.pollInterval }}
+            - --worker-arg=--pollers={{ .Values.workers.pollers }}
+            - --worker-arg=--approval-timeout={{ .Values.workers.approvalTimeout }}
+            - --worker-arg=--reconcile={{ .Values.workers.webhooks.reconcile }}
+            {{- if .Values.monitoring.rules.enabled }}
+            - --slo-rules
+            {{- end }}
+            {{- if .Values.specSigning.trustedKeys }}
+            - --trusted-keys=/etc/turgon/trusted-keys/keys.pem
+            {{- end }}
+          env:
+            - name: POD_NAMESPACE
+              valueFrom: { fieldRef: { fieldPath: metadata.namespace } }
+          ports:
+            - { name: metrics, containerPort: 8080 }
+            - { name: health, containerPort: 8081 }
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 20
+          readinessProbe:
+            httpGet: { path: /readyz, port: health }
+            periodSeconds: 10
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml .Values.operator.resources | nindent 12 }}
+          volumeMounts:
+            - { name: worker-template, mountPath: /etc/turgon-operator, readOnly: true }
+            {{- if .Values.specSigning.trustedKeys }}
+            - { name: trusted-keys, mountPath: /etc/turgon/trusted-keys, readOnly: true }
+            {{- end }}
+      volumes:
+        - name: worker-template
+          configMap:
+            name: {{ $name }}-worker-template
+        {{- if .Values.specSigning.trustedKeys }}
+        - name: trusted-keys
+          configMap:
+            name: {{ include "turgon.fullname" . }}-trusted-keys
+        {{- end }}
+{{- if .Values.networkPolicy.enabled }}
+---
+# The operator talks to the Kubernetes API only.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ $name }}
+  labels:
+    {{- include "turgon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: operator
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "turgon.selector" . | nindent 6 }}
+      app.kubernetes.io/component: operator
+  policyTypes: [Egress]
+  egress:
+    - ports:
+        - { protocol: TCP, port: 443 }
+        - { protocol: TCP, port: 6443 }
+{{- end }}
+{{- range $spec, $json := .Values.specs }}
+---
+apiVersion: turgon.dev/v1alpha1
+kind: Integration
+metadata:
+  name: {{ $spec }}
+  labels:
+    {{- include "turgon.labels" $ | nindent 4 }}
+spec:
+  replicas: {{ $.Values.workers.replicas }}
+  # Compact JSON, which is YAML: the spec is not rewritten.
+  runtimeSpec: {{ $json | fromJson | toJson }}
+  {{- with $.Values.workers.webhooks }}
+  {{- if .enabled }}
+  webhooks:
+    enabled: true
+    {{- if .ingress.enabled }}
+    host: {{ required "workers.webhooks.ingress.host is required" .ingress.host | quote }}
+    {{- with .ingress.className }}
+    ingressClassName: {{ . }}
+    {{- end }}
+    {{- with .ingress.tls }}
+    tlsSecretName: {{ (index . 0).secretName }}
+    {{- end }}
+    {{- end }}
+  {{- end }}
+  {{- end }}
+{{- end }}
+{{- end }}

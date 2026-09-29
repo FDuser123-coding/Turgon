@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hamba/avro/v2"
+	"github.com/iskorotkov/avro/v2"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -267,7 +267,7 @@ func (c *Conn) convert(ctx context.Context, cc *grpc.ClientConn, event string, s
 		return nil, err
 	}
 	var raw any
-	if err := avro.Unmarshal(schema, ce.Event.Payload, &raw); err != nil {
+	if err := avroAPI.Unmarshal(schema, ce.Event.Payload, &raw); err != nil {
 		return nil, fmt.Errorf("avro: %w", err)
 	}
 	rec, ok := plain(schema, raw).(map[string]any)
@@ -386,6 +386,12 @@ func (c *Conn) fetch(ctx context.Context, sobject, id string, fields []string) (
 	stripAttributes(rec)
 	return rec, nil
 }
+
+// avroAPI decodes event payloads within bounds: a hostile or corrupt
+// payload declaring huge strings, arrays or maps is an error, not an
+// allocation or a loop that takes the worker down. Salesforce events are
+// at most 1 MB.
+var avroAPI = avro.Config{MaxByteSliceSize: 1 << 20, MaxSliceAllocSize: 100_000, MaxMapAllocSize: 100_000}.Freeze()
 
 // plain converts a decoded Avro value to plain JSON values: a union holding
 // a record, map or array arrives wrapped as {"TypeName": value}.

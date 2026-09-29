@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -136,20 +135,14 @@ func loadSpec(path string) (*compiler.RuntimeSpec, error) {
 	if err != nil {
 		return nil, err
 	}
-	var spec compiler.RuntimeSpec
-	if err := json.Unmarshal(data, &spec); err != nil {
+	spec, err := compiler.ParseSpec(data)
+	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	if spec.Kind != compiler.KindRuntimeSpec {
-		return nil, fmt.Errorf("%s is a %q, not a RuntimeSpec; run turgon compile first", path, spec.Kind)
-	}
-	if got := compiler.Digest(spec.Spec); got != spec.Metadata.Digest {
-		return nil, fmt.Errorf("%s: digest mismatch (spec says %s, body hashes to %s); refusing to run a modified spec", path, spec.Metadata.Digest, got)
-	}
-	if err := verifySignature(path, &spec); err != nil {
+	if err := verifySignature(path, spec); err != nil {
 		return nil, err
 	}
-	return &spec, nil
+	return spec, nil
 }
 
 func runCmd() *cobra.Command {

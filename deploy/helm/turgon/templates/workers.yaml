@@ -1,3 +1,4 @@
+{{- if not .Values.operator.enabled }}
 {{- range $name, $spec := .Values.specs }}
 ---
 apiVersion: apps/v1
@@ -154,5 +155,6 @@ spec:
           {{- if eq $paths 0 }}
           {{- fail "workers.webhooks.ingress: no spec has an event configured for webhooks" }}
           {{- end }}
+{{- end }}
 {{- end }}
 {{- end }}

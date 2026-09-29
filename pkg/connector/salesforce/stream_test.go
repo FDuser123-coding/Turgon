@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hamba/avro/v2"
+	"github.com/iskorotkov/avro/v2"
 
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce/sftest"
@@ -354,5 +354,27 @@ func TestCheckSubscriptions(t *testing.T) {
 		if r.Name == "subscription Opportunity.Changed" && (r.OK || !strings.Contains(r.Fix, "permission set")) {
 			t.Errorf("no permission: %+v", r)
 		}
+	}
+}
+
+// A payload declaring an enormous array (or map) fails at once instead of
+// allocating or looping on it.
+func TestHostileAvroPayloadIsRefused(t *testing.T) {
+	for _, js := range []string{`{"type":"array","items":"string"}`, `{"type":"map","values":"string"}`} {
+		s := avro.MustParse(js)
+		// A block count of 2^40 elements, then nothing.
+		payload := []byte{0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x40}
+		start := time.Now()
+		var out any
+		if err := avroAPI.Unmarshal(s, payload, &out); err == nil {
+			t.Errorf("%s: hostile payload decoded", js)
+		}
+		if d := time.Since(start); d > time.Second {
+			t.Errorf("%s: took %s", js, d)
+		}
+	}
+	var out any
+	if err := avroAPI.Unmarshal(avro.MustParse(`"string"`), []byte{0x80, 0x80, 0x80, 0x10}, &out); err == nil {
+		t.Error("a 16 MiB string was decoded")
 	}
 }
