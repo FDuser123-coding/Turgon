@@ -76,3 +76,19 @@ tests:
             exp_annotations:
               summary: "w: more than 5% of runs failed in the last hour"
               description: "See the failed runs in the console; turgon_runs_finished_total's reason label says why."
+  # A change capture slot whose worker stopped holds ever more log.
+  - interval: 1m
+    input_series:
+      - series: 'turgon_cdc_retained_wal_bytes{slot="turgon_order_placed",pod="worker-0"}'
+        values: '1e9+1e8x60'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: TurgonChangeCaptureRetainingWAL
+        exp_alerts: []
+      - eval_time: 50m
+        alertname: TurgonChangeCaptureRetainingWAL
+        exp_alerts:
+          - exp_labels: { severity: warning, slot: turgon_order_placed }
+            exp_annotations:
+              summary: "turgon_order_placed: the source database keeps more than 4096 MiB of write-ahead log for change capture"
+              description: "The slot advances only as events are dispatched. Workers stopped or failing to start runs make the database keep its log until the disk fills; max_slot_wal_keep_size bounds it. A slot no longer used should be dropped."

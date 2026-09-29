@@ -40,7 +40,10 @@ var (
 	// LastPoll is when a workflow's source was last polled successfully.
 	LastPoll = gauge("turgon_last_poll_success_timestamp_seconds", "When a workflow's event source was last polled successfully.", "workflow")
 	// Webhooks counts webhook deliveries by result.
-	Webhooks = counter("turgon_webhooks_total", "Webhook deliveries by result (accepted, ignored, unauthenticated, invalid, error).", "endpoint", "event", "result")
+	// CDCRetainedWAL is how much write-ahead log a change capture slot
+	// keeps the source database from recycling.
+	CDCRetainedWAL = gauge("turgon_cdc_retained_wal_bytes", "Write-ahead log a change capture replication slot holds on the source database.", "slot")
+	Webhooks       = counter("turgon_webhooks_total", "Webhook deliveries by result (accepted, ignored, unauthenticated, invalid, error).", "endpoint", "event", "result")
 )
 
 func init() {

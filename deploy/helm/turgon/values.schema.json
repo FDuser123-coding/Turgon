@@ -142,7 +142,8 @@
             "runFailureRatio": { "type": "number", "exclusiveMinimum": 0, "maximum": 1 },
             "pollStalledMinutes": { "type": "integer", "minimum": 1 },
             "breakerOpenMinutes": { "type": "integer", "minimum": 1 },
-            "webhookRejections": { "type": "integer", "minimum": 1 }
+            "webhookRejections": { "type": "integer", "minimum": 1 },
+            "cdcRetainedWALMiB": { "type": "integer", "minimum": 1 }
           }
         }
       }

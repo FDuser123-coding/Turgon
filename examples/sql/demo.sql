@@ -9,6 +9,17 @@ CREATE TABLE IF NOT EXISTS shop.outbox (
 	payload jsonb NOT NULL
 );
 
+-- The shop's orders, read by change capture for shop-order-rows-to-erp
+-- (needs wal_level = logical). Its columns match the outbox payload.
+CREATE TABLE IF NOT EXISTS shop.orders (
+	order_number bigint PRIMARY KEY,
+	created_at   timestamptz NOT NULL DEFAULT now(),
+	total        numeric(12,2) NOT NULL,
+	currency     text NOT NULL,
+	customer     jsonb NOT NULL,
+	items        jsonb NOT NULL DEFAULT '[]'
+);
+
 CREATE TABLE IF NOT EXISTS erp.customers (
 	id    text PRIMARY KEY,
 	name  text NOT NULL

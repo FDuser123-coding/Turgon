@@ -2,17 +2,20 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/fduser123-coding/turgon/pkg/connector"
 )
 
 var _ connector.Checker = (*Conn)(nil)
 
-// Check verifies reachability, the outbox table and every configured
-// operation's table, columns, key and privileges.
+// Check verifies reachability, the outbox table, change capture, and every
+// configured operation's table, columns, key and privileges.
 func (c *Conn) Check(ctx context.Context) []connector.CheckResult {
 	var out []connector.CheckResult
 	cfg := c.pool.Config().ConnConfig
@@ -32,6 +35,7 @@ func (c *Conn) Check(ctx context.Context) []connector.CheckResult {
 			fmt.Sprintf("Create it: CREATE TABLE %s (id bigserial PRIMARY KEY, event text NOT NULL, payload jsonb NOT NULL); "+
 				"and write to it in the same transaction as each business change.", o.Table))...)
 	}
+	out = append(out, c.checkChanges(ctx)...)
 	names := make([]string, 0, len(c.cfg.Operations))
 	for name := range c.cfg.Operations {
 		names = append(names, name)
@@ -101,3 +105,67 @@ func (c *Conn) checkTable(ctx context.Context, label, table string, cols []strin
 	}
 	return []connector.CheckResult{connector.Pass(label, table)}
 }
+
+// checkChanges verifies what change capture needs: logical WAL, a user
+// allowed to create replication slots, readable tables whose updates and
+// deletes can be published, and slots that are not holding back the log.
+func (c *Conn) checkChanges(ctx context.Context) []connector.CheckResult {
+	events := c.changeEvents()
+	if len(events) == 0 {
+		return nil
+	}
+	var out []connector.CheckResult
+	var level string
+	var replication bool
+	err := c.pool.QueryRow(ctx, `SELECT current_setting('wal_level'),
+		(SELECT rolreplication OR rolsuper FROM pg_roles WHERE rolname = current_user)`).Scan(&level, &replication)
+	switch {
+	case err != nil:
+		return append(out, connector.Fail("change capture", err.Error(), ""))
+	case level != "logical":
+		out = append(out, connector.Fail("change capture", "wal_level is "+level,
+			"Set wal_level = logical (ALTER SYSTEM SET wal_level = logical, then restart Postgres; on RDS and Cloud SQL, "+
+				"the logical replication flag). Also set max_slot_wal_keep_size, so a stopped worker cannot fill the disk."))
+	case !replication:
+		out = append(out, connector.Fail("change capture", "the connection's user cannot create replication slots",
+			"ALTER ROLE <the connection's user> REPLICATION; (on RDS: GRANT rds_replication)."))
+	default:
+		out = append(out, connector.Pass("change capture", "wal_level = logical, replication allowed"))
+	}
+	for _, event := range events {
+		ch := c.cfg.Changes[event]
+		label := "changes " + event
+		res := c.checkTable(ctx, label, ch.Table, nil, "", []string{"SELECT"}, "")
+		if !res[0].OK {
+			out = append(out, res...)
+			continue
+		}
+		var reloid uint32
+		if err := c.pool.QueryRow(ctx, `SELECT to_regclass($1)::oid`, ch.Table).Scan(&reloid); err != nil {
+			out = append(out, connector.Fail(label, err.Error(), ""))
+			continue
+		}
+		if err := c.replicaIdentity(ctx, reloid, ch); err != nil {
+			out = append(out, connector.Fail(label, err.Error(), "Add a primary key to "+ch.Table+", or set REPLICA IDENTITY FULL."))
+			continue
+		}
+		var retained *int64
+		err := c.pool.QueryRow(ctx, `SELECT pg_wal_lsn_diff(pg_current_wal_lsn(), restart_lsn)::bigint
+			FROM pg_replication_slots WHERE slot_name = $1`, ch.Slot).Scan(&retained)
+		switch {
+		case errors.Is(err, pgx.ErrNoRows):
+			out = append(out, connector.Pass(label, fmt.Sprintf("%s; publication %s and slot %s are created on the first poll", ch.Table, ch.Publication, ch.Slot)))
+		case err != nil:
+			out = append(out, connector.Fail(label, err.Error(), ""))
+		case retained != nil && *retained > retainedWarn:
+			out = append(out, connector.Fail(label, fmt.Sprintf("slot %s holds %d MiB of write-ahead log", ch.Slot, *retained>>20),
+				"Start the worker that reads it, or drop the slot if the event is no longer used: SELECT pg_drop_replication_slot('"+ch.Slot+"');"))
+		default:
+			out = append(out, connector.Pass(label, fmt.Sprintf("%s via slot %s", ch.Table, ch.Slot)))
+		}
+	}
+	return out
+}
+
+// retainedWarn is how much log a slot may hold before check flags it.
+const retainedWarn = 1 << 30
