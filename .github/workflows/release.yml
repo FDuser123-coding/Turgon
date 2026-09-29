@@ -2,7 +2,8 @@
 # tag like v0.2.0 builds, scans, signs and publishes:
 #   ghcr.io/<owner>/turgon:<version>          multi-arch image, provenance + SBOM
 #   oci://ghcr.io/<owner>/charts/turgon       Helm chart
-#   GitHub release                             binaries, checksums, SBOM
+#   GitHub release                             binaries, appliance bundles,
+#                                              checksums, SBOM
 # Signatures are keyless (Sigstore, GitHub OIDC): no signing key to guard.
 # Customers verify with the identity of this workflow; see README.
 name: release
@@ -145,7 +146,9 @@ jobs:
             CGO_ENABLED=0 GOOS=linux GOARCH=$arch go build -trimpath \
               -ldflags "-s -w -X main.version=${version}" -o "dist/turgon-linux-${arch}" ./cmd/turgon
           done
-          (cd dist && sha256sum turgon-* > SHA256SUMS)
+          # Offline appliance bundles: turgon, a Temporal server, systemd units.
+          for arch in amd64 arm64; do scripts/build-appliance.sh "$version" "$arch"; done
+          (cd dist && sha256sum turgon-linux-* turgon-appliance-*.tar.gz > SHA256SUMS)
       - name: Source SBOM
         uses: anchore/sbom-action@v0
         with:

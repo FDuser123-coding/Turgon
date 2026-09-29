@@ -1,0 +1,42 @@
+# Runs a Turgon worker for each compiled spec in /var/lib/turgon/specs
+# (turgon appliance run). Settings and secrets: /etc/turgon/turgon.env.
+[Unit]
+Description=Turgon appliance: a worker per compiled spec
+Documentation=https://github.com/fduser123-coding/turgon
+After=network-online.target turgon-temporal.service postgresql.service
+Wants=network-online.target turgon-temporal.service
+
+[Service]
+Type=exec
+User=turgon
+Group=turgon
+EnvironmentFile=/etc/turgon/turgon.env
+ExecStart=/opt/turgon/bin/turgon appliance run --specs /var/lib/turgon/specs --state /var/lib/turgon/state --status-listen 127.0.0.1:8079 $TURGON_APPLIANCE_ARGS
+Restart=always
+RestartSec=5
+# Workers are children of this service: stopping it stops them.
+KillMode=control-group
+TimeoutStopSec=60
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+ReadWritePaths=/var/lib/turgon/state
+ReadOnlyPaths=/var/lib/turgon/specs /etc/turgon
+
+[Install]
+WantedBy=multi-user.target

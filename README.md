@@ -774,6 +774,41 @@ kubectl get tint -n turgon
 `make envtest` fetches a kube-apiserver and etcd. With `KUBEBUILDER_ASSETS` pointing at them,
 `go test ./pkg/operator` runs the operator against a real API server.
 
+### Appliance: one host, no Kubernetes
+
+For sites without Kubernetes, and for sites with no internet access at all, releases include
+an offline bundle, `turgon-appliance-<version>-linux-<arch>.tar.gz`. It contains:
+
+- `turgon`;
+- a single-node Temporal server: the Temporal CLI 1.4.1, built from source, persisted in SQLite;
+- sandboxed systemd units;
+- an installer that checks every file against `SHA256SUMS` before installing.
+
+`make appliance` builds the bundle locally; see [`deploy/appliance/README.md`](deploy/appliance/README.md).
+
+```sh
+sudo ./install.sh --with-postgres          # PostgreSQL from the distribution, or your own
+sudo install -o turgon -m 0640 shop.json /var/lib/turgon/specs/shop.json
+/opt/turgon/bin/turgon appliance status
+# NAME  STATE    DIGEST        LEVEL  PID    RESTARTS  NOTE
+# shop  running  d4a93c4cfa21  L1     27553  0         b52bfeed2109 never became ready: ... set TURGON_SECRET_SALESFORCE_PROD_JWT
+```
+
+`turgon appliance run` supervises one worker per spec in `/var/lib/turgon/specs`, much as the
+operator does for Integrations:
+
+- **Checks before anything runs.** Each spec is parsed strictly and its digest is checked;
+  with `TURGON_TRUSTED_KEYS` set, its signature too. A spec that fails is refused and the last
+  valid version keeps running.
+- **Safe version switches.** A new version starts next to the old one, which stops only when
+  the new one is ready. A version that doesn't become ready is given up, with its reason
+  shown by `status`, and the old one keeps serving.
+- **Workers are restarted** with backoff when they exit.
+- **Specs are immutable while they run.** Each version runs from an immutable copy of its
+  spec.
+- **`turgon appliance status` exits non-zero** while anything needs attention, so a
+  monitoring check can call it.
+
 ### Governance: signed specs, mapping review, trained matching
 
 **Signed runtime specs.** A compiled spec carries everything a worker enforces, including the
@@ -876,6 +911,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/mapping` | §7.4 | JSONata evaluation of mapping sets |
 | `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow, and one for agent writes; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher; webhook receiver with a durable inbox, reconciled by polling |
 | `pkg/operator`, `cmd/turgon-operator`, `apis/operator` | §11 | The Kubernetes operator: the Integration CRD and its reconciler |
+| `pkg/appliance`, `deploy/appliance` | §11 | The single-host appliance: `turgon appliance`, systemd units, the offline bundle's installer |
 | `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox and change capture events, rollback dry-runs, idempotent writes); `salesforce/` reads by SOQL and subscribes over the Pub/Sub API (`pubsub/`: the gRPC wire protocol) |
 | `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled list or search events (ascending, or newest-first paged back to the cursor), also received as signed webhooks (Stripe, Shopify, generic HMAC), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/`, `stripetest/` and `hubspottest/` fake the Shopify Admin, Stripe and HubSpot CRM APIs |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
@@ -927,7 +963,6 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 ## Not built yet
 
 In rough roadmap order (§16, §19): SAP events by SAP Event Mesh in place of polling; Salesforce Bulk API reads and managed subscriptions;
-an appliance build (§11);
 change capture from databases other than Postgres (Debezium); an external Splink service; the metadata
 graph and discovery; A2A streaming and push notifications; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

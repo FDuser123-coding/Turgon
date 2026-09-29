@@ -13,3 +13,4 @@ node_modules/
 /console/dist/
 /turgon
 .scratch/
+dist/

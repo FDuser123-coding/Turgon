@@ -1,0 +1,35 @@
+# A single-node Temporal server for the appliance: the Temporal CLI's
+# server, persisted in SQLite under /var/lib/turgon/temporal, listening on
+# loopback. For high availability point TURGON_TEMPORAL_ADDRESS at a
+# Temporal cluster or Temporal Cloud instead, and disable this unit.
+[Unit]
+Description=Temporal server for the Turgon appliance
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+User=turgon
+Group=turgon
+ExecStart=/opt/turgon/bin/temporal server start-dev --headless --ip 127.0.0.1 --port 7233 --http-port 7243 --metrics-port 7244 --db-filename /var/lib/turgon/temporal/temporal.db --log-level warn
+Restart=always
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+CapabilityBoundingSet=
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+ReadWritePaths=/var/lib/turgon/temporal
+
+[Install]
+WantedBy=multi-user.target
