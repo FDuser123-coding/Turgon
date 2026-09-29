@@ -2,19 +2,26 @@ import { useCallback, useState } from "react";
 import { api } from "../api";
 import { Empty, ErrorBanner, Json, Link, Pill, Status } from "../components";
 import { ago, display, duration } from "../format";
-import { refreshAll, usePoll } from "../hooks";
+import { refreshAll, usePoll, useSearch } from "../hooks";
 import type { User } from "../types";
 
 // Runs in these states can be started again (console.Retryable).
 export const retryable = (status: string) => ["failed", "timed_out", "terminated", "canceled"].includes(status);
 
 export function Runs() {
-  const { data, error } = usePoll(api.runs);
+  const { data: all, error } = usePoll(api.runs);
+  const flow = useSearch("flow");
+  const data = flow && all ? all.filter((r) => r.workflow === flow) : all;
   return (
     <section>
       <header className="page-head">
         <h1>Runs</h1>
         <p className="muted">One run per source event or agent write. A failed recipe run can be retried.</p>
+        {flow && (
+          <p className="small">
+            Flow <span className="mono">{flow}</span> only · <Link to="/runs">all runs</Link>
+          </p>
+        )}
       </header>
       <ErrorBanner error={error} />
       {data && data.length === 0 && <Empty>No runs yet. Runs start when a source emits an event.</Empty>}

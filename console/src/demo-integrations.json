@@ -1,0 +1,839 @@
+{
+  "systems": [
+    {
+      "name": "dynamics-crm",
+      "description": "Dynamics 365 Sales, through the Dataverse Web API.",
+      "connector": "rest",
+      "product": "HTTP JSON APIs",
+      "role": "target",
+      "events": [],
+      "operations": [
+        "create-sales-order"
+      ],
+      "flows": [
+        "hubspot-won-deals-to-dynamics"
+      ]
+    },
+    {
+      "name": "erp-db",
+      "description": "The ERP's database: customers, sales orders and payments.",
+      "connector": "postgres",
+      "product": "PostgreSQL 13-17",
+      "role": "target",
+      "events": [],
+      "operations": [
+        "create-sales-order",
+        "record-payment"
+      ],
+      "flows": [
+        "hubspot-won-deals-to-erp",
+        "salesforce-won-deals-to-erp",
+        "salesforce-won-deals-to-erp-cdc",
+        "shop-order-rows-to-erp",
+        "shop-orders-to-erp",
+        "shopify-store-orders-to-erp",
+        "stripe-payments-to-erp"
+      ]
+    },
+    {
+      "name": "hubspot-crm",
+      "description": "The HubSpot CRM, where the sales team closes deals.",
+      "connector": "rest",
+      "product": "HTTP JSON APIs",
+      "role": "both",
+      "events": [
+        {
+          "name": "Deal.Won",
+          "entity": "Deal",
+          "delivery": "polling"
+        }
+      ],
+      "operations": [
+        "link-deal"
+      ],
+      "flows": [
+        "hubspot-won-deals-to-dynamics",
+        "hubspot-won-deals-to-erp"
+      ]
+    },
+    {
+      "name": "netsuite-erp",
+      "description": "NetSuite ERP, through its REST record API (token-based auth).",
+      "connector": "rest",
+      "product": "HTTP JSON APIs",
+      "role": "target",
+      "events": [],
+      "operations": [
+        "create-sales-order"
+      ],
+      "flows": [
+        "shopify-store-orders-to-netsuite"
+      ]
+    },
+    {
+      "name": "s4-prod",
+      "description": "SAP S/4HANA, through the released Sales Order OData API.",
+      "connector": "sap-odata",
+      "product": "SAP S/4HANA Cloud and S/4HANA 1909+, OData v2 APIs",
+      "role": "target",
+      "events": [],
+      "operations": [
+        "create-sales-order"
+      ],
+      "flows": [
+        "shopify-store-orders-to-s4"
+      ]
+    },
+    {
+      "name": "salesforce",
+      "connector": "",
+      "role": "source",
+      "events": [
+        {
+          "name": "Opportunity.ClosedWon",
+          "delivery": "polling"
+        }
+      ],
+      "operations": [],
+      "flows": [
+        "salesforce-won-deals-to-sap-orders"
+      ]
+    },
+    {
+      "name": "salesforce-prod",
+      "description": "The Salesforce sales org, reached as a dedicated integration user.",
+      "connector": "salesforce",
+      "product": "Salesforce Sales Cloud, API v60+",
+      "role": "both",
+      "events": [
+        {
+          "name": "Opportunity.ClosedWon",
+          "delivery": "polling"
+        },
+        {
+          "name": "Opportunity.Won",
+          "entity": "Opportunity",
+          "delivery": "subscription"
+        }
+      ],
+      "operations": [
+        "update-opportunity"
+      ],
+      "flows": [
+        "salesforce-won-deals-to-erp",
+        "salesforce-won-deals-to-erp-cdc"
+      ]
+    },
+    {
+      "name": "sap-ecc",
+      "connector": "",
+      "role": "target",
+      "events": [],
+      "operations": [
+        "create-sales-order"
+      ],
+      "flows": [
+        "salesforce-won-deals-to-sap-orders"
+      ]
+    },
+    {
+      "name": "shop-db",
+      "description": "The web shop's database: orders, announced through an outbox or read from its log.",
+      "connector": "postgres",
+      "product": "PostgreSQL 13-17",
+      "role": "source",
+      "events": [
+        {
+          "name": "Order.Created",
+          "entity": "Order",
+          "delivery": "outbox"
+        },
+        {
+          "name": "Order.Placed",
+          "entity": "Order",
+          "delivery": "change capture"
+        }
+      ],
+      "operations": [],
+      "flows": [
+        "shop-order-rows-to-erp",
+        "shop-orders-to-erp"
+      ]
+    },
+    {
+      "name": "shopify-store",
+      "description": "The Shopify store: orders arrive by signed webhook, polled to reconcile.",
+      "connector": "rest",
+      "product": "HTTP JSON APIs",
+      "role": "both",
+      "events": [
+        {
+          "name": "Order.Created",
+          "entity": "Order",
+          "delivery": "webhook"
+        }
+      ],
+      "operations": [
+        "update-order"
+      ],
+      "flows": [
+        "shopify-store-orders-to-erp",
+        "shopify-store-orders-to-netsuite",
+        "shopify-store-orders-to-s4"
+      ]
+    },
+    {
+      "name": "stripe-billing",
+      "description": "Stripe billing: paid invoices arrive by signed webhook.",
+      "connector": "rest",
+      "product": "HTTP JSON APIs",
+      "role": "both",
+      "events": [
+        {
+          "name": "Invoice.Paid",
+          "entity": "Invoice",
+          "delivery": "webhook"
+        }
+      ],
+      "operations": [
+        "link-invoice"
+      ],
+      "flows": [
+        "stripe-payments-to-erp"
+      ]
+    }
+  ],
+  "flows": [
+    {
+      "name": "hubspot-won-deals-to-dynamics",
+      "version": "1.0.0",
+      "description": "A deal won in HubSpot becomes a sales order in Dynamics 365; the order number is written back to the deal.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "hubspot-crm",
+        "event": "Deal.Won",
+        "delivery": "polling"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "hubspot-deal-to-order@1.0.0",
+          "from": "hubspot-crm.Deal",
+          "to": "model.SalesOrder",
+          "fields": 6
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "probabilistic"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-dynamics-order@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.SalesOrder",
+          "fields": 5
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "dynamics-crm",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "delete-sales-order"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-hubspot-link@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.Deal",
+          "fields": 2
+        },
+        {
+          "kind": "write",
+          "entity": "Deal",
+          "system": "hubspot-crm",
+          "operation": "link-deal",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "unlink-deal"
+        }
+      ],
+      "targets": [
+        "dynamics-crm",
+        "hubspot-crm"
+      ],
+      "slo": "p95 10s"
+    },
+    {
+      "name": "hubspot-won-deals-to-erp",
+      "version": "1.0.0",
+      "description": "A deal won in HubSpot becomes an ERP sales order, approved before commit; the order number is written back to the deal.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "hubspot-crm",
+        "event": "Deal.Won",
+        "delivery": "polling"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "hubspot-deal-to-order@1.0.0",
+          "from": "hubspot-crm.Deal",
+          "to": "model.SalesOrder",
+          "fields": 6
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "probabilistic"
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "erp-db",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "rollback",
+          "compensation": "cancel-sales-order"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-hubspot-link@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.Deal",
+          "fields": 2
+        },
+        {
+          "kind": "write",
+          "entity": "Deal",
+          "system": "hubspot-crm",
+          "operation": "link-deal",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "unlink-deal"
+        }
+      ],
+      "targets": [
+        "erp-db",
+        "hubspot-crm"
+      ],
+      "slo": "p95 10s"
+    },
+    {
+      "name": "salesforce-won-deals-to-erp",
+      "version": "1.0.0",
+      "description": "An opportunity won in Salesforce becomes an ERP sales order; the ERP number is written back, and the order is cancelled if that fails.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "salesforce-prod",
+        "event": "Opportunity.ClosedWon",
+        "delivery": "polling"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "sf-opportunity-to-order@3.0.0",
+          "from": "salesforce.Opportunity",
+          "to": "model.SalesOrder",
+          "fields": 6
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "exact"
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "erp-db",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "rollback",
+          "compensation": "cancel-sales-order"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-opportunity-link@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.Opportunity",
+          "fields": 2
+        },
+        {
+          "kind": "write",
+          "entity": "Opportunity",
+          "system": "salesforce-prod",
+          "operation": "update-opportunity",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "restore-opportunity"
+        }
+      ],
+      "targets": [
+        "erp-db",
+        "salesforce-prod"
+      ],
+      "slo": "p95 5s"
+    },
+    {
+      "name": "salesforce-won-deals-to-erp-cdc",
+      "version": "1.0.0",
+      "description": "The same as salesforce-won-deals-to-erp, with the won deal pushed by Salesforce change data capture instead of polled.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "salesforce-prod",
+        "event": "Opportunity.Won",
+        "delivery": "subscription"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "sf-opportunity-to-order@3.0.0",
+          "from": "salesforce.Opportunity",
+          "to": "model.SalesOrder",
+          "fields": 6
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "exact"
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "erp-db",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "rollback",
+          "compensation": "cancel-sales-order"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-opportunity-link@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.Opportunity",
+          "fields": 2
+        },
+        {
+          "kind": "write",
+          "entity": "Opportunity",
+          "system": "salesforce-prod",
+          "operation": "update-opportunity",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "restore-opportunity"
+        }
+      ],
+      "targets": [
+        "erp-db",
+        "salesforce-prod"
+      ],
+      "slo": "p95 5s"
+    },
+    {
+      "name": "salesforce-won-deals-to-sap-orders",
+      "version": "1.0.0",
+      "description": "A won Salesforce opportunity becomes a sales order in SAP ECC (BAPI, test run first).",
+      "level": "L0",
+      "deployable": true,
+      "trigger": {
+        "system": "salesforce",
+        "event": "Opportunity.ClosedWon",
+        "delivery": "polling"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "sf-opportunity-to-order@3.0.0",
+          "from": "salesforce.Opportunity",
+          "to": "model.SalesOrder",
+          "fields": 6
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "exact"
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "sap-ecc",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "testrun",
+          "compensation": "cancel-sales-order"
+        }
+      ],
+      "targets": [
+        "sap-ecc"
+      ],
+      "slo": "p95 2s"
+    },
+    {
+      "name": "shop-order-rows-to-erp",
+      "version": "1.0.0",
+      "description": "Each order row the web shop inserts, read from its database's log, becomes an ERP sales order.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "shop-db",
+        "event": "Order.Placed",
+        "delivery": "change capture"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "shop-order-to-sales-order@1.0.0",
+          "from": "shop-db.Order",
+          "to": "model.SalesOrder",
+          "fields": 6
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "exact"
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "erp-db",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "rollback",
+          "compensation": "cancel-sales-order"
+        }
+      ],
+      "targets": [
+        "erp-db"
+      ],
+      "slo": "p95 2s"
+    },
+    {
+      "name": "shop-orders-to-erp",
+      "version": "1.0.0",
+      "description": "Each new web-shop order becomes an ERP sales order: mapped, customer matched, dry-run, approved, committed.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "shop-db",
+        "event": "Order.Created",
+        "delivery": "outbox"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "shop-order-to-sales-order@1.0.0",
+          "from": "shop-db.Order",
+          "to": "model.SalesOrder",
+          "fields": 6
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "exact"
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "erp-db",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "rollback",
+          "compensation": "cancel-sales-order"
+        }
+      ],
+      "targets": [
+        "erp-db"
+      ],
+      "slo": "p95 2s"
+    },
+    {
+      "name": "shopify-orders-to-sap",
+      "version": "1.0.0",
+      "description": "Shopify orders become SAP sales orders; part of the eu-distributor-core stack.",
+      "level": "L1",
+      "deployable": false,
+      "trigger": {
+        "system": "commerce",
+        "event": "Order.Created",
+        "delivery": ""
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "shopify-order-to-order@1",
+          "from": "commerce.Order",
+          "to": "model.SalesOrder"
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "probabilistic"
+        },
+        {
+          "kind": "write",
+          "system": "erp",
+          "operation": "create-sales-order"
+        }
+      ],
+      "targets": [],
+      "slo": "p95 2s",
+      "problem": "\"commerce\" is a stack slot, not a connector; verify this recipe within a StackBlueprint that fills the slot"
+    },
+    {
+      "name": "shopify-store-orders-to-erp",
+      "version": "1.0.0",
+      "description": "A Shopify order becomes an ERP sales order; the ERP number is added to the Shopify order as a note.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "shopify-store",
+        "event": "Order.Created",
+        "delivery": "webhook"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "shopify-rest-order-to-order@1.0.0",
+          "from": "shopify-store.Order",
+          "to": "model.SalesOrder",
+          "fields": 7
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "probabilistic"
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "erp-db",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "rollback",
+          "compensation": "cancel-sales-order"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-shopify-note@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.Order",
+          "fields": 2
+        },
+        {
+          "kind": "write",
+          "entity": "Order",
+          "system": "shopify-store",
+          "operation": "update-order",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "restore-order"
+        }
+      ],
+      "targets": [
+        "erp-db",
+        "shopify-store"
+      ],
+      "slo": "p95 10s"
+    },
+    {
+      "name": "shopify-store-orders-to-netsuite",
+      "version": "1.0.0",
+      "description": "A Shopify order becomes a NetSuite sales order; the NetSuite number is added to the Shopify order as a note.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "shopify-store",
+        "event": "Order.Created",
+        "delivery": "webhook"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "shopify-rest-order-to-order@1.0.0",
+          "from": "shopify-store.Order",
+          "to": "model.SalesOrder",
+          "fields": 7
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "probabilistic"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-netsuite-order@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.SalesOrder",
+          "fields": 5
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "netsuite-erp",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "delete-sales-order"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-shopify-note@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.Order",
+          "fields": 2
+        },
+        {
+          "kind": "write",
+          "entity": "Order",
+          "system": "shopify-store",
+          "operation": "update-order",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "restore-order"
+        }
+      ],
+      "targets": [
+        "netsuite-erp",
+        "shopify-store"
+      ],
+      "slo": "p95 10s"
+    },
+    {
+      "name": "shopify-store-orders-to-s4",
+      "version": "1.0.0",
+      "description": "A Shopify order becomes an S/4HANA sales order through SAP's released OData API.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "shopify-store",
+        "event": "Order.Created",
+        "delivery": "webhook"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "shopify-rest-order-to-order@1.0.0",
+          "from": "shopify-store.Order",
+          "to": "model.SalesOrder",
+          "fields": 7
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "probabilistic"
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "s4-prod",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "testrun",
+          "compensation": "delete-sales-order"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-shopify-note@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.Order",
+          "fields": 2
+        },
+        {
+          "kind": "write",
+          "entity": "Order",
+          "system": "shopify-store",
+          "operation": "update-order",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "restore-order"
+        }
+      ],
+      "targets": [
+        "s4-prod",
+        "shopify-store"
+      ],
+      "slo": "p95 10s"
+    },
+    {
+      "name": "stripe-payments-to-erp",
+      "version": "1.0.0",
+      "description": "A paid Stripe invoice is recorded as an ERP payment and the Stripe invoice is linked to it (cash application).",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "stripe-billing",
+        "event": "Invoice.Paid",
+        "delivery": "webhook"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "stripe-invoice-to-payment@1.0.0",
+          "from": "stripe-billing.Invoice",
+          "to": "model.Payment",
+          "fields": 6
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "exact"
+        },
+        {
+          "kind": "write",
+          "entity": "Payment",
+          "system": "erp-db",
+          "operation": "record-payment",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "rollback",
+          "compensation": "void-payment"
+        },
+        {
+          "kind": "map",
+          "mapping": "payment-to-stripe-link@1.0.0",
+          "from": "model.Payment",
+          "to": "model.Invoice",
+          "fields": 2
+        },
+        {
+          "kind": "write",
+          "entity": "Invoice",
+          "system": "stripe-billing",
+          "operation": "link-invoice",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "unlink-invoice"
+        }
+      ],
+      "targets": [
+        "erp-db",
+        "stripe-billing"
+      ],
+      "slo": "p95 10s"
+    }
+  ]
+}

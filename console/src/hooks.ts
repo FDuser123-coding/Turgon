@@ -45,7 +45,7 @@ const listeners = new Set<() => void>();
 window.addEventListener("popstate", () => listeners.forEach((l) => l()));
 
 export function navigate(path: string) {
-  if (path !== window.location.pathname) {
+  if (path !== window.location.pathname + window.location.search) {
     window.history.pushState(null, "", path);
     listeners.forEach((l) => l());
   }
@@ -59,4 +59,16 @@ export function usePath(): string {
     },
     () => window.location.pathname,
   );
+}
+
+// useSearch returns a query parameter of the current location.
+export function useSearch(name: string): string | null {
+  const search = useSyncExternalStore(
+    (cb) => {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+    () => window.location.search,
+  );
+  return new URLSearchParams(search).get(name);
 }

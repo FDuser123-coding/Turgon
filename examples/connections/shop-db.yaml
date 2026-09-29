@@ -3,7 +3,9 @@
 # read from the orders table itself by change capture (Order.Placed).
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
-metadata: { name: shop-db }
+metadata:
+  name: shop-db
+  description: "The web shop's database: orders, announced through an outbox or read from its log."
 spec:
   connector: postgres@^1
   secretRef: openbao://shop-db/dsn

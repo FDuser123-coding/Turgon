@@ -7,7 +7,9 @@
 # the order instead of making a second one. Changed orders are events.
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
-metadata: { name: s4-prod }
+metadata:
+  name: s4-prod
+  description: "SAP S/4HANA, through the released Sales Order OData API."
 spec:
   connector: sap-odata@^1
   secretRef: openbao://s4-prod/comm-user

@@ -5,6 +5,7 @@ kind: Recipe
 metadata:
   name: shop-order-rows-to-erp
   version: 1.0.0
+  description: "Each order row the web shop inserts, read from its database's log, becomes an ERP sales order."
 spec:
   trigger:
     source: shop-db

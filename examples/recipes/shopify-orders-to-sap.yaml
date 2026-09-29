@@ -5,6 +5,7 @@ kind: Recipe
 metadata:
   name: shopify-orders-to-sap
   version: 1.0.0
+  description: "Shopify orders become SAP sales orders; part of the eu-distributor-core stack."
 spec:
   trigger:
     source: commerce

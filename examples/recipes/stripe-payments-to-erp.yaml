@@ -8,6 +8,7 @@ kind: Recipe
 metadata:
   name: stripe-payments-to-erp
   version: 1.0.0
+  description: "A paid Stripe invoice is recorded as an ERP payment and the Stripe invoice is linked to it (cash application)."
 spec:
   trigger:
     source: stripe-billing

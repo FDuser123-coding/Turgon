@@ -5,7 +5,9 @@
 # ERP payment ID is written into the invoice's metadata, form-encoded.
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
-metadata: { name: stripe-billing }
+metadata:
+  name: stripe-billing
+  description: "Stripe billing: paid invoices arrive by signed webhook."
 spec:
   connector: rest@^1
   secretRef: openbao://stripe-billing/restricted-key

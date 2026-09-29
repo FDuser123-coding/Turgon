@@ -5,6 +5,7 @@ kind: Recipe
 metadata:
   name: shop-orders-to-erp
   version: 1.0.0
+  description: "Each new web-shop order becomes an ERP sales order: mapped, customer matched, dry-run, approved, committed."
 spec:
   trigger:
     source: shop-db

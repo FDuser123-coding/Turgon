@@ -6,6 +6,7 @@ kind: Recipe
 metadata:
   name: salesforce-won-deals-to-erp
   version: 1.0.0
+  description: "An opportunity won in Salesforce becomes an ERP sales order; the ERP number is written back, and the order is cancelled if that fails."
 spec:
   trigger:
     source: salesforce-prod

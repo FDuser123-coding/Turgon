@@ -8,7 +8,9 @@
 # primary contact) and the order number in erp_order_number.
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
-metadata: { name: hubspot-crm }
+metadata:
+  name: hubspot-crm
+  description: "The HubSpot CRM, where the sales team closes deals."
 spec:
   connector: rest@^1
   secretRef: openbao://hubspot-crm/private-app-token
