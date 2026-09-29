@@ -1,0 +1,40 @@
+# Orders entered in SAP (by inside sales, from EDI, or by another flow)
+# show up in the CRM: each sales order S/4HANA creates is published as a
+# business event to SAP Event Mesh, taken from its queue as it arrives, read
+# through the OData API, and becomes a Dynamics 365 sales order for the
+# customer's account. The SAP customer number is linked to the account once,
+# by a data steward; after that the link is known.
+apiVersion: turgon.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: s4-sales-orders-to-dynamics
+  version: 1.0.0
+  description: "A sales order created in SAP S/4HANA, pushed through SAP Event Mesh, becomes a sales order in Dynamics 365."
+spec:
+  trigger:
+    source: s4-prod
+    event: SalesOrder.Created
+  steps:
+    - map:
+        from: s4-prod.SalesOrder
+        to: model.SalesOrder
+        mapping: s4-sales-order-to-order@1
+    # The master record's ID is the Dataverse account's GUID.
+    - resolve:
+        entity: model.Customer
+        strategy: exact
+        autoMatchAbove: 1.0
+    - map:
+        from: model.SalesOrder
+        to: model.SalesOrder
+        mapping: sales-order-to-dynamics-order@1
+    - write:
+        target: dynamics-crm
+        operation: create-sales-order
+        idempotencyKey: "s4-sales-order-{{ source.SalesOrder }}"
+        simulate: true
+  policies: [writeback-default]
+  capacity:
+    peakPerSecond: 2
+  slo:
+    p95Latency: 10s

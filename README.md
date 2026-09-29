@@ -311,6 +311,74 @@ echo "ada@example.com 310.00" >> shop.cmds
 The approval shows SAP's simulated order. Once approved, the fake prints the new sales order, and
 the Shopify order's note gets its number.
 
+#### Business events through SAP Event Mesh
+
+S/4HANA publishes business events, such as `sap.s4.beh.salesorder.v1.SalesOrder.Created.v1`, to
+SAP Event Mesh: in S/4HANA Cloud through communication scenario SAP_COM_0092, on premise through
+an event channel (`/IWXBE/CONFIG`). A connection can take them from an Event Mesh queue instead of
+polling. The events arrive in seconds, and no port is opened: Turgon only calls out, to the
+instance's REST messaging API.
+
+```yaml
+events:
+  - { name: SalesOrder.Created, entity: SalesOrder, interface: event-mesh }
+config:
+  eventMesh:                                  # from the instance's service key
+    url: https://enterprise-messaging-pubsub.cfapps.eu10.hana.ondemand.com   # messaging, protocol httprest: uri
+    tokenURL: https://acme.authentication.eu10.hana.ondemand.com/oauth/token # oa2.tokenendpoint
+    secretRef: openbao://s4-prod/event-mesh   # the oa2 section as it stands: {"clientid", "clientsecret", ...}
+  subscriptions:
+    SalesOrder.Created:
+      queue: acme/s4/turgon/salesorders       # subscribed to .../ce/sap/s4/beh/salesorder/v1/SalesOrder/Created/v1
+      types: [sap.s4.beh.salesorder.v1.SalesOrder.Created.v1]   # or a prefix: sap.s4.beh.salesorder.v1.*
+      match: { SalesOrderType: OR }
+      read: { service: API_SALES_ORDER_SRV, entitySet: A_SalesOrder, key: SalesOrder, expand: [to_Item] }
+```
+
+- **Nothing is lost.**
+  - Each message is taken with QoS 1 and acknowledged only after its event is stored in
+    Turgon's inbox.
+  - If a worker stops between the two, Event Mesh delivers the message again, and the inbox
+    recognizes its CloudEvent ID.
+  - While no worker runs, events wait on the queue.
+  - A message that cannot be read (not a CloudEvent) is left unacknowledged. Give the queue a
+    dead message queue and a redelivery limit, so such a message is set aside.
+- **The payload.**
+  - An S/4HANA event carries only the object's key and a few fields. With `read`, the payload
+    is the object as the OData API reads it now, with the items. An object that was deleted
+    keeps the event's data.
+  - The event's `id`, `type`, `source` and `time` are under `cloudEvent`.
+  - Other types on the queue are acknowledged and dropped.
+- **One consumer per queue.** Workers take the same lock as for Salesforce subscriptions: one
+  consumes and the others stand by.
+- **Throughput.** Messages are taken one at a time. Against the local fakes, 50 orders were
+  stored in 0.8 s; with real network round trips, expect roughly 5 to 20 events a second per
+  queue.
+- **Credentials.** The instance's OAuth client is sent in the token request's form, because
+  XSUAA takes Basic credentials as they stand and its client IDs contain `!` and `|`. Only a
+  deployment whose flows take events from Event Mesh needs it: one that only writes to SAP
+  (`shopify-store-orders-to-s4`) runs without it.
+- **`turgon check`** signs in to the instance. Queues cannot be inspected without taking their
+  messages, so a missing queue shows when the subscription opens (`404 ... is there a queue
+  acme/s4/turgon/salesorders on the instance?`).
+
+`s4-sales-orders-to-dynamics` uses it: an order created in SAP (by inside sales, EDI, or another
+flow) becomes a Dynamics 365 sales order for the customer's account. The SAP customer number is
+linked to the account once, by a data steward (resolve `exact`). With `-mesh`, the SAP fake also
+runs a fake Event Mesh instance and publishes its sales order events to the queue:
+
+```sh
+touch sap.cmds && (tail -f sap.cmds | bin/fakesap -client 100 -mesh 127.0.0.1:9601 &)
+sed -i 's|https://enterprise-messaging-pubsub.cfapps.eu10.hana.ondemand.com|http://127.0.0.1:9601|;
+        s|https://acme.authentication.eu10.hana.ondemand.com/oauth/token|http://127.0.0.1:9601/oauth/token|' \
+  my-catalog/connections/s4-prod.yaml                          # with S/4HANA and Dynamics set up as above
+bin/turgon compile -c my-catalog s4-sales-orders-to-dynamics -o s4dv.json
+export TURGON_SECRET_S4_PROD_EVENT_MESH='{"clientid":"sb-turgon!b1|xbem-service-broker!b2","clientsecret":"demo"}'
+bin/turgon xref set --entity Customer --system s4-prod --source C-100 --master 6a1c0e2f-8b3d-4f5a-9c7e-1d2b3a4c5e6f
+bin/turgon run -s s4dv.json & bin/turgon run -s s4dv.json &   # one consumes, one stands by
+echo "order C-100 M-2 4" >> sap.cmds                           # an order entered in SAP: the run starts at once
+```
+
 ### Webhooks: events in seconds, polling as the safety net
 
 Turgon runs next to the customer's systems, often where nothing may connect in, so events are
@@ -972,7 +1040,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 ## Not built yet
 
-In rough roadmap order (§16, §19): SAP events by SAP Event Mesh in place of polling; Salesforce Bulk API reads and managed subscriptions;
+In rough roadmap order (§16, §19): Salesforce Bulk API reads and managed subscriptions;
 change capture from databases other than Postgres (Debezium); an external Splink service; the metadata
 graph and discovery; A2A streaming and push notifications; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

@@ -96,6 +96,43 @@ export function createDemoApi() {
     },
   };
 
+  // An order entered in SAP, pushed through Event Mesh, on its way to
+  // Dynamics 365: the approver sees the request Dataverse would get.
+  const dvOrder: PendingApproval = {
+    step: "04-write",
+    digest: "c4a91e7b3d5f2a8c6e0b4d9f1a7c3e5b8d2f6a0c4e9b1d7f3a5c8e2b6d0f4a9c",
+    since: at(3),
+    reasons: ["high-risk tool"],
+    request: {
+      target: "dynamics-crm",
+      operation: "create-sales-order",
+      risk: "high",
+      subject: { id: "turgon/recipe/s4-sales-orders-to-dynamics", roles: ["integration-operator"] },
+      idempotencyKey: "s4-sales-order-5000124",
+      entity: "SalesOrder",
+      simulate: true,
+      payload: {
+        name: "SAP-5000124", description: "From SAP-5000124, EUR", accountBind: "/accounts(6a1c0e2f-8b3d-4f5a-9c7e-1d2b3a4c5e6f)",
+        dynamicsLines: [{ isproductoverridden: true, productdescription: "Deal SAP-5000124", quantity: 1, priceperunit: 2350 }],
+      },
+    },
+    preview: {
+      mode: "preview", method: "PATCH", path: "/salesorders(turgon_externalref='s4-sales-order-5000124')",
+      body: {
+        name: "SAP-5000124", description: "From SAP-5000124, EUR", "customerid_account@odata.bind": "/accounts(6a1c0e2f-8b3d-4f5a-9c7e-1d2b3a4c5e6f)",
+        order_details: [{ isproductoverridden: true, productdescription: "Deal SAP-5000124", quantity: 1, priceperunit: 2350 }],
+      },
+    },
+  };
+  const s4Event = (order: string, soldTo: string, net: string, material: string, qty: string) => ({
+    id: `5f0c${order}-2b1e-4c3d-9a8f-7e6d5c4b3a21`, position: 0, name: "SalesOrder.Created",
+    payload: {
+      SalesOrder: order, SalesOrderType: "OR", SoldToParty: soldTo, TotalNetAmount: net, TransactionCurrency: "EUR",
+      to_Item: [{ SalesOrderItem: "10", Material: material, RequestedQuantity: qty, NetAmount: net }],
+      cloudEvent: { type: "sap.s4.beh.salesorder.v1.SalesOrder.Created.v1", source: "/default/sap.s4.beh/100" },
+    },
+  });
+
   // The record each unresolved run waits for. Like the real engine, the
   // failure message does not quote it: the link lives in the failure's
   // details, which payload encryption covers.
@@ -122,6 +159,11 @@ export function createDemoApi() {
       event: { id: "6", position: 6, name: "Order.Created", payload: { order_number: 3002, total: "64000.00", currency: "eur", customer: { email: "ada@example.com" } } } },
     { id: "salesforce-won-deals-to-erp/006000000000002AAA", runId: "r5", workflow: "salesforce-won-deals-to-erp", status: "running", started: at(11), pending: sfLink,
       event: { id: "006000000000002AAA", position: 1790261000000, name: "Opportunity.ClosedWon", payload: { Id: "006000000000002AAA", AccountId: "001000000000001AAA", Amount: 4200 } } },
+    { id: "s4-sales-orders-to-dynamics/5f0c5000124-2b1e-4c3d-9a8f-7e6d5c4b3a21", runId: "r9", workflow: "s4-sales-orders-to-dynamics", status: "running", started: at(3),
+      pending: dvOrder, event: s4Event("5000124", "C-100", "2350.00", "M-2", "10") },
+    { id: "s4-sales-orders-to-dynamics/5f0c5000118-2b1e-4c3d-9a8f-7e6d5c4b3a21", runId: "r8", workflow: "s4-sales-orders-to-dynamics", status: "completed", started: at(41), closed: at(40.7),
+      result: { writes: [{ step: "04-write", endpoint: "dynamics-crm", operation: "create-sales-order", status: "committed", result: { id: "0d9f3b2a-6c1e-4f8d-a7b5-3e2c1d0f9a8b" } }] },
+      event: s4Event("5000118", "C-100", "705.00", "M-2", "3") },
     { id: "shop-orders-to-erp/5", runId: "r4", workflow: "shop-orders-to-erp", status: "completed", started: at(26), closed: at(25.6),
       result: { writes: [{ step: "03-write", endpoint: "erp-db", operation: "create-sales-order", status: "committed", result: { id: 7, external_id: "SHOP-3001", net_value: 1480.0, status: "open" } }] },
       event: { id: "5", position: 5, name: "Order.Created", payload: { order_number: 3001, total: "1480.00", currency: "eur" } } },

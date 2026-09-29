@@ -10,6 +10,7 @@
 package saptest
 
 import (
+	"bytes"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -42,6 +43,64 @@ type S4 struct {
 	LoseNextCreate bool
 	// Requests counts requests by "METHOD service/resource".
 	Requests map[string]int
+	// Events, if set, receives the business events S/4HANA publishes when
+	// a sales order is created, changed or deleted (to SAP Event Mesh,
+	// through an event channel): the CloudEvent type and its data, which
+	// carries the order's key and a few header fields. Mesh.Publisher
+	// makes one.
+	Events func(eventType string, data map[string]any)
+}
+
+// Sales order event types, as S/4HANA names them.
+const (
+	SalesOrderCreated = "sap.s4.beh.salesorder.v1.SalesOrder.Created.v1"
+	SalesOrderChanged = "sap.s4.beh.salesorder.v1.SalesOrder.Changed.v1"
+	SalesOrderDeleted = "sap.s4.beh.salesorder.v1.SalesOrder.Deleted.v1"
+)
+
+// emit publishes an order's event. The caller holds s.mu.
+func (s *S4) emit(eventType string, o map[string]any) {
+	if s.Events == nil {
+		return
+	}
+	data := map[string]any{}
+	for _, k := range []string{"SalesOrder", "SalesOrderType", "SalesOrganization", "DistributionChannel", "OrganizationDivision", "SoldToParty"} {
+		if v, ok := o[k]; ok {
+			data[k] = v
+		}
+	}
+	s.Events(eventType, data)
+}
+
+// CreateOrder enters an order as a person would in the SAP GUI (VA01), with
+// one item, and returns its number.
+func (s *S4) CreateOrder(soldTo, material, quantity string) (string, error) {
+	body, _ := json.Marshal(map[string]any{
+		"SalesOrderType": "OR", "SalesOrganization": "1710", "DistributionChannel": "10", "OrganizationDivision": "00",
+		"SoldToParty": soldTo, "SalesOrderDate": fmt.Sprintf("/Date(%d)/", s.now().UTC().Truncate(24*time.Hour).UnixMilli()),
+		"to_Item": []map[string]any{{"Material": material, "RequestedQuantity": quantity}},
+	})
+	r, _ := http.NewRequest(http.MethodPost, "/", bytes.NewReader(body))
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	o, e := s.priced(r)
+	if e != nil {
+		return "", fmt.Errorf("%s", e.msg)
+	}
+	return s.store(o), nil
+}
+
+// store numbers a new order and keeps it. The caller holds s.mu.
+func (s *S4) store(o map[string]any) string {
+	id := strconv.Itoa(s.next)
+	s.next++
+	o["SalesOrder"] = id
+	for i, it := range o["to_Item"].([]map[string]any) {
+		it["SalesOrder"], it["SalesOrderItem"] = id, strconv.Itoa((i+1)*10)
+	}
+	s.orders[id] = o
+	s.emit(SalesOrderCreated, o)
+	return id
 }
 
 // New returns a system with a few customers and a price list.
@@ -102,6 +161,7 @@ func (s *S4) Change(id, prop string, v any) {
 	if o := s.orders[id]; o != nil {
 		o[prop] = v
 		s.touch(o)
+		s.emit(SalesOrderChanged, o)
 	}
 }
 
@@ -235,13 +295,7 @@ func (s *S4) salesOrders(w http.ResponseWriter, r *http.Request, resource string
 				fail(w, *e)
 				return
 			}
-			id := strconv.Itoa(s.next)
-			s.next++
-			o["SalesOrder"] = id
-			for i, it := range o["to_Item"].([]map[string]any) {
-				it["SalesOrder"], it["SalesOrderItem"] = id, strconv.Itoa((i+1)*10)
-			}
-			s.orders[id] = o
+			s.store(o)
 			if s.LoseNextCreate {
 				s.LoseNextCreate = false
 				fail(w, odataError{http.StatusGatewayTimeout, "", "Gateway Timeout"})
@@ -274,6 +328,7 @@ func (s *S4) salesOrders(w http.ResponseWriter, r *http.Request, resource string
 			return
 		}
 		delete(s.orders, m[2])
+		s.emit(SalesOrderDeleted, o)
 		w.WriteHeader(http.StatusNoContent)
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)

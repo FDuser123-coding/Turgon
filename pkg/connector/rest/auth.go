@@ -38,6 +38,11 @@ type Auth struct {
 	TokenURL string   `json:"tokenURL,omitempty"`
 	Scopes   []string `json:"scopes,omitempty"`
 	Realm    string   `json:"realm,omitempty"`
+	// ClientAuth is how an oauth2 client authenticates to TokenURL: basic
+	// (default; form-encoded as RFC 6749 says) or body (client_id and
+	// client_secret in the form, for servers that take Basic credentials
+	// as they stand, like SAP's XSUAA with its "!" and "|" client IDs).
+	ClientAuth string `json:"clientAuth,omitempty"`
 }
 
 func (a Auth) validate() error {
@@ -55,6 +60,9 @@ func (a Auth) validate() error {
 		u, err := url.Parse(a.TokenURL)
 		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
 			return fmt.Errorf("auth: oauth2 needs an http(s) tokenURL")
+		}
+		if a.ClientAuth != "" && a.ClientAuth != "basic" && a.ClientAuth != "body" {
+			return fmt.Errorf("auth: clientAuth must be basic or body, got %q", a.ClientAuth)
 		}
 	default:
 		return fmt.Errorf("auth: type must be bearer, header, basic, oauth2, oauth1 or none, got %q", a.Type)
@@ -221,13 +229,19 @@ func (a *authenticator) current(ctx context.Context) (string, error) {
 	if len(a.cfg.Scopes) > 0 {
 		form.Set("scope", strings.Join(a.cfg.Scopes, " "))
 	}
+	if a.cfg.ClientAuth == "body" {
+		form.Set("client_id", a.clientID)
+		form.Set("client_secret", a.clientSecret)
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.TokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return "", err
 	}
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Accept", "application/json")
-	req.SetBasicAuth(url.QueryEscape(a.clientID), url.QueryEscape(a.clientSecret))
+	if a.cfg.ClientAuth != "body" {
+		req.SetBasicAuth(url.QueryEscape(a.clientID), url.QueryEscape(a.clientSecret))
+	}
 	resp, err := a.http.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("oauth2 token: %w", err)
