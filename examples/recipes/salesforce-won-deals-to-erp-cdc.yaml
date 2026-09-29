@@ -1,0 +1,41 @@
+# salesforce-won-deals-to-erp with the deal pushed by change data capture
+# over the Pub/Sub API instead of polled with SOQL: the run starts as the
+# deal is won.
+apiVersion: turgon.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: salesforce-won-deals-to-erp-cdc
+  version: 1.0.0
+spec:
+  trigger:
+    source: salesforce-prod
+    event: Opportunity.Won
+  steps:
+    - map:
+        from: salesforce.Opportunity
+        to: model.SalesOrder
+        mapping: sf-opportunity-to-order@3
+    - resolve:
+        entity: model.Customer
+        strategy: exact
+        autoMatchAbove: 1.0
+    - write:
+        target: erp-db
+        operation: create-sales-order
+        idempotencyKey: "{{ source.Id }}"
+        simulate: true
+        output: erpOrder
+    - map:
+        from: model.SalesOrder
+        to: model.Opportunity
+        mapping: sales-order-to-opportunity-link@1
+    - write:
+        target: salesforce-prod
+        operation: update-opportunity
+        idempotencyKey: "{{ source.Id }}"
+        simulate: true
+  policies: [writeback-default]
+  capacity:
+    peakPerSecond: 5
+  slo:
+    p95Latency: 5s

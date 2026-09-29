@@ -55,6 +55,23 @@ type WebhookSource interface {
 	Webhook(event string) (Webhook, error)
 }
 
+// Streamer is implemented by sources that push some events over a
+// subscription the source system keeps open (Salesforce's Pub/Sub API),
+// resuming from an opaque position of the system's own rather than an
+// ordered number. The runtime stores what arrives in its inbox, in the
+// same transaction as the position to resume after it, so an event is
+// never lost to a crash and never read twice.
+type Streamer interface {
+	// Streams reports whether event arrives by Stream instead of Poll.
+	Streams(event string) bool
+	// Stream subscribes to event from resume (nil: from now) and calls
+	// deliver for each batch, with the position to resume after it, until
+	// ctx ends or the subscription fails. A batch may carry no events and
+	// only a newer position. deliver must return before more is read; if it
+	// fails, Stream returns its error.
+	Stream(ctx context.Context, event string, resume []byte, deliver func(events []Event, resume []byte) error) error
+}
+
 // Webhook verifies and parses deliveries of one event.
 type Webhook interface {
 	// Receive checks a delivery's signature and returns the events it

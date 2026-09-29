@@ -2,8 +2,9 @@
 // (architecture §13: REST API reads and writes, OAuth with a dedicated
 // integration user, API limits declared in the manifest).
 //
-// Events are read by polling SOQL on SystemModstamp, a sanctioned REST read.
-// A Pub/Sub API change-data-capture subscriber replaces polling later.
+// Events are read by polling SOQL on SystemModstamp, a sanctioned REST
+// read, or received over the Pub/Sub API (change data capture and platform
+// events, see Subscription).
 // Updates capture the previous values of the fields they change, so the
 // restore action can undo them exactly.
 package salesforce
@@ -22,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hamba/avro/v2"
+
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
@@ -38,6 +41,10 @@ type Config struct {
 	APIVersion string                `json:"apiVersion,omitempty"`
 	Events     map[string]EventQuery `json:"events,omitempty"`
 	Operations map[string]Operation  `json:"operations,omitempty"`
+	// Subscriptions are events received over the Pub/Sub API, by name.
+	Subscriptions map[string]Subscription `json:"subscriptions,omitempty"`
+	// PubSubEndpoint defaults to DefaultPubSubEndpoint.
+	PubSubEndpoint string `json:"pubsubEndpoint,omitempty"`
 }
 
 // EventQuery defines an event as the records matching a SOQL condition,
@@ -83,6 +90,14 @@ func (c Config) validate() error {
 			if strings.ContainsAny(part, ";") {
 				return fmt.Errorf("event %s: SOQL fragments must not contain ';'", name)
 			}
+		}
+	}
+	for name, sub := range c.Subscriptions {
+		if err := sub.validate(name); err != nil {
+			return err
+		}
+		if _, dup := c.Events[name]; dup {
+			return fmt.Errorf("event %s is both a SOQL event and a subscription", name)
 		}
 	}
 	for name, op := range c.Operations {
@@ -139,6 +154,7 @@ func Factory(ctx context.Context, cfg compiler.ConnectorConfig, secrets connecto
 type Conn struct {
 	cfg  Config
 	sess *session
+	schemaCache
 	// PageLimit caps pages read per poll. Default 50.
 	PageLimit int
 }
@@ -161,10 +177,11 @@ func New(secret string, cfg Config, client *http.Client) (*Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Conn{cfg: cfg, sess: &session{creds: creds, key: key, http: client, now: time.Now}, PageLimit: 50}, nil
+	return &Conn{cfg: cfg, sess: &session{creds: creds, key: key, http: client, now: time.Now}, PageLimit: 50,
+		schemaCache: schemaCache{schemas: map[string]avro.Schema{}}}, nil
 }
 
-func (c *Conn) Close() {}
+func (c *Conn) Close() { c.closePubSub() }
 
 // APIError is an error response from the Salesforce API.
 type APIError struct {
@@ -253,6 +270,9 @@ func (c *Conn) base() string { return "/services/data/v" + c.cfg.APIVersion }
 // "greater than" cursor cannot skip records.
 func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) ([]connector.Event, error) {
 	q, ok := c.cfg.Events[event]
+	if !ok && c.Streams(event) {
+		return nil, fmt.Errorf("salesforce: event %q arrives over the Pub/Sub API, not by polling", event)
+	}
 	if !ok {
 		return nil, fmt.Errorf("salesforce: event %q is not configured on this connection", event)
 	}

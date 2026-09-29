@@ -8,6 +8,9 @@ import (
 	"sort"
 	"strings"
 
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/fduser123-coding/turgon/pkg/connector"
 )
 
@@ -91,6 +94,40 @@ func (c *Conn) Check(ctx context.Context) []connector.CheckResult {
 			continue
 		}
 		out = append(out, connector.Pass(name, fmt.Sprintf("%d fields checked", len(need[s].read)+len(need[s].write))))
+	}
+	return append(out, c.checkSubscriptions(ctx)...)
+}
+
+// checkSubscriptions asks the Pub/Sub API about each subscription's topic:
+// that it exists and the integration user may subscribe to it.
+func (c *Conn) checkSubscriptions(ctx context.Context) []connector.CheckResult {
+	var out []connector.CheckResult
+	names := make([]string, 0, len(c.cfg.Subscriptions))
+	for name := range c.cfg.Subscriptions {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		sub := c.cfg.Subscriptions[name]
+		label := "subscription " + name
+		info, err := c.topic(ctx, sub.Topic)
+		switch {
+		case err != nil:
+			fix := "Check that the topic exists: for change data capture, select the object in Setup > Change Data Capture; " +
+				"a platform event's API name ends in __e."
+			switch status.Code(errors.Unwrap(err)) {
+			case codes.PermissionDenied, codes.Unauthenticated:
+				fix = "Give the integration user read access to the object (change events) or the platform event in a permission set."
+			case codes.Unavailable, codes.DeadlineExceeded:
+				fix = "The Pub/Sub API is unreachable: allow outbound gRPC (HTTP/2) to " + or(c.cfg.PubSubEndpoint, DefaultPubSubEndpoint) + "."
+			}
+			out = append(out, connector.Fail(label, err.Error(), fix))
+		case !info.CanSubscribe:
+			out = append(out, connector.Fail(label, "the integration user cannot subscribe to "+sub.Topic,
+				"Give the integration user read access to the object (change events) or the platform event in a permission set."))
+		default:
+			out = append(out, connector.Pass(label, sub.Topic))
+		}
 	}
 	return out
 }

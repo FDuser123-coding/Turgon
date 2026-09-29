@@ -271,6 +271,22 @@ func runCmd() *cobra.Command {
 					}
 				}
 			}
+			if len(rt.Streams) > 0 {
+				streams := &engine.Streams{Runtime: rt, Inbox: store, Locker: store,
+					Delivered: func() {
+						select {
+						case wake <- struct{}{}:
+						default:
+						}
+					},
+					Log: func(format string, args ...any) { fmt.Fprintf(out, format+"\n", args...) }}
+				go streams.Run(ctx)
+				for ep, events := range rt.Streams {
+					for ev := range events {
+						fmt.Fprintf(out, "turgon: subscribed to %s %s (one worker at a time holds the subscription)\n", ep, ev)
+					}
+				}
+			}
 			ticker := time.NewTicker(poll)
 			defer ticker.Stop()
 			pruned := time.Time{}

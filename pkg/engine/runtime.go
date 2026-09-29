@@ -38,7 +38,10 @@ type Runtime struct {
 	Sources    map[string]connector.Source
 	// Webhooks are the trigger events this runtime receives by webhook, by
 	// endpoint and event (only with Options.Webhooks).
-	Webhooks  map[string]map[string]connector.Webhook
+	Webhooks map[string]map[string]connector.Webhook
+	// Streams are the trigger events that arrive over a subscription (see
+	// Streams), by endpoint and event.
+	Streams   map[string]map[string]bool
 	instances map[string]connector.Instance
 }
 
@@ -65,7 +68,7 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Runtim
 		}
 	}
 	rt := &Runtime{Spec: spec, Sources: map[string]connector.Source{}, Webhooks: map[string]map[string]connector.Webhook{},
-		instances: map[string]connector.Instance{}}
+		Streams: map[string]map[string]bool{}, instances: map[string]connector.Instance{}}
 	targets := map[string]writeguard.TargetConfig{}
 	for _, c := range spec.Spec.Connectors {
 		if !used[c.Endpoint] && !agentOnly[c.Endpoint] {
@@ -95,6 +98,13 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Runtim
 		if !ok {
 			rt.Close()
 			return nil, fmt.Errorf("workflow %s: endpoint %s cannot emit events", wf.Name, wf.Trigger.Endpoint)
+		}
+		if st, ok := src.(connector.Streamer); ok && st.Streams(wf.Trigger.Event) {
+			if rt.Streams[wf.Trigger.Endpoint] == nil {
+				rt.Streams[wf.Trigger.Endpoint] = map[string]bool{}
+			}
+			rt.Streams[wf.Trigger.Endpoint][wf.Trigger.Event] = true
+			continue
 		}
 		ws, ok := src.(connector.WebhookSource)
 		if !opts.Webhooks || !ok {
@@ -216,7 +226,13 @@ func (d *Dispatcher) Poll(ctx context.Context) (int, error) {
 	for _, wf := range wfs {
 		name := wf.Name + "@" + wf.Trigger.Endpoint + "/" + wf.Trigger.Event
 		src := d.Runtime.Sources[wf.Trigger.Endpoint]
-		if _, hooked := d.Runtime.Webhooks[wf.Trigger.Endpoint][wf.Trigger.Event]; !hooked || d.Inbox == nil {
+		_, hooked := d.Runtime.Webhooks[wf.Trigger.Endpoint][wf.Trigger.Event]
+		streamed := d.Runtime.Streams[wf.Trigger.Endpoint][wf.Trigger.Event]
+		if streamed && d.Inbox == nil {
+			errs = append(errs, fmt.Errorf("%s: arrives by subscription, which needs an inbox", name))
+			continue
+		}
+		if !streamed && (!hooked || d.Inbox == nil) {
 			n, err := d.drain(ctx, wf, name, func(after int64) ([]connector.Event, error) {
 				evs, err := src.Poll(ctx, wf.Trigger.Event, after, batch)
 				polled(wf.Name, err)
@@ -232,7 +248,8 @@ func (d *Dispatcher) Poll(ctx context.Context) (int, error) {
 		// kept once, so an event read both ways starts one run, and a run
 		// that failed (an approval rejected) is not started again.
 		inbox := InboxSource(wf.Trigger.Endpoint, wf.Trigger.Event)
-		if last, ok := d.lastPolled[name]; !ok || now().Sub(last) >= reconcile {
+		// A subscription resumes where it stopped: nothing to reconcile.
+		if last, ok := d.lastPolled[name]; !streamed && (!ok || now().Sub(last) >= reconcile) {
 			err := d.reconcile(ctx, src, wf, name, inbox, batch)
 			polled(wf.Name, err)
 			if err != nil {
@@ -244,7 +261,8 @@ func (d *Dispatcher) Poll(ctx context.Context) (int, error) {
 		n, err := d.drain(ctx, wf, name+"#inbox", func(after int64) ([]connector.Event, error) {
 			return d.Inbox.Inbox(ctx, inbox, wf.Trigger.Event, after, batch)
 		})
-		// Webhook deliveries, and what reconciling polls found missing.
+		// Webhook deliveries, what reconciling polls found missing, and
+		// what subscriptions received.
 		metrics.Events.WithLabelValues(wf.Name, "inbox").Add(float64(n))
 		started += n
 		errs = append(errs, err)

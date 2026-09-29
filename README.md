@@ -70,6 +70,58 @@ echo "001000000000001AAA 7800" >> sf.cmds                      # a deal is won
 bin/turgon approve salesforce-won-deals-to-erp/006000000000001AAA --by you@example.com
 ```
 
+#### Change data capture over the Pub/Sub API
+
+`salesforce-won-deals-to-erp-cdc` runs the same saga, but the won deal is pushed to the worker
+as it happens instead of being polled. The connection subscribes to Salesforce's change events
+(or to a platform event) over the Pub/Sub API (gRPC). It uses the same integration user and
+token:
+
+```yaml
+events:
+  - { name: Opportunity.Won, entity: Opportunity, interface: change-data-capture }
+config:
+  subscriptions:
+    Opportunity.Won:
+      topic: /data/OpportunityChangeEvent      # or /event/Order_Placed__e
+      changeTypes: [UPDATE]
+      match: { StageName: Closed Won }         # an update carries only what it changed
+      fields: [AccountId, Amount, CloseDate, CurrencyIsoCode,
+               "(SELECT Product2.ProductCode, Quantity FROM OpportunityLineItems)"]
+```
+
+- **Every event is kept, in order.** Each event is stored in Turgon's inbox together with the
+  replay ID to resume after it, in one transaction. A worker that crashes or restarts
+  resumes after the last stored event, with nothing lost and nothing read twice. Replay IDs
+  are kept as the opaque bytes Salesforce sends.
+- **Resuming after a long outage.** Salesforce keeps events for three days. After a longer
+  outage the stored replay ID is rejected, and the subscription starts again from the oldest
+  event Salesforce still holds. The inbox drops the events it already has.
+- **One subscriber per event.** Workers take a lock in Postgres: one holds the subscription
+  and the others stand by. When the holder dies, another worker takes over within seconds.
+  Events are requested in batches (`batch`, 100 by default), and Salesforce's keepalives
+  move the stored position forward even when nothing happens.
+- **Payload.**
+  - A change event becomes one event per changed record, with its `Id` and the
+    `ChangeEventHeader`. The header's field bitmaps (`changedFields`, `nulledFields`,
+    `diffFields`) are decoded to field names, including compound fields such as
+    `Name.FirstName`.
+  - Fields the change did not touch are left out, and fields it cleared are `null`.
+  - With `fields` set, the payload is the record as it is now, read with SOQL. It then has
+    the same shape as the polled event, so the same mapping serves both.
+- **`turgon check`** asks the Pub/Sub API whether each topic exists and whether the
+  integration user may subscribe to it.
+
+The fake org also serves the Pub/Sub API (plaintext gRPC on `127.0.0.1:7443`; Turgon uses
+TLS for every endpoint except a loopback one). Each deal won through `sf.cmds` is published
+as a change event. In a catalog whose connection sets `pubsubEndpoint: 127.0.0.1:7443`:
+
+```sh
+bin/turgon compile -c my-catalog salesforce-won-deals-to-erp-cdc -o sf-cdc.json
+bin/turgon run -s sf-cdc.json & bin/turgon run -s sf-cdc.json &   # one subscribes, one stands by
+echo "001000000000001AAA 7800" >> sf.cmds                          # the run starts at once
+```
+
 ### Any HTTP API: Shopify to ERP
 
 The `rest` connector integrates HTTP JSON APIs (Shopify, Stripe, HubSpot, in-house services) with
@@ -781,7 +833,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/audit` | §9 | Append-only, hash-chained audit log with tamper detection |
 | `pkg/mapping` | §7.4 | JSONata evaluation of mapping sets |
 | `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow, and one for agent writes; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher; webhook receiver with a durable inbox, reconciled by polling |
-| `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox and change capture events, rollback dry-runs, idempotent writes) |
+| `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox and change capture events, rollback dry-runs, idempotent writes); `salesforce/` reads by SOQL and subscribes over the Pub/Sub API (`pubsub/`: the gRPC wire protocol) |
 | `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled list or search events (ascending, or newest-first paged back to the cursor), also received as signed webhooks (Stripe, Shopify, generic HMAC), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/`, `stripetest/` and `hubspottest/` fake the Shopify Admin, Stripe and HubSpot CRM APIs |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references, the webhook inbox |
@@ -831,7 +883,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 ## Not built yet
 
-In rough roadmap order (§16, §19): SAP events by SAP Event Mesh in place of polling; Salesforce Pub/Sub API change capture and Bulk API reads;
+In rough roadmap order (§16, §19): SAP events by SAP Event Mesh in place of polling; Salesforce Bulk API reads and managed subscriptions;
 the Turgon operator; an appliance build (§11);
 change capture from databases other than Postgres (Debezium); an external Splink service; the metadata
 graph and discovery; A2A streaming and push notifications; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go

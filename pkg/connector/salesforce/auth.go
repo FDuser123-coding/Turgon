@@ -84,6 +84,7 @@ type session struct {
 	mu       sync.Mutex
 	token    string
 	instance string
+	org      string // the org's ID, from the token's identity URL
 }
 
 func (s *session) current(ctx context.Context) (token, instance string, err error) {
@@ -95,6 +96,14 @@ func (s *session) current(ctx context.Context) (token, instance string, err erro
 		}
 	}
 	return s.token, s.instance, nil
+}
+
+// identity returns the current token, instance URL and org ID.
+func (s *session) identity(ctx context.Context) (token, instance, org string, err error) {
+	token, instance, err = s.current(ctx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return token, instance, s.org, err
 }
 
 // invalidate drops a token the API rejected, if it is still the current one.
@@ -142,11 +151,16 @@ func (s *session) login(ctx context.Context) error {
 	var tok struct {
 		AccessToken string `json:"access_token"`
 		InstanceURL string `json:"instance_url"`
+		// ID is https://login.salesforce.com/id/<org ID>/<user ID>.
+		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(body, &tok); err != nil || tok.AccessToken == "" || tok.InstanceURL == "" {
 		return errors.New("salesforce login: malformed token response")
 	}
 	s.token, s.instance = tok.AccessToken, strings.TrimRight(tok.InstanceURL, "/")
+	if parts := strings.Split(strings.TrimRight(tok.ID, "/"), "/"); len(parts) >= 2 {
+		s.org = parts[len(parts)-2]
+	}
 	return nil
 }
 

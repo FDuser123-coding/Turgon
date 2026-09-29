@@ -22,6 +22,9 @@ import (
 	"time"
 )
 
+// OrgID is the fake org's ID.
+const OrgID = "00D000000000001AAA"
+
 // Server is a fake Salesforce org.
 type Server struct {
 	*httptest.Server
@@ -42,6 +45,10 @@ type Server struct {
 	nextID  int
 	Logins  int
 	Patches int
+
+	// PubSubAddr is where PubSub listens (default a free loopback port).
+	PubSubAddr string
+	ps         *pubSub
 }
 
 // New starts a fake org.
@@ -171,7 +178,8 @@ func (s *Server) token(w http.ResponseWriter, r *http.Request) {
 	tok := fmt.Sprintf("00Dtoken%d", s.Logins)
 	s.tokens[tok] = true
 	s.mu.Unlock()
-	_ = json.NewEncoder(w).Encode(map[string]string{"access_token": tok, "instance_url": s.URL, "token_type": "Bearer"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"access_token": tok, "instance_url": s.URL, "token_type": "Bearer",
+		"id": s.URL + "/id/" + OrgID + "/005000000000001AAA"})
 }
 
 func (s *Server) checkAssertion(jwt string) error {
@@ -215,18 +223,22 @@ var (
 )
 
 // query supports the SOQL the connector issues:
-// SELECT ... FROM X WHERE [(Field = 'v') AND] SystemModstamp > T ORDER BY SystemModstamp, Id
+// SELECT ... FROM X WHERE [(Field = 'v') AND] SystemModstamp > T ORDER BY SystemModstamp, Id,
+// and SELECT ... FROM X WHERE (Id = 'v') to read one record.
 func (s *Server) query(w http.ResponseWriter, soql string) {
 	m := fromRE.FindStringSubmatch(soql)
 	st := stampRE.FindStringSubmatch(soql)
-	if m == nil || st == nil || !strings.HasSuffix(soql, "ORDER BY SystemModstamp, Id") {
+	if m == nil || (st != nil && !strings.HasSuffix(soql, "ORDER BY SystemModstamp, Id")) {
 		writeErr(w, http.StatusBadRequest, "MALFORMED_QUERY", "unsupported query: "+soql)
 		return
 	}
-	after, err := time.Parse("2006-01-02T15:04:05.000Z", st[1])
-	if err != nil {
-		writeErr(w, http.StatusBadRequest, "MALFORMED_QUERY", "bad datetime literal "+st[1])
-		return
+	var after time.Time
+	if st != nil {
+		var err error
+		if after, err = time.Parse("2006-01-02T15:04:05.000Z", st[1]); err != nil {
+			writeErr(w, http.StatusBadRequest, "MALFORMED_QUERY", "bad datetime literal "+st[1])
+			return
+		}
 	}
 	eq := eqRE.FindStringSubmatch(soql)
 	s.mu.Lock()

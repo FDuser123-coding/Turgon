@@ -78,6 +78,14 @@ CREATE TABLE IF NOT EXISTS turgon_inbox (
 );
 CREATE INDEX IF NOT EXISTS turgon_inbox_received ON turgon_inbox (received_at);
 
+-- Where each subscription resumes: the source system's own opaque position
+-- after the last events stored in the inbox, written with them.
+CREATE TABLE IF NOT EXISTS turgon_stream_positions (
+	source     text PRIMARY KEY,
+	resume     bytea NOT NULL,
+	updated_at timestamptz NOT NULL DEFAULT now()
+);
+
 -- Reviews of mapped fields below the confidence threshold. A review holds
 -- for one expression of one mapping version: changing either needs a new one.
 CREATE TABLE IF NOT EXISTS turgon_mapping_reviews (
