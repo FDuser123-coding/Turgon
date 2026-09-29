@@ -243,6 +243,19 @@ export function createDemoApi() {
     audit: (): Promise<AuditLog[]> =>
       delay([{ file: "Postgres audit log (demo)", ok: true, count: entries.length, head: `demo${entries.length}`, entries: [...entries].reverse() }]),
     catalog: () => delay(catalog),
+    review: (r: { mapping: string; target: string; expression: string; decision: "approved" | "rejected"; note?: string }) => {
+      for (const rep of catalog.reports) {
+        const i = (rep.reviewQueue ?? []).findIndex((q) => q.mapping === r.mapping && q.target === r.target && q.expression === r.expression);
+        if (i < 0) continue;
+        rep.reviewQueue?.splice(i, 1);
+        rep.findings = [...(rep.findings ?? []), r.decision === "approved"
+          ? { stage: "mapping", severity: "info", message: `${r.mapping}.${r.target} approved by ${user.id}` }
+          : { stage: "mapping", severity: "error", message: `${r.mapping}.${r.target} was rejected by ${user.id}: ${r.note ?? ""}; change the mapping` }];
+        audit(user.id, "mapping.reviewed", { mapping: r.mapping, target: r.target, decision: r.decision, note: r.note ?? "" }, 0);
+        return delay({ decision: r.decision, reviewer: user.id });
+      }
+      return Promise.reject(new Error("this field is no longer waiting for review with this expression; reload"));
+    },
     decide: (d: { runId: string; step: string; digest: string; decision: "approve" | "reject"; note?: string }) => {
       const r = runs.find((x) => x.id === d.runId);
       if (!r?.pending || r.pending.digest !== d.digest) return Promise.reject(new Error("this run is no longer waiting for that decision; reload"));

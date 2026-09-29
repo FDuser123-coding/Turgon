@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,8 +47,10 @@ func newRoot(stdout, stderr io.Writer) *cobra.Command {
 	}
 	root.SetOut(stdout)
 	root.SetErr(stderr)
-	root.AddCommand(validateCmd(), verifyCmd(), compileCmd(), auditCmd(), versionCmd(),
-		runCmd(), approveCmd(), pendingCmd(), retryCmd(), xrefCmd(), secretsCmd(), consoleCmd(), checkCmd(), mcpCmd(), gatewayConfigCmd())
+	root.PersistentFlags().StringVar(&trustedKeysPath, "trusted-keys", os.Getenv("TURGON_TRUSTED_KEYS"),
+		"PEM file of public keys; when set, commands load only runtime specs one of them signed")
+	root.AddCommand(validateCmd(), verifyCmd(), compileCmd(), auditCmd(), versionCmd(), keygenCmd(), signCmd(),
+		runCmd(), approveCmd(), pendingCmd(), retryCmd(), xrefCmd(), identityCmd(), secretsCmd(), consoleCmd(), checkCmd(), mcpCmd(), gatewayConfigCmd())
 	return root
 }
 
@@ -101,9 +104,10 @@ func validateCmd() *cobra.Command {
 }
 
 type targetFlags struct {
-	catalogs []string
-	asJSON   bool
-	opts     verifier.Options
+	catalogs  []string
+	asJSON    bool
+	opts      verifier.Options
+	reviewsDB string
 }
 
 func (f *targetFlags) register(cmd *cobra.Command) {
@@ -111,6 +115,7 @@ func (f *targetFlags) register(cmd *cobra.Command) {
 	cmd.Flags().BoolVar(&f.asJSON, "json", false, "print the report as JSON")
 	cmd.Flags().Float64Var(&f.opts.ReviewThreshold, "review-threshold", 0, "mapping confidence below which fields need review (default 0.90)")
 	cmd.Flags().Float64Var(&f.opts.WriteReviewThreshold, "write-review-threshold", 0, "threshold for mappings that feed writes (default 0.95)")
+	cmd.Flags().StringVar(&f.reviewsDB, "reviews-db", "", "Postgres URL of Turgon's state, to apply the mapping reviews stewards made in the console")
 }
 
 // resolve loads the catalog and finds the target, which is either an object
@@ -119,6 +124,20 @@ func (f *targetFlags) resolve(target string) (*catalog.Catalog, v1alpha1.Object,
 	cat, err := catalog.Load(f.catalogs...)
 	if err != nil {
 		return nil, nil, err
+	}
+	if f.reviewsDB != "" {
+		ctx := context.Background()
+		pool, err := pgxpool.New(ctx, f.reviewsDB)
+		if err != nil {
+			return nil, nil, err
+		}
+		defer pool.Close()
+		if err := pgstore.Migrate(ctx, pool); err != nil {
+			return nil, nil, err
+		}
+		if f.opts.Reviews, err = pgstore.New(pool).Reviews().All(ctx); err != nil {
+			return nil, nil, fmt.Errorf("mapping reviews: %w", err)
+		}
 	}
 	if info, err := os.Stat(target); err == nil && !info.IsDir() {
 		docs, err := spec.LoadFile(target)
@@ -174,7 +193,7 @@ func verifyCmd() *cobra.Command {
 
 func compileCmd() *cobra.Command {
 	var f targetFlags
-	var output string
+	var output, signKey string
 	cmd := &cobra.Command{
 		Use:   "compile NAME|FILE",
 		Short: "Verify and compile a recipe or blueprint into a runtime spec",
@@ -190,6 +209,11 @@ func compileCmd() *cobra.Command {
 					printReport(cmd.ErrOrStderr(), rep, "")
 				}
 				return err
+			}
+			if signKey != "" {
+				if err := signWith(rt, signKey); err != nil {
+					return err
+				}
 			}
 			w := cmd.OutOrStdout()
 			if output != "" && output != "-" {
@@ -211,6 +235,7 @@ func compileCmd() *cobra.Command {
 	}
 	f.register(cmd)
 	cmd.Flags().StringVarP(&output, "output", "o", "", "write the runtime spec to a file instead of stdout")
+	cmd.Flags().StringVar(&signKey, "sign-key", os.Getenv("TURGON_SIGNING_KEY"), "sign the spec with this Ed25519 private key (PEM file)")
 	return cmd
 }
 

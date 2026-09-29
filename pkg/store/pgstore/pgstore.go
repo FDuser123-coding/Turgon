@@ -77,6 +77,28 @@ CREATE TABLE IF NOT EXISTS turgon_inbox (
 	UNIQUE (source, event_id)
 );
 CREATE INDEX IF NOT EXISTS turgon_inbox_received ON turgon_inbox (received_at);
+
+-- Reviews of mapped fields below the confidence threshold. A review holds
+-- for one expression of one mapping version: changing either needs a new one.
+CREATE TABLE IF NOT EXISTS turgon_mapping_reviews (
+	mapping     text NOT NULL,
+	target      text NOT NULL,
+	expr_sha256 text NOT NULL,
+	decision    text NOT NULL CHECK (decision IN ('approved', 'rejected')),
+	reviewer    text NOT NULL,
+	note        text NOT NULL DEFAULT '',
+	reviewed_at timestamptz NOT NULL DEFAULT now(),
+	PRIMARY KEY (mapping, target, expr_sha256)
+);
+
+-- Identity matching models trained on the deployment's own links.
+CREATE TABLE IF NOT EXISTS turgon_match_models (
+	entity     text PRIMARY KEY,
+	model      jsonb NOT NULL,
+	report     jsonb NOT NULL,
+	trained_by text NOT NULL,
+	trained_at timestamptz NOT NULL DEFAULT now()
+);
 `
 
 // Migrate creates or upgrades Turgon's schema.

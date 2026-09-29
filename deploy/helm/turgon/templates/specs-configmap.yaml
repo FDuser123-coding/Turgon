@@ -13,3 +13,17 @@ data:
   {{ $name }}.json: {{ $spec | quote }}
   {{- end }}
 {{- end }}
+{{- with .Values.specSigning.trustedKeys }}
+---
+# Public keys runtime specs must be signed with (turgon keygen; compile
+# --sign-key in the pipeline that builds them).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "turgon.fullname" $ }}-trusted-keys
+  labels:
+    {{- include "turgon.labels" $ | nindent 4 }}
+data:
+  keys.pem: |
+    {{- . | nindent 4 }}
+{{- end }}

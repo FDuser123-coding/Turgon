@@ -24,6 +24,10 @@ type Options struct {
 	// CapacityHeadroom is the fraction of a target's declared rate above
 	// which a recipe's peak load draws a warning. Default 0.8.
 	CapacityHeadroom float64
+	// Reviews are people's decisions on fields in the review queue, made
+	// in the console: an approved field leaves the queue, a rejected one
+	// fails verification until the mapping changes.
+	Reviews Reviews
 }
 
 func (o Options) withDefaults() Options {
@@ -320,6 +324,15 @@ func (v *Verifier) mapStep(r *Report, path string, s *v1alpha1.MapStep, threshol
 	}
 	for _, f := range m.Spec.Fields {
 		if f.Approved || f.Origin == v1alpha1.OriginCertified || f.Confidence >= threshold {
+			continue
+		}
+		if rv, ok := v.opts.Reviews.Find(ref, f.Target, f.Expression); ok {
+			if rv.Decision == ReviewApproved {
+				r.add(StageMapping, SeverityInfo, path+".map", "%s.%s (confidence %.2f) approved by %s on %s", ref, f.Target, f.Confidence, rv.Reviewer, rv.At.Format("2006-01-02"))
+				continue
+			}
+			r.add(StageMapping, SeverityError, path+".map", "%s.%s was rejected by %s: %s; change the mapping", ref, f.Target, rv.Reviewer, or(rv.Note, "no reason given"))
+			r.raise(2)
 			continue
 		}
 		r.ReviewQueue = append(r.ReviewQueue, ReviewItem{

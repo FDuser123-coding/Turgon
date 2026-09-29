@@ -91,28 +91,52 @@ func normalizeName(s string) string {
 
 // A comparison's m probability is how often it agrees for records of the
 // same entity, u how often by chance for different ones. Their ratio is
-// the evidence it gives. The values are conservative defaults for
-// customer data; they are not trained per deployment.
-type level struct {
-	m, u   float64
-	reason string
+// the evidence it gives. Default holds conservative values for customer
+// data; Train estimates them from a deployment's own confirmed links.
+type Probabilities struct {
+	M float64 `json:"m"`
+	U float64 `json:"u"`
 }
 
-var (
-	emailSame = level{0.95, 0.0001, "same email address"}
-	// People use several addresses, so a different one is weak evidence.
-	emailDiffers = level{0.30, 0.9999, ""}
-	domainSame   = level{0.90, 0.002, "same company email domain"}
-	domainDiff   = level{0.10, 0.998, ""}
-	nameSame     = level{0.85, 0.02, "same name"}
-	nameClose    = level{0.10, 0.05, "similar name"}
-	nameDiffers  = level{0.05, 0.93, ""}
-	exactSame    = level{0.95, 0.001, "same %s"}
-	exactDiffers = level{0.05, 0.999, ""}
+// Comparison levels: the outcome of comparing one kind of attribute.
+const (
+	EmailSame     = "email.same"
+	EmailDiffers  = "email.differs"
+	DomainSame    = "domain.same"
+	DomainDiffers = "domain.differs"
+	NameSame      = "name.same"
+	NameClose     = "name.close"
+	NameDiffers   = "name.differs"
+	ExactSame     = "exact.same"
+	ExactDiffers  = "exact.differs"
 )
 
-// Prior is the probability, before any comparison, that two records are
-// the same entity.
+// Levels lists the comparison levels in a stable order.
+var Levels = []string{EmailSame, EmailDiffers, DomainSame, DomainDiffers, NameSame, NameClose, NameDiffers, ExactSame, ExactDiffers}
+
+// Model is a Fellegi-Sunter model: each comparison level's m and u, and
+// the prior probability that two records are the same entity.
+type Model struct {
+	Levels map[string]Probabilities `json:"levels"`
+	Prior  float64                  `json:"prior"`
+}
+
+// Default is the model used until one is trained.
+var Default = Model{Prior: 0.05, Levels: map[string]Probabilities{
+	EmailSame: {0.95, 0.0001},
+	// People use several addresses, so a different one is weak evidence.
+	EmailDiffers:  {0.30, 0.9999},
+	DomainSame:    {0.90, 0.002},
+	DomainDiffers: {0.10, 0.998},
+	NameSame:      {0.85, 0.02},
+	NameClose:     {0.10, 0.05},
+	NameDiffers:   {0.05, 0.93},
+	ExactSame:     {0.95, 0.001},
+	ExactDiffers:  {0.05, 0.999},
+}}
+
+// Prior is the default model's prior probability that two records are the
+// same entity.
 const Prior = 0.05
 
 // Candidate is a record already linked to a master record.
@@ -128,42 +152,38 @@ type Suggestion struct {
 	Reasons []string `json:"reasons"`
 }
 
-// Compare returns the probability that two records are the same entity,
-// and the evidence for it. Fields either record lacks are not compared.
-func Compare(a, b Attributes) (float64, []string) {
-	logBF := 0.0
-	var reasons []string
-	use := func(l level) {
-		logBF += math.Log(l.m / l.u)
-		if l.reason != "" {
-			reasons = append(reasons, l.reason)
-		}
-	}
+// outcome is one comparison's level, and the reason it gives for a match.
+type outcome struct{ level, reason string }
+
+// compare lists the comparison outcomes of two records. Fields either
+// record lacks are not compared.
+func compare(a, b Attributes) []outcome {
+	var out []outcome
 	emailMatched := false
 	if x, y := a["email"], b["email"]; x != "" && y != "" {
 		if x == y {
-			use(emailSame)
+			out = append(out, outcome{EmailSame, "same email address"})
 			emailMatched = true
 		} else {
-			use(emailDiffers)
+			out = append(out, outcome{EmailDiffers, ""})
 		}
 	}
 	// The domain is evidence of its own only when the addresses differ.
 	if x, y := a["domain"], b["domain"]; x != "" && y != "" && !emailMatched {
 		if x == y {
-			use(domainSame)
+			out = append(out, outcome{DomainSame, "same company email domain"})
 		} else {
-			use(domainDiff)
+			out = append(out, outcome{DomainDiffers, ""})
 		}
 	}
 	if x, y := a["name"], b["name"]; x != "" && y != "" {
 		switch s := JaroWinkler(x, y); {
 		case s >= 0.94:
-			use(nameSame)
+			out = append(out, outcome{NameSame, "same name"})
 		case s >= 0.84:
-			use(nameClose)
+			out = append(out, outcome{NameClose, "similar name"})
 		default:
-			use(nameDiffers)
+			out = append(out, outcome{NameDiffers, ""})
 		}
 	}
 	keys := make([]string, 0, len(a))
@@ -176,23 +196,51 @@ func Compare(a, b Attributes) (float64, []string) {
 			continue
 		}
 		if a[k] == b[k] {
-			l := exactSame
-			l.reason = fmt.Sprintf(l.reason, strings.TrimPrefix(k, "exact:"))
-			use(l)
+			out = append(out, outcome{ExactSame, "same " + strings.TrimPrefix(k, "exact:")})
 		} else {
-			use(exactDiffers)
+			out = append(out, outcome{ExactDiffers, ""})
 		}
 	}
-	odds := Prior / (1 - Prior) * math.Exp(logBF)
+	return out
+}
+
+// Compare returns the probability that two records are the same entity,
+// and the evidence for it.
+func (m Model) Compare(a, b Attributes) (float64, []string) {
+	logBF := 0.0
+	var reasons []string
+	for _, o := range compare(a, b) {
+		p, ok := m.Levels[o.level]
+		if !ok {
+			p = Default.Levels[o.level]
+		}
+		logBF += math.Log(p.M / p.U)
+		if o.reason != "" {
+			reasons = append(reasons, o.reason)
+		}
+	}
+	prior := m.Prior
+	if prior <= 0 || prior >= 1 {
+		prior = Default.Prior
+	}
+	odds := prior / (1 - prior) * math.Exp(logBF)
 	return odds / (1 + odds), reasons
+}
+
+// Compare scores two records with the default model.
+func Compare(a, b Attributes) (float64, []string) { return Default.Compare(a, b) }
+
+// Suggest scores a record against candidates with the default model.
+func Suggest(a Attributes, candidates []Candidate, limit int) []Suggestion {
+	return Default.Suggest(a, candidates, limit)
 }
 
 // Suggest scores a record against candidates and returns at most limit
 // master records, best first, keeping each master's best-matching record.
-func Suggest(a Attributes, candidates []Candidate, limit int) []Suggestion {
+func (m Model) Suggest(a Attributes, candidates []Candidate, limit int) []Suggestion {
 	best := map[string]Suggestion{}
 	for _, c := range candidates {
-		score, reasons := Compare(a, c.Attributes)
+		score, reasons := m.Compare(a, c.Attributes)
 		if len(reasons) == 0 {
 			continue // nothing in common: no suggestion
 		}

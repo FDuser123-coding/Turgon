@@ -49,6 +49,12 @@ const liveApi = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(r),
     }),
+  review: (r: { mapping: string; target: string; expression: string; decision: "approved" | "rejected"; note?: string }) =>
+    request<{ decision: string; reviewer: string }>("/api/reviews", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(r),
+    }),
   steward: () => request<StewardItem[]>("/api/steward"),
   link: (l: { entity: string; system: string; ref: string; master: string; note?: string }) =>
     request<LinkResult>("/api/steward/links", {
