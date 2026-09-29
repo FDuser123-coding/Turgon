@@ -296,6 +296,53 @@ In Kubernetes, `workers.webhooks.enabled` opens the port on each worker behind a
 Each spec runs on its own Temporal task queue (`turgon-<spec name>`), so workers for different
 specs can share a cluster.
 
+### Postgres change capture: events without an outbox
+
+An event can also be read from the database's write-ahead log, so the application needs no
+outbox: every committed insert, update or delete of a table is an event. The connection names
+the table under `changes` and gives the event the `logical-replication` interface
+(`examples/connections/shop-db.yaml`, recipe `shop-order-rows-to-erp`):
+
+```yaml
+events:
+  - { name: Order.Placed, entity: Order, interface: logical-replication }
+config:
+  changes:
+    Order.Placed: { table: shop.orders, operations: [insert] }   # also update, delete
+```
+
+- **Built into Postgres.** The worker reads the log with the `pgoutput` plugin that ships with
+  Postgres 10+, over an ordinary connection. It needs no Debezium, no Kafka and no extension.
+  The database needs `wal_level = logical` and a user with the `REPLICATION` attribute;
+  `turgon check` tests both and says how to fix them.
+- **One publication and one slot per event.** They are named `turgon_<event>` and created on
+  the first poll. The publication holds only the table and the event's operations. Turgon
+  refuses to publish updates or deletes of a table without a primary key or replica
+  identity, because Postgres would then reject the application's own updates.
+- **Commit order, no loss, no duplicates.** Events come in commit order: a transaction that
+  wrote first but committed last comes last, and is not skipped. The slot is only peeked.
+  It advances to what the dispatcher has confirmed, so a worker killed mid-transaction reads
+  the rest of it again, and the run IDs start each run once.
+  Several workers can poll the same slot: while one reads it, the others wait their turn.
+- **Payload.** The payload is the row as JSON: numbers, booleans and `jsonb` keep their
+  types, and timestamps are RFC 3339. A delete carries the replica identity, which by default
+  is the primary key.
+- **The log it holds.** A slot keeps write-ahead log until it advances. Turgon also releases it
+  when the table is quiet but the database is busy.
+  `turgon_cdc_retained_wal_bytes` shows what each slot holds, and the chart alerts above
+  `monitoring.rules.cdcRetainedWALMiB` (4 GiB). Set `max_slot_wal_keep_size` so that a stopped
+  worker cannot fill the disk. Drop the slot of an event you no longer use.
+
+```sh
+psql "$DB" -c "ALTER SYSTEM SET wal_level = logical"      # then restart Postgres
+bin/turgon compile -c examples shop-order-rows-to-erp -o cdc.json
+bin/turgon check -s cdc.json                               # wal_level, REPLICATION, the table
+bin/turgon run -s cdc.json &
+psql "$DB" -c "insert into shop.orders (order_number, total, currency, customer, items)
+  values (3001, 349.90, 'eur', '{\"email\": \"ada@example.com\"}', '[{\"sku\": \"M-7\", \"qty\": 1}]')"
+bin/turgon pending shop-order-rows-to-erp/000000002DCB2480.1   # run ID: commit LSN.change
+```
+
 ### Performance
 
 `scripts/loadtest.sh [payments]` measures Stripe-to-ERP cash application end to end: signed
@@ -734,7 +781,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/audit` | §9 | Append-only, hash-chained audit log with tamper detection |
 | `pkg/mapping` | §7.4 | JSONata evaluation of mapping sets |
 | `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow, and one for agent writes; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher; webhook receiver with a durable inbox, reconciled by polling |
-| `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox events, rollback dry-runs, idempotent writes) |
+| `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox and change capture events, rollback dry-runs, idempotent writes) |
 | `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled list or search events (ascending, or newest-first paged back to the cursor), also received as signed webhooks (Stripe, Shopify, generic HMAC), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/`, `stripetest/` and `hubspottest/` fake the Shopify Admin, Stripe and HubSpot CRM APIs |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references, the webhook inbox |
@@ -786,6 +833,6 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 In rough roadmap order (§16, §19): SAP events by SAP Event Mesh in place of polling; Salesforce Pub/Sub API change capture and Bulk API reads;
 the Turgon operator; an appliance build (§11);
-Debezium change capture in place of outbox polling; an external Splink service; the metadata
+change capture from databases other than Postgres (Debezium); an external Splink service; the metadata
 graph and discovery; A2A streaming and push notifications; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

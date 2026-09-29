@@ -81,4 +81,11 @@ spec:
           annotations:
             summary: "{{ "{{ $labels.endpoint }}/{{ $labels.event }}" }}: many webhook deliveries with bad signatures"
             description: "Either the signing secret changed at the provider, or someone is posting forged deliveries."
+        - alert: TurgonChangeCaptureRetainingWAL
+          expr: max by (slot) (turgon_cdc_retained_wal_bytes) > {{ mul $r.cdcRetainedWALMiB 1048576 }}
+          for: 15m
+          labels: { severity: warning }
+          annotations:
+            summary: "{{ "{{ $labels.slot }}" }}: the source database keeps more than {{ $r.cdcRetainedWALMiB }} MiB of write-ahead log for change capture"
+            description: "The slot advances only as events are dispatched. Workers stopped or failing to start runs make the database keep its log until the disk fills; max_slot_wal_keep_size bounds it. A slot no longer used should be dropped."
 {{- end }}

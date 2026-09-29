@@ -1,0 +1,33 @@
+# shop-orders-to-erp without an outbox: every order row the shop inserts is
+# read from Postgres' write-ahead log by change capture.
+apiVersion: turgon.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: shop-order-rows-to-erp
+  version: 1.0.0
+spec:
+  trigger:
+    source: shop-db
+    event: Order.Placed
+  steps:
+    - map:
+        from: shop-db.Order
+        to: model.SalesOrder
+        mapping: shop-order-to-sales-order@1
+    - resolve:
+        entity: model.Customer
+        strategy: exact
+        match:
+          - { field: customerRef, kind: email }
+          - { field: customerRef, kind: domain }
+        autoMatchAbove: 1.0
+    - write:
+        target: erp-db
+        operation: create-sales-order
+        idempotencyKey: "SHOP-{{ source.order_number }}"
+        simulate: true
+  policies: [writeback-default]
+  capacity:
+    peakPerSecond: 20
+  slo:
+    p95Latency: 2s

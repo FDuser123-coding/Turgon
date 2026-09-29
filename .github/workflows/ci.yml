@@ -33,6 +33,11 @@ jobs:
         run: test -z "$(gofmt -l .)" || (gofmt -l . && exit 1)
       - name: Vet
         run: go vet ./...
+      - name: Logical replication on the test database (change capture tests)
+        run: |
+          docker exec ${{ job.services.postgres.id }} psql -U turgon -d turgon_test -c "ALTER SYSTEM SET wal_level = logical"
+          docker restart ${{ job.services.postgres.id }}
+          until docker exec ${{ job.services.postgres.id }} pg_isready -U turgon; do sleep 1; done
       - name: Test (unit, Postgres integration, Temporal workflow)
         run: go test -race ./...
       - name: Known vulnerabilities in reachable code
@@ -54,6 +59,7 @@ jobs:
           go run ./cmd/turgon validate examples
           go run ./cmd/turgon verify -c examples eu-distributor-core
           go run ./cmd/turgon verify -c examples shop-orders-to-erp
+          go run ./cmd/turgon verify -c examples shop-order-rows-to-erp
           go run ./cmd/turgon compile -c examples eu-distributor-core -o /dev/null
           go run ./cmd/turgon compile -c examples shop-orders-to-erp -o /dev/null
           go run ./cmd/turgon compile -c examples salesforce-won-deals-to-erp -o /dev/null

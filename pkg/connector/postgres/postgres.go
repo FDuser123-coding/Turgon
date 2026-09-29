@@ -1,6 +1,7 @@
-// Package postgres is the prototype's native Postgres connector (architecture
-// §13: JDBC reads and writes, events from a transactional outbox). Change
-// data capture through Debezium replaces the outbox poller in production.
+// Package postgres is the native Postgres connector (architecture §13:
+// JDBC reads and writes). Events come from a transactional outbox or from
+// change capture: logical replication of a table's committed changes (see
+// Change).
 //
 // Writes pass the payload to Postgres as one jsonb parameter and let
 // jsonb_populate_record convert it to the table's column types; only table
@@ -15,6 +16,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/jackc/pgx/v5"
@@ -33,6 +35,8 @@ const Name = "postgres"
 type Config struct {
 	Outbox     *Outbox              `json:"outbox,omitempty"`
 	Operations map[string]Operation `json:"operations,omitempty"`
+	// Changes are events read by change capture, by event name.
+	Changes map[string]Change `json:"changes,omitempty"`
 }
 
 // Outbox is a table with columns id (bigint, increasing), event (text) and
@@ -70,6 +74,11 @@ func Factory(ctx context.Context, cfg compiler.ConnectorConfig, secrets connecto
 			return nil, fmt.Errorf("postgres %s: operation %s: %w", cfg.Endpoint, name, err)
 		}
 	}
+	for name, ch := range c.Changes {
+		if err := ch.withDefaults(name).validate(); err != nil {
+			return nil, fmt.Errorf("postgres %s: changes %s: %w", cfg.Endpoint, name, err)
+		}
+	}
 	dsn, err := secrets.Resolve(ctx, cfg.SecretRef)
 	if err != nil {
 		return nil, fmt.Errorf("postgres %s: %w", cfg.Endpoint, err)
@@ -92,10 +101,18 @@ func Factory(ctx context.Context, cfg compiler.ConnectorConfig, secrets connecto
 type Conn struct {
 	pool *pgxpool.Pool
 	cfg  Config
+
+	mu       sync.Mutex
+	prepared map[string]uint32 // change events whose slot is ready: table OID
 }
 
 // New wraps an existing pool.
-func New(pool *pgxpool.Pool, cfg Config) *Conn { return &Conn{pool: pool, cfg: cfg} }
+func New(pool *pgxpool.Pool, cfg Config) *Conn {
+	for name, ch := range cfg.Changes {
+		cfg.Changes[name] = ch.withDefaults(name)
+	}
+	return &Conn{pool: pool, cfg: cfg, prepared: map[string]uint32{}}
+}
 
 var (
 	_ connector.Instance   = (*Conn)(nil)
@@ -348,10 +365,18 @@ func (c *Conn) Confirm(ctx context.Context, name string, result json.RawMessage)
 	return err
 }
 
-// Poll reads events from the outbox.
+// Poll reads an event by change capture if it is configured so, from the
+// outbox otherwise.
 func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) ([]connector.Event, error) {
+	if ch, ok := c.cfg.Changes[event]; ok {
+		evs, err := c.pollChanges(ctx, event, ch, after, limit)
+		if errors.Is(err, ErrSlotBusy) {
+			return nil, nil // another worker is reading it
+		}
+		return evs, err
+	}
 	if c.cfg.Outbox == nil {
-		return nil, errors.New("postgres: this connection has no outbox configured")
+		return nil, fmt.Errorf("postgres: event %s has no change capture configured, and this connection no outbox", event)
 	}
 	rows, err := c.pool.Query(ctx, fmt.Sprintf(
 		`SELECT id, payload FROM %s WHERE event = $1 AND id > $2 ORDER BY id LIMIT $3`, ident(c.cfg.Outbox.Table)),
