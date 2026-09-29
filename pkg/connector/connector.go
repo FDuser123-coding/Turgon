@@ -72,6 +72,16 @@ type Streamer interface {
 	Stream(ctx context.Context, event string, resume []byte, deliver func(events []Event, resume []byte) error) error
 }
 
+// Exporter is implemented by sources that read a large set of records at
+// once (Salesforce's Bulk API), for loads such as linking every record to
+// its master record at go-live.
+type Exporter interface {
+	// Export reads the named export and calls each for every record
+	// (field name to value, "" when empty), until each fails; it returns
+	// how many records it passed on.
+	Export(ctx context.Context, name string, each func(record map[string]string) error) (int, error)
+}
+
 // Webhook verifies and parses deliveries of one event.
 type Webhook interface {
 	// Receive checks a delivery's signature and returns the events it

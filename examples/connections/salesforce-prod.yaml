@@ -37,6 +37,14 @@ spec:
           - CloseDate
           - CurrencyIsoCode
           - "(SELECT Product2.ProductCode, Quantity FROM OpportunityLineItems)"
+    # Read at once with the Bulk API: the accounts that carry their ERP
+    # customer number, to link them all to master records at go-live
+    # (turgon xref load salesforce-prod Account.ERPNumbers ...).
+    exports:
+      Account.ERPNumbers:
+        sobject: Account
+        fields: [Id, Name, ERP_Customer_Number__c]
+        where: "ERP_Customer_Number__c != null"
     operations:
       update-opportunity:
         sobject: Opportunity

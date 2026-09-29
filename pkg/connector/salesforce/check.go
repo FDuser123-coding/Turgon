@@ -42,6 +42,13 @@ func (c *Conn) Check(ctx context.Context) []connector.CheckResult {
 			}
 		}
 	}
+	for _, e := range c.cfg.Exports {
+		for _, f := range e.Fields {
+			if identRE.MatchString(f) { // relationship paths are checked by the job itself
+				get(e.SObject).read = append(get(e.SObject).read, f)
+			}
+		}
+	}
 	for _, op := range c.cfg.Operations {
 		for f := range op.Fields {
 			get(op.SObject).write = append(get(op.SObject).write, f)
