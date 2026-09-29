@@ -42,7 +42,12 @@ type committedWrite struct {
 }
 
 // IntegrationWorkflow interprets one compiled workflow for one event.
-func IntegrationWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
+func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err error) {
+	// Metrics go through the workflow's metrics handler, which the SDK
+	// silences during replay; they add nothing to the history.
+	started, waited := workflow.Now(ctx), time.Duration(0)
+	defer func() { recordRun(ctx, in.Workflow.Name, err, workflow.Now(ctx).Sub(started)-waited) }()
+
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: time.Minute,
 		RetryPolicy:         activityRetry,
@@ -154,6 +159,9 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (RunResult, error) {
 				}
 				tell(ctx, in.Workflow.Name, approvalPending(*pending, pending.Since.Add(timeout)))
 				approval = awaitApproval(ctx, approvals, *pending, timeout)
+				wait := workflow.Now(ctx).Sub(pending.Since)
+				waited += wait
+				recordApproval(ctx, in.Workflow.Name, approval, wait)
 				if approval.By == approvalTimeoutActor {
 					tell(ctx, in.Workflow.Name, approvalTimedOut(*pending))
 				}
@@ -232,4 +240,32 @@ func awaitApproval(ctx workflow.Context, ch workflow.ReceiveChannel, p PendingAp
 		sel.Select(ctx)
 	}
 	return got
+}
+
+// recordRun counts a finished run by outcome and records how long it took,
+// not counting the time it waited for people, which recipes' latency SLOs
+// leave out.
+func recordRun(ctx workflow.Context, name string, err error, active time.Duration) {
+	outcome, reason := "completed", ""
+	if err != nil {
+		outcome, reason = "failed", "error"
+		var app *temporal.ApplicationError
+		if errors.As(err, &app) && app.Type() != "" {
+			reason = app.Type()
+		}
+	}
+	m := workflow.GetMetricsHandler(ctx).WithTags(map[string]string{"workflow": name})
+	m.WithTags(map[string]string{"outcome": outcome, "reason": reason}).Counter("turgon_runs_finished_total").Inc(1)
+	m.Timer("turgon_run_active").Record(active)
+}
+
+// recordApproval counts a decision and how long people took to make it.
+func recordApproval(ctx workflow.Context, name string, a *policy.Approval, wait time.Duration) {
+	decision := string(a.Status)
+	if a.By == approvalTimeoutActor {
+		decision = "timed_out"
+	}
+	m := workflow.GetMetricsHandler(ctx).WithTags(map[string]string{"workflow": name})
+	m.WithTags(map[string]string{"decision": decision}).Counter("turgon_approvals_total").Inc(1)
+	m.Timer("turgon_approval_wait").Record(wait)
 }

@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/fduser123-coding/turgon/apis/v1alpha1"
@@ -170,11 +171,15 @@ type PolicyRef struct {
 	Rego    string `json:"rego"`
 }
 
+// Monitor is an objective a workflow is watched against; the chart turns
+// monitors into Prometheus alerts.
 type Monitor struct {
 	Name     string `json:"name"`
 	Kind     string `json:"kind"`
 	Workflow string `json:"workflow"`
 	Target   string `json:"target"`
+	// TargetSeconds is a latency target in seconds, for alert rules.
+	TargetSeconds float64 `json:"targetSeconds,omitempty"`
 }
 
 // Compile verifies obj and, if deployable, compiles it. The report is always
@@ -373,9 +378,11 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 	sort.Strings(wf.Policies)
 	b.body.Workflows = append(b.body.Workflows, wf)
 	if r.Spec.SLO != nil && r.Spec.SLO.P95Latency != "" {
-		b.body.Monitors = append(b.body.Monitors, Monitor{
-			Name: r.Metadata.Name + "-p95", Kind: "latency-p95", Workflow: wf.Name, Target: r.Spec.SLO.P95Latency,
-		})
+		m := Monitor{Name: r.Metadata.Name + "-p95", Kind: "latency-p95", Workflow: wf.Name, Target: r.Spec.SLO.P95Latency}
+		if d, err := time.ParseDuration(r.Spec.SLO.P95Latency); err == nil {
+			m.TargetSeconds = d.Seconds()
+		}
+		b.body.Monitors = append(b.body.Monitors, m)
 	}
 	for _, p := range rep.Resolution.Policies {
 		b.policies[p.Metadata.Name] = PolicyRef{Name: p.Metadata.Name, Version: p.Metadata.Version, Rego: p.Spec.Rego}

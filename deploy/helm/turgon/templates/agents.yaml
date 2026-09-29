@@ -70,6 +70,7 @@ spec:
             - mcp
             - --spec=/specs/{{ $name }}.json
             - --listen=127.0.0.1:{{ add 8090 $i }}
+            - --metrics-listen=:{{ add 9100 $i }}
             - --auth=gateway
             - --trusted-gateway=127.0.0.1/32
             - --audit-log=postgres
@@ -78,6 +79,8 @@ spec:
             - --wait={{ $.Values.agents.wait }}
             - --approval-timeout={{ $.Values.workers.approvalTimeout }}
             {{- end }}
+          ports:
+            - { name: metrics-{{ $i }}, containerPort: {{ add 9100 $i }} }
           env:
             {{- include "turgon.commonEnv" $ | nindent 12 }}
           {{- with $.Values.workers.secretEnvFrom }}

@@ -10,6 +10,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 
 	"github.com/fduser123-coding/turgon/apis/v1alpha1"
@@ -17,6 +18,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/catalog"
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/spec"
+	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
 	"github.com/fduser123-coding/turgon/pkg/verifier"
 )
 
@@ -214,19 +216,38 @@ func compileCmd() *cobra.Command {
 
 func auditCmd() *cobra.Command {
 	cmd := &cobra.Command{Use: "audit", Short: "Work with audit logs"}
-	cmd.AddCommand(&cobra.Command{
-		Use:   "verify FILE",
-		Short: "Check an audit log's hash chain",
-		Args:  cobra.ExactArgs(1),
+	var dbURL string
+	verify := &cobra.Command{
+		Use:   "verify [FILE]",
+		Short: "Check an audit log's hash chain: a file, or the shared log in Postgres",
+		Long: `Checks every entry's hash and its link to the one before. With FILE, a
+file-based log; without, the shared log in Turgon's database, e.g. after
+restoring a backup. Compare the printed head with one recorded elsewhere
+(a SIEM, an earlier run) to show nothing was cut off the end.`,
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			file, err := os.Open(args[0])
-			if err != nil {
-				return err
-			}
-			defer file.Close()
-			last, err := audit.Verify(file)
-			if err != nil {
-				return err
+			var last *audit.Entry
+			switch {
+			case len(args) == 1:
+				file, err := os.Open(args[0])
+				if err != nil {
+					return err
+				}
+				defer file.Close()
+				if last, err = audit.Verify(file); err != nil {
+					return err
+				}
+			case dbURL != "":
+				pool, err := pgxpool.New(cmd.Context(), dbURL)
+				if err != nil {
+					return err
+				}
+				defer pool.Close()
+				if last, err = pgstore.NewAuditLog(pool).Verify(cmd.Context()); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf("give a log FILE, or --database-url for the shared log")
 			}
 			if last == nil {
 				fmt.Fprintln(cmd.OutOrStdout(), "empty log")
@@ -235,7 +256,9 @@ func auditCmd() *cobra.Command {
 			fmt.Fprintf(cmd.OutOrStdout(), "ok: %d entries, head %s\n", last.Seq, last.Hash)
 			return nil
 		},
-	})
+	}
+	verify.Flags().StringVar(&dbURL, "database-url", os.Getenv("TURGON_DATABASE_URL"), "Postgres URL of Turgon's state, for the shared log")
+	cmd.AddCommand(verify)
 	return cmd
 }
 

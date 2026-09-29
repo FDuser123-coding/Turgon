@@ -19,7 +19,7 @@ import (
 )
 
 func mcpCmd() *cobra.Command {
-	var specPath, listen, authMode, dbURL, auditPath string
+	var specPath, listen, metricsAddr, authMode, dbURL, auditPath string
 	var devAgent, devUser, devRoles string
 	var trusted []string
 	var writes bool
@@ -116,10 +116,14 @@ func mcpCmd() *cobra.Command {
 				names = append(names, t.Name)
 			}
 			fmt.Fprintf(cmd.ErrOrStderr(), "turgon mcp on http://%s (auth: %s), tools: %s\n", listen, authMode, strings.Join(names, ", "))
+			if metricsAddr != "" {
+				go serveMetrics(cmd.Context(), metricsAddr, cmd.ErrOrStderr())
+			}
 			return s.Serve(listen)
 		},
 	}
 	cmd.Flags().StringVarP(&specPath, "spec", "s", "runtime-spec.json", "compiled runtime spec")
+	cmd.Flags().StringVar(&metricsAddr, "metrics-listen", "", "serve Prometheus /metrics on this address, e.g. :9090")
 	cmd.Flags().StringVar(&listen, "listen", "127.0.0.1:8090", "address to listen on")
 	cmd.Flags().StringVar(&authMode, "auth", "dev", "authentication: dev or gateway")
 	cmd.Flags().StringSliceVar(&trusted, "trusted-gateway", nil, "CIDRs the agent gateway connects from")

@@ -37,6 +37,18 @@ jobs:
         run: go test -race ./...
       - name: Known vulnerabilities in reachable code
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.1.4 ./...
+      - name: Restore drill (backup, restore, audit chain, tamper check)
+        env:
+          PGPASSWORD: turgon
+        run: |
+          go build -o bin/turgon ./cmd/turgon
+          base=postgres://turgon:turgon@localhost:5432
+          psql -q "$base/postgres" -c 'CREATE DATABASE drill_src'
+          for who in ada bob; do
+            bin/turgon xref set --database-url "$base/drill_src?sslmode=disable" --entity Customer --system shop-db \
+              --source "$who@example.com" --master "C-$who" --by ci
+          done
+          scripts/restore-drill.sh "$base/drill_src?sslmode=disable" "$base/drill_dst?sslmode=disable"
       - name: Validate, verify and compile the example catalog
         run: |
           go run ./cmd/turgon validate examples
@@ -49,6 +61,8 @@ jobs:
           go run ./cmd/turgon compile -c examples stripe-payments-to-erp -o /dev/null
           go run ./cmd/turgon compile -c examples hubspot-won-deals-to-erp -o /dev/null
           go run ./cmd/turgon compile -c examples shopify-store-orders-to-s4 -o /dev/null
+          go run ./cmd/turgon compile -c examples hubspot-won-deals-to-dynamics -o /dev/null
+          go run ./cmd/turgon compile -c examples shopify-store-orders-to-netsuite -o /dev/null
 
   console:
     runs-on: ubuntu-latest
@@ -91,6 +105,9 @@ jobs:
           go install github.com/yannh/kubeconform/cmd/kubeconform@v0.7.0
           curl -sSL -o /usr/local/bin/hadolint https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
           chmod +x /usr/local/bin/hadolint
+          curl -sSL https://github.com/prometheus/prometheus/releases/download/v3.5.0/prometheus-3.5.0.linux-amd64.tar.gz \
+            | tar xz -C /tmp prometheus-3.5.0.linux-amd64/promtool
+          sudo mv /tmp/prometheus-3.5.0.linux-amd64/promtool /usr/local/bin/promtool
       - name: Compile example specs
         run: |
           go run ./cmd/turgon compile -c examples shop-orders-to-erp -o /tmp/shop.json
@@ -121,10 +138,29 @@ jobs:
             --set temporal.tls.existingSecret=temporal-mtls --set temporal.tls.caKey=ca.crt --set temporal.tls.certKey=tls.crt \
             --set temporal.tls.keyKey=tls.key --set temporal.existingSecret=turgon-temporal > /tmp/rendered-tls.yaml
           grep -q 'secretName: temporal-mtls' /tmp/rendered-tls.yaml
+          # Metrics scraping and alerts, with one latency SLO alert per recipe.
+          helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" --set monitoring.podMonitor.enabled=true \
+            --set monitoring.rules.enabled=true > /tmp/rendered-monitoring.yaml
+          python3 -c 'import sys, yaml; r = [d for d in yaml.safe_load_all(open(sys.argv[1])) if d and d["kind"] == "PrometheusRule"][0]; yaml.safe_dump({"groups": r["spec"]["groups"]}, open(sys.argv[2], "w"))' \
+            /tmp/rendered-monitoring.yaml deploy/helm/turgon/ci/rules.yaml
+          promtool check rules deploy/helm/turgon/ci/rules.yaml
+          promtool test rules deploy/helm/turgon/ci/alerts-test.yaml
+          # Continuous backup to object storage, and a cluster restored from it to a point in time.
+          backup=(--set database.cloudNativePG.backup.enabled=true --set database.cloudNativePG.backup.destinationPath=s3://turgon-backups/prod
+                  --set database.cloudNativePG.backup.credentialsSecret=turgon-backup-s3)
+          helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" "${backup[@]}" > /tmp/rendered-backup.yaml
+          helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" "${backup[@]}" \
+            --set database.cloudNativePG.recovery.enabled=true --set 'database.cloudNativePG.recovery.targetTime=2026-09-28 10:00:00+00' \
+            --set database.cloudNativePG.backup.serverName=turgon-turgon-db-2 > /tmp/rendered-restore.yaml
+          # A restored cluster archiving over its source is refused.
+          if helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" "${backup[@]}" --set database.cloudNativePG.recovery.enabled=true >/dev/null 2>&1; then
+            echo "a restore archiving over its source was not refused"; exit 1
+          fi
           ~/go/bin/kubeconform -strict -summary -kubernetes-version 1.31.0 \
             -schema-location default \
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
-            /tmp/rendered.yaml /tmp/rendered-oidc.yaml /tmp/rendered-tls.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
+            /tmp/rendered.yaml /tmp/rendered-oidc.yaml /tmp/rendered-tls.yaml /tmp/rendered-monitoring.yaml \
+            /tmp/rendered-backup.yaml /tmp/rendered-restore.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
       - name: Lint the Dockerfile
         run: hadolint Dockerfile
 

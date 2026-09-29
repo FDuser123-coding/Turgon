@@ -1,0 +1,56 @@
+# The ERP on Oracle NetSuite, through the SuiteTalk REST web services with
+# token-based authentication (the secret, {"consumerKey", "consumerSecret",
+# "tokenId", "tokenSecret"} of an integration record and an access token;
+# realm is the account ID). Sales orders are upserted by external ID
+# (PUT .../salesOrder/eid:<key>), so a retried write finds its order;
+# NetSuite answers 204 and the order's URL, whose ID becomes the result.
+# Changed sales orders are read with SuiteQL.
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata: { name: netsuite-erp }
+spec:
+  connector: rest@^1
+  secretRef: openbao://netsuite-erp/tba
+  entities: [SalesOrder, Customer]
+  # The default account tier allows 5 concurrent web service requests,
+  # shared with every other integration.
+  limits: { maxConcurrentCalls: 2, requestsPerSecond: 4 }
+  events:
+    - { name: SalesOrder.Changed, entity: SalesOrder, interface: polling }
+  operations:
+    - { name: create-sales-order, entity: SalesOrder, direction: write, interface: rest-api, risk: high, compensation: delete-sales-order }
+    - { name: delete-sales-order, entity: SalesOrder, direction: write, interface: rest-api, risk: high }
+    - { name: get-customer, entity: Customer, direction: read, interface: rest-api, risk: read }
+  config:
+    baseURL: https://1234567-sb1.suitetalk.api.netsuite.com/services
+    auth: { type: oauth1, realm: 1234567_SB1 }
+    checkPath: /rest/record/v1/customer/1001
+    events:
+      SalesOrder.Changed:
+        method: POST
+        path: /rest/query/v1/suiteql
+        headers: { Prefer: transient }
+        params: { limit: "{{limit}}" }
+        body:
+          q: >-
+            SELECT id, tranid, externalid, entity, foreigntotal AS total,
+            TO_CHAR(lastmodifieddate, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS modified
+            FROM transaction WHERE type = 'SalesOrd'
+            AND lastmodifieddate > TO_TIMESTAMP('{{position}}', 'YYYY-MM-DD"T"HH24:MI:SS.FF3"Z"')
+            ORDER BY lastmodifieddate, id
+        items: items
+        position: modified
+        positionFormat: rfc3339
+    operations:
+      create-sales-order:
+        method: PUT
+        path: "/rest/record/v1/salesOrder/eid:{{idempotencyKey}}"
+        fields: { entity.id: customerId, tranDate: orderDate, memo: memo, item.items: netsuiteItems }
+        idFrom: Location
+      delete-sales-order:
+        method: DELETE
+        path: "/rest/record/v1/salesOrder/{{id}}"
+      get-customer:
+        method: GET
+        path: "/rest/record/v1/customer/{{id}}"
+        fields: { companyName: name, entityId: customerNumber, isInactive: inactive }

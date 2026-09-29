@@ -60,6 +60,7 @@ spec:
             - --viewer-group={{ . }}
             {{- end }}
             - --audit-log=postgres
+            - --metrics-listen=:9090
             {{- if .Values.console.catalogConfigMap }}
             - --catalog=/catalog
             {{- end }}
@@ -73,6 +74,8 @@ spec:
           ports:
             - name: http
               containerPort: 8080
+            - name: metrics
+              containerPort: 9090
           livenessProbe:
             httpGet: { path: /healthz, port: http }
             periodSeconds: 20

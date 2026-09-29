@@ -38,6 +38,25 @@ database:
     storage:
       size: 20Gi
       storageClass: ""
+    # Continuous backup to S3-compatible object storage with the Barman
+    # Cloud plugin (installed next to the operator): WAL archiving plus
+    # scheduled base backups, so the database can be restored to any point
+    # in the retention window.
+    backup:
+      enabled: false
+      destinationPath: ""        # e.g. s3://turgon-backups/prod
+      endpointURL: ""            # for S3-compatible stores other than AWS
+      credentialsSecret: ""      # Secret with ACCESS_KEY_ID and ACCESS_SECRET_KEY
+      retentionPolicy: 30d
+      schedule: "0 0 3 * * *"    # daily base backup (six fields, seconds first)
+      # Name of this cluster's archive in the store; set a new one when a
+      # restored cluster starts archiving, so it never overwrites its source.
+      serverName: ""             # default: <release>-turgon-db
+    # Create the cluster by restoring a backup instead of an empty database.
+    recovery:
+      enabled: false
+      serverName: ""             # the archive to restore from (default: <release>-turgon-db)
+      targetTime: ""             # point in time, e.g. "2026-09-28 10:00:00+00"; empty restores the latest
 
 # Compiled runtime specs, one worker Deployment each. Pass files with
 #   --set-file specs.shop-orders-to-erp=runtime-spec.json
@@ -162,6 +181,27 @@ agents:
     resources:
       requests: { cpu: 50m, memory: 64Mi }
       limits: { memory: 256Mi }
+
+# Prometheus metrics: workers serve /metrics on their health port (8081),
+# the console on 9090, each MCP server on 9100 and up.
+monitoring:
+  # A PodMonitor (Prometheus Operator) scrapes every Turgon pod.
+  podMonitor:
+    enabled: false
+    interval: 30s
+    labels: {}             # e.g. release: kube-prometheus-stack
+  # Who may scrape (NetworkPolicy "from" entries); empty allows any pod in
+  # the namespace. List Prometheus's namespace or pods to narrow it.
+  scrapeFrom: []
+  # A PrometheusRule with Turgon's alerts, including one per recipe latency
+  # SLO (spec.slo.p95Latency, measured without the time runs wait for people).
+  rules:
+    enabled: false
+    labels: {}
+    runFailureRatio: 0.05      # a workflow's failed runs over an hour
+    pollStalledMinutes: 15     # since a source was last polled successfully
+    breakerOpenMinutes: 5      # a target refusing writes
+    webhookRejections: 20      # unauthenticated deliveries per 15 minutes
 
 networkPolicy:
   enabled: true
