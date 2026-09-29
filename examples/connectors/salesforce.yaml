@@ -22,10 +22,10 @@ spec:
       - kind: rest-api
         simulation: preview
     events:
+      # Pushed over the Pub/Sub API (gRPC), resuming by replay ID.
       - kind: change-data-capture
       - kind: platform-events
-      # SOQL on SystemModstamp through the REST API; replaced by a Pub/Sub
-      # API change-data-capture subscriber later.
+      # SOQL on SystemModstamp through the REST API.
       - kind: soql-poll
   entities: [Customer, Opportunity]
   events:

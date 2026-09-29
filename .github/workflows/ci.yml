@@ -60,6 +60,7 @@ jobs:
           go run ./cmd/turgon verify -c examples eu-distributor-core
           go run ./cmd/turgon verify -c examples shop-orders-to-erp
           go run ./cmd/turgon verify -c examples shop-order-rows-to-erp
+          go run ./cmd/turgon verify -c examples salesforce-won-deals-to-erp-cdc
           go run ./cmd/turgon compile -c examples eu-distributor-core -o /dev/null
           go run ./cmd/turgon compile -c examples shop-orders-to-erp -o /dev/null
           go run ./cmd/turgon compile -c examples salesforce-won-deals-to-erp -o /dev/null

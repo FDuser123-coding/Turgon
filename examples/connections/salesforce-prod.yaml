@@ -7,6 +7,9 @@ metadata: { name: salesforce-prod }
 spec:
   connector: salesforce@^3
   secretRef: openbao://salesforce/prod-jwt
+  events:
+    # The same deals, pushed by change data capture over the Pub/Sub API.
+    - { name: Opportunity.Won, entity: Opportunity, interface: change-data-capture }
   config:
     apiVersion: "61.0"
     events:
@@ -15,6 +18,18 @@ spec:
         where: "StageName = 'Closed Won'"
         fields:
           - Id
+          - AccountId
+          - Amount
+          - CloseDate
+          - CurrencyIsoCode
+          - "(SELECT Product2.ProductCode, Quantity FROM OpportunityLineItems)"
+    subscriptions:
+      Opportunity.Won:
+        topic: /data/OpportunityChangeEvent
+        changeTypes: [UPDATE]
+        match: { StageName: Closed Won }
+        # A change event carries only what changed: read what the flow needs.
+        fields:
           - AccountId
           - Amount
           - CloseDate

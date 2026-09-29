@@ -34,7 +34,7 @@ var (
 	// BreakerOpen is 1 while a target's circuit breaker refuses writes.
 	BreakerOpen = gauge("turgon_breaker_open", "1 while a target's circuit breaker is open and refuses writes.", "target")
 	// Events counts events handed to workflows, by how they arrived.
-	Events = counter("turgon_events_total", "Events dispatched to workflows, by arrival (poll or webhook).", "workflow", "via")
+	Events = counter("turgon_events_total", "Events dispatched to workflows, by arrival: poll, or inbox (webhooks and subscriptions).", "workflow", "via")
 	// PollErrors counts failed polls of a source.
 	PollErrors = counter("turgon_poll_errors_total", "Failed polls of an event source.", "workflow")
 	// LastPoll is when a workflow's source was last polled successfully.
