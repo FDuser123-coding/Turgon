@@ -6,6 +6,7 @@ kind: Recipe
 metadata:
   name: salesforce-won-deals-to-erp-cdc
   version: 1.0.0
+  description: "The same as salesforce-won-deals-to-erp, with the won deal pushed by Salesforce change data capture instead of polled."
 spec:
   trigger:
     source: salesforce-prod

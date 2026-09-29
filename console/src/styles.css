@@ -170,3 +170,76 @@ li.sev-warning { border-color: var(--warn); }
   border-radius: 6px; background: var(--bg); color: var(--text); font: inherit; font-size: 13px;
 }
 .review .btn { padding: 5px 10px; font-size: 13px; }
+
+/* Integrations: summary tiles, flow pipelines, system cards. */
+h2 { font-size: 16px; margin: 26px 0 10px; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 8px; }
+.tile {
+  display: flex; flex-direction: column; gap: 2px; padding: 12px 14px; border-radius: 10px;
+  background: var(--surface); border: 1px solid var(--border); color: var(--text);
+}
+a.tile:hover { text-decoration: none; border-color: var(--accent); }
+.tile-value { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.tile-value.tone-info { color: var(--info); }
+.tile-value.tone-bad { color: var(--bad); }
+.tile-label { color: var(--muted); font-size: 13px; }
+
+.flow { margin-bottom: 12px; }
+.flow-desc { margin: 4px 0 0; max-width: 760px; }
+.flow-stats { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; }
+ol.pipeline { list-style: none; display: flex; flex-wrap: wrap; align-items: stretch; gap: 8px 22px; padding: 0; margin: 12px 0 0; }
+.node {
+  position: relative; display: flex; flex-direction: column; gap: 3px; min-width: 120px; max-width: 230px;
+  padding: 8px 10px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg);
+}
+.node + .node::before {
+  content: "→"; position: absolute; left: -17px; top: 50%; transform: translateY(-50%); color: var(--muted);
+}
+.node-kind { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; color: var(--muted); }
+.node-system { font-weight: 600; font-family: var(--mono); }
+.node-source { border-color: var(--ok); background: var(--ok-bg); }
+.node-source .node-kind { color: var(--ok); }
+.node-write { border-color: var(--warn); background: var(--warn-bg); }
+.node-write .node-kind { color: var(--warn); }
+.node-back { border-style: dashed; }
+.node-step { border-style: dashed; }
+.guards { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 2px; }
+
+.systems { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px; }
+.systems .card { margin: 0; }
+
+@media (max-width: 640px) {
+  ol.pipeline { flex-direction: column; gap: 18px; }
+  .node { max-width: none; }
+  .node + .node::before { content: "↓"; left: 50%; top: -16px; transform: translateX(-50%); }
+  .card-head { flex-wrap: wrap; }
+  .flow-stats { justify-content: flex-start; }
+}
+
+/* Connection map. */
+.cmap { margin: 14px 0 6px; padding: 12px 14px; background: var(--surface); border: 1px solid var(--border); border-radius: 10px; }
+.cmap svg { width: 100%; height: auto; display: block; font-size: 13px; }
+.cmap-head { fill: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; }
+.cmap-hub { fill: var(--bg); stroke: var(--border); stroke-dasharray: 4 4; }
+.cmap-hub-text { fill: var(--muted); font-size: 11px; }
+.cmap-src { fill: var(--ok-bg); stroke: var(--ok); }
+.cmap-dst { fill: var(--warn-bg); stroke: var(--warn); }
+.cmap-node text { fill: var(--text); font-family: var(--mono); font-size: 12px; }
+.cmap-edge path { fill: none; stroke-width: 2; opacity: 0.85; }
+.cmap-edge:hover path { stroke-width: 4; opacity: 1; }
+.cmap-edge.tone-ok path { stroke: var(--ok); }
+.cmap-edge.tone-info path { stroke: var(--info); }
+.cmap-edge.tone-bad path { stroke: var(--bad); }
+.cmap-edge.tone-idle path { stroke: var(--muted); stroke-dasharray: 5 4; opacity: 0.6; }
+.key { white-space: nowrap; }
+.key::before { content: ""; display: inline-block; width: 14px; height: 3px; margin: 0 4px 3px 0; vertical-align: middle; background: currentColor; }
+.key.tone-info { color: var(--info); }
+.key.tone-bad { color: var(--bad); }
+.key.tone-ok { color: var(--ok); }
+.key.tone-idle { color: var(--muted); }
+.flow { scroll-margin-top: 70px; }
+.tab { white-space: nowrap; }
+.cmap-scroll { overflow-x: auto; }
+@media (max-width: 640px) {
+  .cmap svg { min-width: 620px; }
+}

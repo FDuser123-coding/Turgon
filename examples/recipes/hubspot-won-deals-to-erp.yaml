@@ -8,6 +8,7 @@ kind: Recipe
 metadata:
   name: hubspot-won-deals-to-erp
   version: 1.0.0
+  description: "A deal won in HubSpot becomes an ERP sales order, approved before commit; the order number is written back to the deal."
 spec:
   trigger:
     source: hubspot-crm

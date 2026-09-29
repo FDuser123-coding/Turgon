@@ -6,7 +6,9 @@
 # Order lines are write-in products (no product catalog needed).
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
-metadata: { name: dynamics-crm }
+metadata:
+  name: dynamics-crm
+  description: "Dynamics 365 Sales, through the Dataverse Web API."
 spec:
   connector: rest@^1
   secretRef: openbao://dynamics-crm/app-registration

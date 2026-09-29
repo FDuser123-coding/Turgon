@@ -7,6 +7,7 @@ kind: Recipe
 metadata:
   name: shopify-store-orders-to-netsuite
   version: 1.0.0
+  description: "A Shopify order becomes a NetSuite sales order; the NetSuite number is added to the Shopify order as a note."
 spec:
   trigger:
     source: shopify-store

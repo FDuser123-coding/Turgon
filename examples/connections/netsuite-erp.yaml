@@ -7,7 +7,9 @@
 # Changed sales orders are read with SuiteQL.
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
-metadata: { name: netsuite-erp }
+metadata:
+  name: netsuite-erp
+  description: "NetSuite ERP, through its REST record API (token-based auth)."
 spec:
   connector: rest@^1
   secretRef: openbao://netsuite-erp/tba

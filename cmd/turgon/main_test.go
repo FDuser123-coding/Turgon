@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 )
@@ -58,5 +59,26 @@ func TestWorkerPollers(t *testing.T) {
 		if _, err := workerOptions(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
+	}
+}
+
+// The console demo shows the example catalog's real map: regenerate it with
+// go run ./cmd/turgon integrations -c examples --json > console/src/demo-integrations.json
+func TestDemoIntegrationsAreUpToDate(t *testing.T) {
+	out, err := run(t, "integrations", "-c", "../../examples", "--json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, err := os.ReadFile("../../console/src/demo-integrations.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out != string(want) {
+		t.Fatal("console/src/demo-integrations.json is out of date; regenerate it (see this test)")
+	}
+	text, err := run(t, "integrations", "-c", "../../examples")
+	if err != nil || !strings.Contains(text, "when shop-db emits Order.Created (outbox)") ||
+		!strings.Contains(text, "write create-sales-order to erp-db [high risk; dry-run first (rollback); approval: policy; undone by cancel-sales-order]") {
+		t.Fatalf("text: %v\n%s", err, text)
 	}
 }

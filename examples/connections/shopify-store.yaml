@@ -3,7 +3,9 @@
 # order number is written back into the order's note.
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
-metadata: { name: shopify-store }
+metadata:
+  name: shopify-store
+  description: "The Shopify store: orders arrive by signed webhook, polled to reconcile."
 spec:
   connector: rest@^1
   secretRef: openbao://shopify-store/token

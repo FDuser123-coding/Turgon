@@ -1,7 +1,9 @@
 # A custom ERP that keeps sales orders in Postgres.
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
-metadata: { name: erp-db }
+metadata:
+  name: erp-db
+  description: "The ERP's database: customers, sales orders and payments."
 spec:
   connector: postgres@^1
   secretRef: openbao://erp-db/dsn

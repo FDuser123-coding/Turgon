@@ -3,7 +3,9 @@
 # user's private key (see pkg/connector/salesforce.Credentials).
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
-metadata: { name: salesforce-prod }
+metadata:
+  name: salesforce-prod
+  description: "The Salesforce sales org, reached as a dedicated integration user."
 spec:
   connector: salesforce@^3
   secretRef: openbao://salesforce/prod-jwt

@@ -146,3 +146,50 @@ export interface LinkResult {
   retried: string[];
   failed?: Record<string, string>;
 }
+
+// The map of connected systems and the flows between them (/api/integrations).
+export interface Integrations {
+  error?: string;
+  systems: IntegrationSystem[];
+  flows: Flow[];
+}
+
+export interface IntegrationSystem {
+  name: string;
+  description?: string;
+  connector: string;
+  product?: string;
+  role: "source" | "target" | "both" | "unused";
+  events: { name: string; entity?: string; delivery: string }[];
+  operations: string[];
+  flows: string[];
+}
+
+export interface Flow {
+  name: string;
+  version: string;
+  description?: string;
+  level?: string;
+  deployable: boolean;
+  trigger: { system: string; event: string; delivery: string };
+  steps: FlowStep[];
+  targets: string[];
+  slo?: string;
+  problem?: string;
+}
+
+export interface FlowStep {
+  kind: "map" | "resolve" | "write";
+  mapping?: string;
+  from?: string;
+  to?: string;
+  fields?: number;
+  entity?: string;
+  strategy?: string;
+  system?: string;
+  operation?: string;
+  risk?: string;
+  approval?: string;
+  simulation?: string;
+  compensation?: string;
+}

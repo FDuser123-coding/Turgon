@@ -445,7 +445,17 @@ as JSON, signed `Turgon-Signature: t=…,v1=<HMAC-SHA256 of "t.body">`). `--cons
 
 ### Console
 
-`turgon console` serves the web console: the approval queue (each pending write with its
+`turgon console` serves the web console. Its home page, **Integrations**, maps what is connected
+to what, drawn from `--catalog`:
+
+- a map of the systems that send events, linked through Turgon to the systems it writes to;
+- each flow step by step: the event and how it arrives (webhook, polling, outbox, change capture
+  or subscription), the customer match, and each write with its risk, dry run, approval and undo;
+- the flow's live runs, approvals waiting and failures.
+
+`turgon integrations -c <catalog>` prints the same map in a terminal.
+
+The other pages are the approval queue (each pending write with its
 dry-run preview, the reasons policy asked for a person, and approve/reject with a note that
 goes into the audit log), the data-steward queue, runs with their writes and failures, the audit logs with live chain
 verification, and verifier reports for the catalog including the mapping review queue.

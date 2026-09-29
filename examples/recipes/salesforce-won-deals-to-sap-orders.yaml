@@ -4,6 +4,7 @@ kind: Recipe
 metadata:
   name: salesforce-won-deals-to-sap-orders
   version: 1.0.0
+  description: "A won Salesforce opportunity becomes a sales order in SAP ECC (BAPI, test run first)."
   certification: L0
 spec:
   trigger:

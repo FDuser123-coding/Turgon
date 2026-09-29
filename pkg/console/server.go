@@ -72,6 +72,7 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("POST /api/runs/retry", s.retryRun)
 	s.mux.HandleFunc("GET /api/audit", s.audit)
 	s.mux.HandleFunc("GET /api/catalog", s.catalog)
+	s.mux.HandleFunc("GET /api/integrations", s.integrations)
 	s.mux.HandleFunc("GET /api/steward", s.stewardQueue)
 	s.mux.HandleFunc("POST /api/steward/links", s.stewardLink)
 	s.mux.HandleFunc("POST /api/reviews", s.reviewField)

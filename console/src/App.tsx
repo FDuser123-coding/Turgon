@@ -5,6 +5,7 @@ import { usePath, usePoll } from "./hooks";
 import { Approvals } from "./pages/Approvals";
 import { Audit } from "./pages/Audit";
 import { Catalog } from "./pages/Catalog";
+import { Integrations } from "./pages/Integrations";
 import { RunDetail, Runs } from "./pages/Runs";
 import { Steward } from "./pages/Steward";
 import type { User } from "./types";
@@ -28,7 +29,8 @@ export function App() {
 
   let page;
   if (!user) page = <ErrorBanner error={error} />;
-  else if (path === "/" || path === "/approvals") page = <Approvals user={user} />;
+  else if (path === "/" || path === "/integrations") page = <Integrations />;
+  else if (path === "/approvals") page = <Approvals user={user} />;
   else if (path === "/steward") page = <Steward user={user} />;
   else if (path === "/runs") page = <Runs />;
   else if (path.startsWith("/runs/")) page = <RunDetail id={decodeURIComponent(path.slice("/runs/".length))} user={user} />;
@@ -37,7 +39,7 @@ export function App() {
   else page = <p>Not found.</p>;
 
   const tab = (to: string, label: string, badge?: number) => {
-    const active = to === "/" ? path === "/" || path === "/approvals" : path.startsWith(to);
+    const active = to === "/" ? path === "/" || path === "/integrations" : path.startsWith(to);
     return (
       <Link to={to} className={active ? "tab active" : "tab"}>
         {label}
@@ -50,7 +52,8 @@ export function App() {
     <>
       <nav className="top">
         <span className="brand">Turgon</span>
-        {tab("/", "Approvals", waiting)}
+        {tab("/", "Integrations")}
+        {tab("/approvals", "Approvals", waiting)}
         {tab("/steward", "Steward", unlinked)}
         {tab("/runs", "Runs")}
         {tab("/audit", "Audit")}

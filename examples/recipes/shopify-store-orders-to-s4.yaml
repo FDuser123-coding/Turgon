@@ -8,6 +8,7 @@ kind: Recipe
 metadata:
   name: shopify-store-orders-to-s4
   version: 1.0.0
+  description: "A Shopify order becomes an S/4HANA sales order through SAP's released OData API."
 spec:
   trigger:
     source: shopify-store
