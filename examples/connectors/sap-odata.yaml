@@ -27,6 +27,9 @@ spec:
     events:
       # $filter on the entity's change timestamp (LastChangeDateTime).
       - kind: odata-poll
+      # Business events (CloudEvents) S/4HANA publishes to SAP Event Mesh,
+      # taken from a queue over its REST messaging API.
+      - kind: event-mesh
     prohibited:
       - kind: direct-database
         reason: "runtime database license; SAP supports integration only through released APIs"

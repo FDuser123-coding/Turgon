@@ -1,0 +1,21 @@
+# An S/4HANA sales order (A_SalesOrder with its items, as the OData API
+# reads it) in the shared model. The sold-to party is the SAP customer
+# number, which identity resolution links to the customer's master record.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: s4-sales-order-to-order
+  version: 1.0.0
+spec:
+  from: s4-prod.SalesOrder
+  to: model.SalesOrder
+  fields:
+    - { target: externalId,  expression: "'SAP-' & SalesOrder",        origin: human, confidence: 1.0 }
+    - { target: customerRef, expression: "SoldToParty",                origin: human, confidence: 1.0 }
+    - { target: orderDate,   expression: "SalesOrderDate",             origin: human, confidence: 0.99 }
+    - { target: netValue,    expression: "$number(TotalNetAmount)",    origin: human, confidence: 1.0 }
+    - { target: currency,    expression: "TransactionCurrency",        origin: human, confidence: 1.0 }
+    - target: lines
+      expression: "to_Item.{ 'material': Material, 'quantity': $number(RequestedQuantity) }[]"
+      origin: human
+      confidence: 0.98

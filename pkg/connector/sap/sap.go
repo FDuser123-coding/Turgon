@@ -6,7 +6,9 @@
 // Like the REST connector it is configured by the Connection:
 //
 //   - Events are polled on a change timestamp (LastChangeDateTime), with
-//     $filter and $orderby, in position order.
+//     $filter and $orderby, in position order; or they are the business
+//     events S/4HANA publishes to SAP Event Mesh, taken from a queue
+//     (eventmesh.go).
 //   - Reads fetch one entity by key and rename its properties.
 //   - A create sends one deep insert (header and items). It first looks
 //     for an entity already carrying the write's idempotency key in a
@@ -32,6 +34,7 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -60,6 +63,10 @@ type Config struct {
 	Auth       rest.Auth            `json:"auth"`
 	Events     map[string]Event     `json:"events,omitempty"`
 	Operations map[string]Operation `json:"operations,omitempty"`
+	// EventMesh and Subscriptions receive S/4HANA's business events from
+	// an SAP Event Mesh queue instead of polling (eventmesh.go).
+	EventMesh     *EventMesh              `json:"eventMesh,omitempty"`
+	Subscriptions map[string]Subscription `json:"subscriptions,omitempty"`
 }
 
 // Event defines an event as the entities changed after the cursor.
@@ -178,6 +185,9 @@ func (c Config) validate() error {
 			return fmt.Errorf("event %s: filter must be one OData expression", name)
 		}
 	}
+	if err := c.validateSubscriptions(); err != nil {
+		return err
+	}
 	for name, op := range c.Operations {
 		where := "operation " + name
 		if !serviceRE.MatchString(op.Service) || !identRE.MatchString(op.EntitySet) || !identRE.MatchString(op.Key) {
@@ -265,6 +275,9 @@ func Factory(ctx context.Context, cfg compiler.ConnectorConfig, secrets connecto
 			return nil, fmt.Errorf("sap %s: config: %w", cfg.Endpoint, err)
 		}
 	}
+	if c.EventMesh != nil && !slices.Contains(cfg.Interfaces, InterfaceEventMesh) {
+		c.EventMesh, c.Subscriptions = nil, nil
+	}
 	secret, err := secrets.Resolve(ctx, cfg.SecretRef)
 	if err != nil {
 		return nil, fmt.Errorf("sap %s: %w", cfg.Endpoint, err)
@@ -272,6 +285,18 @@ func Factory(ctx context.Context, cfg compiler.ConnectorConfig, secrets connecto
 	conn, err := New(c, secret, &http.Client{Timeout: 60 * time.Second})
 	if err != nil {
 		return nil, fmt.Errorf("sap %s: %w", cfg.Endpoint, err)
+	}
+	if c.EventMesh != nil && slices.Contains(cfg.Interfaces, InterfaceEventMesh) {
+		// The Event Mesh instance's own OAuth client, from its service key.
+		// A deployment whose flows take no events from it (they only write
+		// to SAP) does not need it.
+		meshSecret, err := secrets.Resolve(ctx, c.EventMesh.SecretRef)
+		if err != nil {
+			return nil, fmt.Errorf("sap %s: event mesh: %w", cfg.Endpoint, err)
+		}
+		if err := conn.UseEventMesh(meshSecret, &http.Client{Timeout: 60 * time.Second}); err != nil {
+			return nil, fmt.Errorf("sap %s: event mesh: %w", cfg.Endpoint, err)
+		}
 	}
 	return conn, nil
 }
@@ -288,6 +313,9 @@ type Conn struct {
 
 	mu   sync.Mutex
 	csrf string
+
+	meshMu sync.Mutex
+	mesh   *meshClient
 }
 
 var (

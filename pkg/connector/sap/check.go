@@ -96,6 +96,15 @@ func (c *Conn) Check(ctx context.Context) []connector.CheckResult {
 			byService[s.Service] = append(byService[s.Service], use{s.EntitySet, nil, "operation " + name + " (simulation)"})
 		}
 	}
+	for name, sub := range c.cfg.Subscriptions {
+		if r := sub.Read; r != nil {
+			props := append([]string{r.Key}, r.Select...)
+			for _, e := range r.Expand {
+				props = append(props, strings.SplitN(e, "/", 2)[0])
+			}
+			byService[r.Service] = append(byService[r.Service], use{r.EntitySet, props, "subscription " + name})
+		}
+	}
 	services := make([]string, 0, len(byService))
 	for s := range byService {
 		services = append(services, s)
@@ -103,6 +112,9 @@ func (c *Conn) Check(ctx context.Context) []connector.CheckResult {
 	sort.Strings(services)
 
 	var out []connector.CheckResult
+	if c.cfg.EventMesh != nil {
+		out = append(out, c.checkEventMesh(ctx))
+	}
 	for _, svc := range services {
 		name := "service " + svc
 		r, err := c.do(ctx, http.MethodGet, c.metadataURL(svc), nil, http.Header{"Accept": {"application/xml"}})

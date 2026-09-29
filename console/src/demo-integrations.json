@@ -11,7 +11,8 @@
         "create-sales-order"
       ],
       "flows": [
-        "hubspot-won-deals-to-dynamics"
+        "hubspot-won-deals-to-dynamics",
+        "s4-sales-orders-to-dynamics"
       ]
     },
     {
@@ -75,12 +76,19 @@
       "description": "SAP S/4HANA, through the released Sales Order OData API.",
       "connector": "sap-odata",
       "product": "SAP S/4HANA Cloud and S/4HANA 1909+, OData v2 APIs",
-      "role": "target",
-      "events": [],
+      "role": "both",
+      "events": [
+        {
+          "name": "SalesOrder.Created",
+          "entity": "SalesOrder",
+          "delivery": "subscription"
+        }
+      ],
       "operations": [
         "create-sales-order"
       ],
       "flows": [
+        "s4-sales-orders-to-dynamics",
         "shopify-store-orders-to-s4"
       ]
     },
@@ -324,6 +332,53 @@
       "targets": [
         "erp-db",
         "hubspot-crm"
+      ],
+      "slo": "p95 10s"
+    },
+    {
+      "name": "s4-sales-orders-to-dynamics",
+      "version": "1.0.0",
+      "description": "A sales order created in SAP S/4HANA, pushed through SAP Event Mesh, becomes a sales order in Dynamics 365.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "s4-prod",
+        "event": "SalesOrder.Created",
+        "delivery": "subscription"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "s4-sales-order-to-order@1.0.0",
+          "from": "s4-prod.SalesOrder",
+          "to": "model.SalesOrder",
+          "fields": 6
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "exact"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-dynamics-order@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.SalesOrder",
+          "fields": 5
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "dynamics-crm",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "delete-sales-order"
+        }
+      ],
+      "targets": [
+        "dynamics-crm"
       ],
       "slo": "p95 10s"
     },

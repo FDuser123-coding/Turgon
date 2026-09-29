@@ -4,7 +4,9 @@
 # SAP_COM_0008 business partners). Sales orders are created by deep insert
 # with their items, after a dry run by the simulation service; the Shopify
 # order's ID goes into PurchaseOrderByCustomer, so a retried create finds
-# the order instead of making a second one. Changed orders are events.
+# the order instead of making a second one. Changed orders are polled
+# events; new orders arrive as S/4HANA business events through SAP Event
+# Mesh (communication scenario SAP_COM_0092), taken from a queue.
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
 metadata:
@@ -17,6 +19,7 @@ spec:
   limits: { maxConcurrentCalls: 4, requestsPerSecond: 10 }
   events:
     - { name: SalesOrder.Changed, entity: SalesOrder, interface: odata-poll }
+    - { name: SalesOrder.Created, entity: SalesOrder, interface: event-mesh }
   operations:
     - { name: create-sales-order, entity: SalesOrder, direction: write, interface: odata, risk: high, compensation: delete-sales-order }
     - { name: delete-sales-order, entity: SalesOrder, direction: write, interface: odata, risk: high }
@@ -31,6 +34,24 @@ spec:
         key: SalesOrder
         filter: "SalesOrderType eq 'OR'"
         expand: [to_Item]
+    # The Event Mesh instance's service key: the httprest messaging uri,
+    # oa2.tokenendpoint, and its oa2 section as the secret.
+    eventMesh:
+      url: https://enterprise-messaging-pubsub.cfapps.eu10.hana.ondemand.com
+      tokenURL: https://acme.authentication.eu10.hana.ondemand.com/oauth/token
+      secretRef: openbao://s4-prod/event-mesh
+    subscriptions:
+      SalesOrder.Created:
+        # Subscribed to the topic .../ce/sap/s4/beh/salesorder/v1/SalesOrder/Created/v1.
+        queue: acme/s4/turgon/salesorders
+        types: [sap.s4.beh.salesorder.v1.SalesOrder.Created.v1]
+        match: { SalesOrderType: OR }
+        # The event carries the order's number; read the order itself.
+        read:
+          service: API_SALES_ORDER_SRV
+          entitySet: A_SalesOrder
+          key: SalesOrder
+          expand: [to_Item]
     operations:
       create-sales-order:
         action: create
