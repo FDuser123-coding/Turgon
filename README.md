@@ -851,7 +851,11 @@ helm upgrade turgon deploy/helm/turgon -n integrations --reuse-values \
     approval, subscriptions and the webhook listener carry on. The switch is audited as
     `connections.reloaded`.
   - `kill -HUP` reconnects at once.
-  - `turgon mcp` still reads its secrets at start.
+  - `turgon mcp` does the same for the connectors of its read tools, with the same checks,
+    audit entries and flag. New requests go to the new connections at once. Requests in
+    flight finish on the old ones, which are closed afterwards. Agents see no error. MCP
+    runs stateless, and A2A tasks are Temporal workflows, so no session is lost. Rate
+    limits and circuit breakers start afresh with the new connections.
 - **Settings.** `TURGON_SECRETS=openbao` and `TURGON_OPENBAO_{ADDR, MOUNT, NAMESPACE, CACERT,
   AUTH, ROLE, AUTH_MOUNT, JWT_FILE, SECRET_ID_FILE, TOKEN, TTL}`. `BAO_*` and `VAULT_*`
   (`BAO_ADDR`, `VAULT_TOKEN`, ...) are read as fallbacks. HTTPS is required unless the server
@@ -872,6 +876,13 @@ Verified live against Vault 2.1.1 and OpenBao 2.7.0 dev servers (`go test -tags 
     the current connections meanwhile.
   - A rotation written to the two secrets six seconds apart reconnected each connector as
     its secret arrived.
+- **`turgon mcp` rotation**, with Secrets Manager on moto and the same Postgres setup:
+  - An agent read `get_sales_order` every 100 ms while the password was changed in
+    Postgres and in the secret manager. All 150 reads succeeded across the switch.
+  - Afterwards only the new connections were open, and reads still worked once all of
+    them were cut.
+  - A wrong password was refused once, and reads kept working. `SIGHUP` reconnected.
+    No password appeared in the log or the audit log.
 
 #### Connection secrets from AWS, Azure or Google Cloud
 
@@ -908,7 +919,8 @@ managed identity, or `AWS_*`, `AZURE_*` and `GOOGLE_APPLICATION_CREDENTIALS`.
   permission is missing if access is denied.
 - A secret holding a plain value instead of a JSON object is refused, with the reason.
 - Values are cached for five minutes (`TURGON_SECRETS_TTL`).
-- Rotations reach running workers as they do with OpenBao (`--secrets-refresh`, `SIGHUP`).
+- Rotations reach running workers and `turgon mcp` as they do with OpenBao
+  (`--secrets-refresh`, `SIGHUP`).
 
 **Settings.**
 

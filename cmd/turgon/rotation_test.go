@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/fduser123-coding/turgon/pkg/audit"
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
 )
@@ -63,5 +65,78 @@ func TestEndpointsUsing(t *testing.T) {
 	}
 	if got := endpointsUsing(spec, nil); got != nil {
 		t.Fatalf("no references: %v", got)
+	}
+}
+
+// fakeSecrets is a rotating secret backend over a map.
+type fakeSecrets struct{ connector.StaticSecrets }
+
+func (fakeSecrets) Rotates() bool             { return true }
+func (fakeSecrets) Where(ref string) string   { return ref }
+func (fakeSecrets) Missing(ref string) string { return ref }
+func (f fakeSecrets) Fingerprints(ctx context.Context, refs []string) (fingerprints, error) {
+	return fingerprint(ctx, f, refs)
+}
+
+func TestRotationSwitchesOnlyToWorkingConnections(t *testing.T) {
+	ctx := context.Background()
+	spec := &compiler.RuntimeSpec{}
+	spec.Metadata.Name = "shop-orders-to-erp"
+	spec.Spec.Connectors = []compiler.ConnectorConfig{{Endpoint: "erp-db", SecretRef: "openbao://erp-db/dsn"}}
+	secrets := fakeSecrets{connector.StaticSecrets{"openbao://erp-db/dsn": "postgres://erp:one@db/erp"}}
+	var out, auditLog strings.Builder
+	rot, err := newRotation[string](ctx, &out, audit.New(&auditLog), spec, secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, connects := "one", 0
+	rot.connect = func() (string, error) {
+		connects++
+		v, _ := secrets.Resolve(ctx, "openbao://erp-db/dsn")
+		return v, nil
+	}
+	rot.discard = func(string) {}
+	rot.regressions = func(_ context.Context, next string, endpoints []string) []string {
+		if !reflect.DeepEqual(endpoints, []string{"erp-db"}) {
+			t.Errorf("checked %v", endpoints)
+		}
+		if strings.Contains(next, "wrong") {
+			return []string{"erp-db: connect: password authentication failed"}
+		}
+		return nil
+	}
+	rot.use = func(next string) bool { current = next; return true }
+
+	rot.refresh(ctx)
+	if connects != 0 {
+		t.Fatal("reconnected with no secret changed")
+	}
+
+	// A wrong password in the secret manager: refused, reported once, and
+	// tried again at every refresh.
+	secrets.StaticSecrets["openbao://erp-db/dsn"] = "postgres://erp:wrong@db/erp"
+	rot.refresh(ctx)
+	rot.refresh(ctx)
+	if current != "one" || connects != 2 {
+		t.Fatalf("current %q after %d connects", current, connects)
+	}
+	if n := strings.Count(out.String(), "keeping the current ones"); n != 1 {
+		t.Fatalf("refusal reported %d times:\n%s", n, out.String())
+	}
+
+	// Fixed: the next refresh switches, and the one after has nothing to do.
+	secrets.StaticSecrets["openbao://erp-db/dsn"] = "postgres://erp:two@db/erp"
+	rot.refresh(ctx)
+	rot.refresh(ctx)
+	if current != "postgres://erp:two@db/erp" || connects != 3 {
+		t.Fatalf("current %q after %d connects", current, connects)
+	}
+	for _, want := range []string{"connections.reload-refused", "connections.reloaded"} {
+		if !strings.Contains(auditLog.String(), want) {
+			t.Errorf("audit log lacks %s", want)
+		}
+	}
+	if strings.Contains(out.String()+auditLog.String(), "wrong@") {
+		t.Fatal("a secret value was logged")
 	}
 }
