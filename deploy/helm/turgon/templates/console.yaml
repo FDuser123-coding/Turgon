@@ -26,6 +26,7 @@ spec:
     metadata:
       labels:
         {{- include "turgon.selector" . | nindent 8 }}
+        {{- include "turgon.identityLabels" . | nindent 8 }}
         app.kubernetes.io/component: console
     spec:
       {{- include "turgon.podSettings" . | nindent 6 }}
