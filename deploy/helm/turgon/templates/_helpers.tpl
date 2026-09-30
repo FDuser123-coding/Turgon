@@ -67,6 +67,7 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   value: /etc/turgon/temporal-tls/key
 {{- end }}
 {{- end }}
+{{- include "turgon.secretsEnv" . }}
 {{- with .Values.temporal.existingSecret }}
 - name: TURGON_TEMPORAL_API_KEY
   valueFrom:
@@ -88,6 +89,65 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- if .Values.specSigning.trustedKeys }}
 - { name: trusted-keys, mountPath: /etc/turgon/trusted-keys, readOnly: true }
 {{- end }}
+{{- if eq .Values.secrets.backend "openbao" }}
+{{- with .Values.secrets.openbao }}
+{{- if eq .auth "kubernetes" }}
+- { name: openbao-token, mountPath: /var/run/secrets/turgon/openbao, readOnly: true }
+{{- else if eq .auth "approle" }}
+- { name: openbao-approle, mountPath: /etc/turgon/openbao-approle, readOnly: true }
+{{- end }}
+{{- if .caSecret }}
+- { name: openbao-ca, mountPath: /etc/turgon/openbao-ca, readOnly: true }
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end -}}
+
+{{/* Connection secrets from OpenBao or Vault (secrets.backend: openbao). */}}
+{{- define "turgon.secretsEnv" -}}
+{{- if eq .Values.secrets.backend "openbao" }}
+{{- with .Values.secrets.openbao }}
+- name: TURGON_SECRETS
+  value: openbao
+- name: TURGON_OPENBAO_ADDR
+  value: {{ required "secrets.openbao.address is required with secrets.backend openbao" .address | quote }}
+- name: TURGON_OPENBAO_MOUNT
+  value: {{ .mount | quote }}
+- name: TURGON_OPENBAO_AUTH
+  value: {{ .auth | quote }}
+{{- with .namespace }}
+- name: TURGON_OPENBAO_NAMESPACE
+  value: {{ . | quote }}
+{{- end }}
+{{- with .authMount }}
+- name: TURGON_OPENBAO_AUTH_MOUNT
+  value: {{ . | quote }}
+{{- end }}
+{{- if .caSecret }}
+- name: TURGON_OPENBAO_CACERT
+  value: /etc/turgon/openbao-ca/ca.crt
+{{- end }}
+{{- if eq .auth "kubernetes" }}
+- name: TURGON_OPENBAO_ROLE
+  value: {{ required "secrets.openbao.role is required with kubernetes auth" .role | quote }}
+- name: TURGON_OPENBAO_JWT_FILE
+  value: /var/run/secrets/turgon/openbao/token
+{{- else if eq .auth "approle" }}
+- name: TURGON_OPENBAO_ROLE
+  value: {{ required "secrets.openbao.role (the role ID) is required with approle auth" .role | quote }}
+- name: TURGON_OPENBAO_SECRET_ID_FILE
+  value: /etc/turgon/openbao-approle/secret-id
+{{- else if eq .auth "token" }}
+- name: TURGON_OPENBAO_TOKEN
+  valueFrom:
+    secretKeyRef: { name: {{ required "secrets.openbao.existingSecret (key token) is required with token auth" .existingSecret }}, key: token }
+{{- else }}
+{{- fail "secrets.openbao.auth must be kubernetes, approle or token" }}
+{{- end }}
+{{- end }}
+{{- else if ne .Values.secrets.backend "env" }}
+{{- fail "secrets.backend must be env or openbao" }}
+{{- end }}
 {{- end -}}
 
 {{/* Runtime specs are loaded only if a trusted key signed them. */}}
@@ -99,6 +159,34 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{- define "turgon.sharedVolumes" -}}
+{{- if eq .Values.secrets.backend "openbao" }}
+{{- with .Values.secrets.openbao }}
+{{- if eq .auth "kubernetes" }}
+# A service account token for OpenBao alone: bound to its audience, valid
+# for an hour and rotated by the kubelet. Pods mount no other token.
+- name: openbao-token
+  projected:
+    sources:
+      - serviceAccountToken:
+          path: token
+          audience: {{ .audience | quote }}
+          expirationSeconds: 3600
+{{- else if eq .auth "approle" }}
+- name: openbao-approle
+  secret:
+    secretName: {{ required "secrets.openbao.existingSecret (key secret-id) is required with approle auth" .existingSecret }}
+    items:
+      - { key: secret-id, path: secret-id }
+{{- end }}
+{{- with .caSecret }}
+- name: openbao-ca
+  secret:
+    secretName: {{ . }}
+    items:
+      - { key: ca.crt, path: ca.crt }
+{{- end }}
+{{- end }}
+{{- end }}
 {{- if .Values.specSigning.trustedKeys }}
 - name: trusted-keys
   configMap:

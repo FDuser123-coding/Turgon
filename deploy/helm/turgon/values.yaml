@@ -71,6 +71,29 @@ specSigning:
 # Keys must be DNS labels. Specs are verified against their digest at start.
 specs: {}
 
+# Where connection secrets (the secretRefs in specs) are read from:
+#   env      TURGON_SECRET_* variables, from the Secrets in secretEnvFrom.
+#   openbao  OpenBao or HashiCorp Vault, KV v2: openbao://shop-db/dsn is the
+#            key dsn of <mount>/data/shop-db. Pods sign in as their service
+#            account (kubernetes auth), with an AppRole, or with a token.
+secrets:
+  backend: env
+  openbao:
+    address: ""              # e.g. https://openbao.openbao.svc:8200
+    mount: secret
+    namespace: ""
+    auth: kubernetes         # kubernetes, approle or token
+    # kubernetes: the role bound to this release's service account and
+    # namespace; approle: the role ID.
+    role: turgon
+    authMount: ""            # default kubernetes or approle
+    # The projected token's audience; the role must list it.
+    audience: openbao
+    # A Secret with ca.crt, when the server's certificate is not publicly signed.
+    caSecret: ""
+    # approle: a Secret with key secret-id; token: a Secret with key token.
+    existingSecret: ""
+
 workers:
   replicas: 1
   pollInterval: 2s

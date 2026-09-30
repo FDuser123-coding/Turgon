@@ -13,7 +13,6 @@ import (
 
 	"github.com/fduser123-coding/turgon/pkg/agent"
 	"github.com/fduser123-coding/turgon/pkg/audit"
-	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/engine"
 	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
 )
@@ -90,8 +89,12 @@ func mcpCmd() *cobra.Command {
 				defer f.Close()
 				rec = l
 			}
+			secretsFrom, err := openSecrets()
+			if err != nil {
+				return err
+			}
 			opts := agent.Options{
-				Registry: connectorRegistry(), Secrets: connector.EnvSecrets{}, Audit: rec, Auth: auth, Version: version,
+				Registry: connectorRegistry(), Secrets: secretsFrom, Audit: rec, Auth: auth, Version: version,
 				ApprovalTimeout: approvalTimeout, A2AURL: a2aURL,
 			}
 			if writes {
