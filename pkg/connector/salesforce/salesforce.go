@@ -45,6 +45,8 @@ type Config struct {
 	Subscriptions map[string]Subscription `json:"subscriptions,omitempty"`
 	// PubSubEndpoint defaults to DefaultPubSubEndpoint.
 	PubSubEndpoint string `json:"pubsubEndpoint,omitempty"`
+	// Exports are record sets read at once with the Bulk API (bulk.go).
+	Exports map[string]Export `json:"exports,omitempty"`
 }
 
 // EventQuery defines an event as the records matching a SOQL condition,
@@ -98,6 +100,11 @@ func (c Config) validate() error {
 		}
 		if _, dup := c.Events[name]; dup {
 			return fmt.Errorf("event %s is both a SOQL event and a subscription", name)
+		}
+	}
+	for name, e := range c.Exports {
+		if err := e.validate(name); err != nil {
+			return err
 		}
 	}
 	for name, op := range c.Operations {
@@ -157,6 +164,11 @@ type Conn struct {
 	schemaCache
 	// PageLimit caps pages read per poll. Default 50.
 	PageLimit int
+	// BulkPoll is the first wait between checks of a Bulk API job (it
+	// doubles up to 10s); BulkPageSize the records per results page.
+	// Defaults 1s and 50,000.
+	BulkPoll     time.Duration
+	BulkPageSize int
 }
 
 var (
@@ -204,7 +216,8 @@ func (e *APIError) permanent() bool {
 	return e.Status == http.StatusBadRequest || e.Status == http.StatusNotFound || e.Status == http.StatusForbidden
 }
 
-// do sends an API request, logging in or refreshing the token as needed.
+// do sends an API request with a JSON body and decodes a JSON response,
+// logging in or refreshing the token as needed.
 func (c *Conn) do(ctx context.Context, method, path string, body any, out any) error {
 	var payload []byte
 	if body != nil {
@@ -213,10 +226,23 @@ func (c *Conn) do(ctx context.Context, method, path string, body any, out any) e
 			return err
 		}
 	}
+	_, data, err := c.send(ctx, method, path, payload, "application/json")
+	if err != nil {
+		return err
+	}
+	if out != nil && len(data) > 0 {
+		return json.Unmarshal(data, out)
+	}
+	return nil
+}
+
+// send sends a request (a JSON payload, if any) and returns the response
+// in the representation accept asks for.
+func (c *Conn) send(ctx context.Context, method, path string, payload []byte, accept string) (http.Header, []byte, error) {
 	for attempt := 0; ; attempt++ {
 		token, instance, err := c.sess.current(ctx)
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		target := path
 		if !strings.HasPrefix(path, "http") {
@@ -224,18 +250,18 @@ func (c *Conn) do(ctx context.Context, method, path string, body any, out any) e
 		}
 		req, err := http.NewRequestWithContext(ctx, method, target, bytes.NewReader(payload))
 		if err != nil {
-			return err
+			return nil, nil, err
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Accept", "application/json")
-		if body != nil {
+		req.Header.Set("Accept", accept)
+		if payload != nil {
 			req.Header.Set("Content-Type", "application/json")
 		}
 		resp, err := c.sess.http.Do(req)
 		if err != nil {
-			return fmt.Errorf("salesforce %s %s: %w", method, path, err)
+			return nil, nil, fmt.Errorf("salesforce %s %s: %w", method, redactQuery(path), err)
 		}
-		data, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
+		data, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 {
 			c.sess.invalidate(token)
@@ -251,15 +277,20 @@ func (c *Conn) do(ctx context.Context, method, path string, body any, out any) e
 				apiErr.Code, apiErr.Msg = errs[0].ErrorCode, errs[0].Message
 			}
 			if apiErr.permanent() {
-				return fmt.Errorf("%w: %v", writeguard.ErrInvalid, apiErr)
+				return nil, nil, fmt.Errorf("%w: %v", writeguard.ErrInvalid, apiErr)
 			}
-			return apiErr
+			return nil, nil, apiErr
 		}
-		if out != nil && len(data) > 0 {
-			return json.Unmarshal(data, out)
-		}
-		return nil
+		return resp.Header, data, nil
 	}
+}
+
+// redactQuery drops a URL's query, which can quote record values (SOQL).
+func redactQuery(path string) string {
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		return path[:i]
+	}
+	return path
 }
 
 func (c *Conn) base() string { return "/services/data/v" + c.cfg.APIVersion }

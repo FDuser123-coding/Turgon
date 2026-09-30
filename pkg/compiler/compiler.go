@@ -578,3 +578,26 @@ func ParseSpec(data []byte) (*RuntimeSpec, error) {
 	}
 	return &s, nil
 }
+
+// ConnectionConfig configures a connection's connector outside any recipe,
+// for tools that use the connection directly (loading cross-references
+// with `turgon xref load`).
+func ConnectionConfig(cat *catalog.Catalog, name string) (ConnectorConfig, error) {
+	conn, err := cat.Connection(name)
+	if err != nil {
+		return ConnectorConfig{}, err
+	}
+	ref, constraint := v1alpha1.ParseRef(conn.Spec.Connector)
+	m, err := cat.Connector(ref, constraint)
+	if err != nil {
+		return ConnectorConfig{}, fmt.Errorf("connection %s: %w", name, err)
+	}
+	if errs := conn.ValidateEffective(m); len(errs) > 0 {
+		return ConnectorConfig{}, fmt.Errorf("connection %s: %s: %s", name, errs[0].Path, errs[0].Message)
+	}
+	b := newBuilder()
+	b.connector(name, conn.Effective(m), "")
+	c := b.connectors[name]
+	c.Connection, c.Config = conn.Metadata.Name, conn.Spec.Config
+	return *c, nil
+}

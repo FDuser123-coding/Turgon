@@ -46,6 +46,13 @@ type Server struct {
 	Logins  int
 	Patches int
 
+	// JobPolls is how many status checks a Bulk API job takes to complete
+	// (default 2); FailJobs, if set, fails every job with this message.
+	JobPolls                 int
+	FailJobs                 string
+	jobs                     map[string]*bulkJob
+	bulkCreated, bulkDeleted int
+
 	// PubSubAddr is where PubSub listens (default a free loopback port).
 	PubSubAddr string
 	ps         *pubSub
@@ -58,7 +65,7 @@ func New() *Server {
 		panic(err)
 	}
 	s := &Server{
-		Key: key, ClientID: "3MVG9test", Username: "turgon-integration@example.com", PageSize: 2000,
+		Key: key, ClientID: "3MVG9test", Username: "turgon-integration@example.com", PageSize: 2000, JobPolls: 2,
 		records: map[string]map[string]map[string]any{}, tokens: map[string]bool{}, cursors: map[string][]map[string]any{},
 	}
 	s.Server = httptest.NewServer(http.HandlerFunc(s.serve))
@@ -138,6 +145,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case parts[3] == "jobs" && len(parts) >= 5 && parts[4] == "query":
+		s.bulk(w, r, parts)
 	case parts[3] == "query" && len(parts) == 4:
 		s.query(w, r.URL.Query().Get("q"))
 	case parts[3] == "query" && len(parts) == 5:

@@ -122,6 +122,53 @@ bin/turgon run -s sf-cdc.json & bin/turgon run -s sf-cdc.json &   # one subscrib
 echo "001000000000001AAA 7800" >> sf.cmds                          # the run starts at once
 ```
 
+#### Linking accounts at go-live with the Bulk API
+
+A flow resolves each record to a master record: the Salesforce account behind a won deal to the
+ERP customer. At go-live, most accounts already carry their ERP customer number, so there is no
+need for a data steward to link them one by one. `turgon xref load` links them all at once from
+an export the connection defines:
+
+```yaml
+config:
+  exports:
+    Account.ERPNumbers:
+      sobject: Account
+      fields: [Id, Name, ERP_Customer_Number__c]   # relationship fields (Owner.Email) too; no subqueries
+      where: "ERP_Customer_Number__c != null"
+      # all: true reads deleted and archived records too (queryAll)
+```
+
+```sh
+bin/turgon xref load salesforce-prod Account.ERPNumbers -c my-catalog --entity Customer \
+  --master ERP_Customer_Number__c --match Name:name --dry-run      # then again without --dry-run
+```
+
+- **The Bulk API 2.0.** The export runs as a query job. Turgon creates it, waits for it, then
+  reads the CSV results a page at a time (50,000 records per call). It checks that it read as
+  many records as the job processed, and deletes the job when done. An interrupted wait aborts
+  the job. A job reads millions of records in a few API calls; the REST API needs one call per
+  2,000.
+- **Stewards' decisions are kept.**
+  - A record already linked to another master record is listed and left alone. `--replace`
+    moves it.
+  - Records without a master value are counted and skipped.
+  - `--dry-run` writes nothing and shows what would change.
+- **Matching improves.** With `--match` (`FIELD:KIND`, kinds `email`, `domain`, `name` or
+  `exact`), each record's identifying fields are kept. Later records from other systems are
+  then matched against them.
+- **Written in bulk and audited.** Links are written with `COPY`, 5,000 per transaction.
+  Links that did not change are not rewritten. Against the fake org, 100,000 accounts load in
+  5.4 s, of which about 3 s is waiting for the job, and a reload with nothing changed takes
+  3.9 s. Each load is one `xref.loaded` audit entry, with the counts and a SHA-256 of the
+  links it made.
+- **`turgon check`** covers the export's fields: each must exist and be visible to the
+  integration user.
+
+With the fake org, `account <AccountId> <ERP number> <name>` on `sf.cmds` creates an account,
+and `accounts 100000` creates many. After the load, a won deal for a loaded account resolves
+without `turgon xref set`.
+
 ### Any HTTP API: Shopify to ERP
 
 The `rest` connector integrates HTTP JSON APIs (Shopify, Stripe, HubSpot, in-house services) with
@@ -990,7 +1037,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow, and one for agent writes; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher; webhook receiver with a durable inbox, reconciled by polling |
 | `pkg/operator`, `cmd/turgon-operator`, `apis/operator` | §11 | The Kubernetes operator: the Integration CRD and its reconciler |
 | `pkg/appliance`, `deploy/appliance` | §11 | The single-host appliance: `turgon appliance`, systemd units, the offline bundle's installer |
-| `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox and change capture events, rollback dry-runs, idempotent writes); `salesforce/` reads by SOQL and subscribes over the Pub/Sub API (`pubsub/`: the gRPC wire protocol) |
+| `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox and change capture events, rollback dry-runs, idempotent writes); `salesforce/` reads by SOQL and the Bulk API 2.0, and subscribes over the Pub/Sub API (`pubsub/`: the gRPC wire protocol) |
 | `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled list or search events (ascending, or newest-first paged back to the cursor), also received as signed webhooks (Stripe, Shopify, generic HMAC), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/`, `stripetest/` and `hubspottest/` fake the Shopify Admin, Stripe and HubSpot CRM APIs |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references, the webhook inbox |
@@ -1040,7 +1087,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 ## Not built yet
 
-In rough roadmap order (§16, §19): Salesforce Bulk API reads and managed subscriptions;
+In rough roadmap order (§16, §19): Salesforce managed subscriptions (the Pub/Sub API keeping the replay position);
 change capture from databases other than Postgres (Debezium); an external Splink service; the metadata
 graph and discovery; A2A streaming and push notifications; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

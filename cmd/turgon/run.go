@@ -509,7 +509,7 @@ func xrefCmd() *cobra.Command {
 	for _, f := range []string{"entity", "system", "source", "master"} {
 		_ = set.MarkFlagRequired(f)
 	}
-	cmd.AddCommand(set)
+	cmd.AddCommand(set, xrefLoadCmd())
 	return cmd
 }
 

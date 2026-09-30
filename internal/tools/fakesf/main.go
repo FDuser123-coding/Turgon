@@ -3,7 +3,9 @@
 // accepts new won deals on stdin, one "<AccountId> <Amount>" per line.
 // Each is also published as a change event on the fake Pub/Sub API
 // (-pubsub-listen), for connections that subscribe to
-// /data/OpportunityChangeEvent.
+// /data/OpportunityChangeEvent. "account <AccountId> <ERP number> <name>"
+// creates an account, and "accounts <n>" creates n numbered ones, for
+// loading cross-references with the Bulk API (turgon xref load).
 package main
 
 import (
@@ -30,8 +32,22 @@ func main() {
 	in := bufio.NewScanner(os.Stdin)
 	for in.Scan() {
 		f := strings.Fields(in.Text())
+		if len(f) >= 4 && f[0] == "account" {
+			sf.Put("Account", f[1], map[string]any{"ERP_Customer_Number__c": f[2], "Name": strings.Join(f[3:], " ")}, time.Now())
+			fmt.Fprintf(os.Stderr, "account %s: ERP customer %s\n", f[1], f[2])
+			continue
+		}
+		if len(f) == 2 && f[0] == "accounts" {
+			count, _ := strconv.Atoi(f[1])
+			for i := 1; i <= count; i++ {
+				sf.Put("Account", fmt.Sprintf("001%012dBBB", i), map[string]any{
+					"ERP_Customer_Number__c": fmt.Sprintf("K-%07d", i), "Name": fmt.Sprintf("Customer %d GmbH", i)}, time.Now())
+			}
+			fmt.Fprintf(os.Stderr, "%d accounts created\n", count)
+			continue
+		}
 		if len(f) != 2 {
-			fmt.Fprintln(os.Stderr, "usage: <AccountId> <Amount>")
+			fmt.Fprintln(os.Stderr, "usage: <AccountId> <Amount> | account <AccountId> <ERP number> <name> | accounts <n>")
 			continue
 		}
 		amount, _ := strconv.ParseFloat(f[1], 64)
