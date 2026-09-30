@@ -191,6 +191,20 @@ jobs:
             --set secrets.openbao.existingSecret=turgon-approle > /tmp/rendered-openbao-operator.yaml
           grep -q 'TURGON_OPENBAO_SECRET_ID_FILE' /tmp/rendered-openbao-operator.yaml
           go run ./cmd/turgon-operator --validate /tmp/rendered-openbao-operator.yaml
+          # Connection secrets from the cloud's secret manager, the pods bound
+          # to a cloud identity by their service account.
+          helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" --set secrets.backend=aws \
+            --set secrets.aws.region=eu-central-1 --set secrets.prefix=turgon/ \
+            --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=arn:aws:iam::123456789012:role/turgon > /tmp/rendered-aws.yaml
+          grep -q 'eks.amazonaws.com/role-arn' /tmp/rendered-aws.yaml
+          helm template turgon deploy/helm/turgon -n turgon --kube-version 1.31.0 "${args[@]}" --set operator.enabled=true \
+            --set secrets.backend=azure --set secrets.azure.vaultURL=https://acme-turgon.vault.azure.net \
+            --set serviceAccount.annotations.azure\\.workload\\.identity/client-id=00000000-0000-0000-0000-000000000000 > /tmp/rendered-azure.yaml
+          grep -q 'azure.workload.identity/use: "true"' /tmp/rendered-azure.yaml
+          go run ./cmd/turgon-operator --validate /tmp/rendered-azure.yaml
+          helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" --set secrets.backend=gcp \
+            --set secrets.gcp.project=acme-prod > /tmp/rendered-gcp.yaml
+          grep -q 'TURGON_GCP_PROJECT' /tmp/rendered-gcp.yaml
           # With the operator, specs become Integrations; the operator
           # accepts what the chart renders for it.
           helm template turgon deploy/helm/turgon -n turgon --kube-version 1.31.0 "${args[@]}" --set operator.enabled=true \
@@ -210,7 +224,7 @@ jobs:
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
             /tmp/rendered.yaml /tmp/rendered-oidc.yaml /tmp/rendered-tls.yaml /tmp/rendered-monitoring.yaml \
             /tmp/rendered-backup.yaml /tmp/rendered-restore.yaml /tmp/rendered-signed.yaml /tmp/rendered-operator.yaml \
-            /tmp/rendered-operator-unsigned.yaml /tmp/rendered-openbao.yaml /tmp/rendered-openbao-operator.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
+            /tmp/rendered-operator-unsigned.yaml /tmp/rendered-openbao.yaml /tmp/rendered-openbao-operator.yaml /tmp/rendered-aws.yaml /tmp/rendered-azure.yaml /tmp/rendered-gcp.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
       - name: Lint the Dockerfile
         run: hadolint Dockerfile
 

@@ -26,6 +26,7 @@ spec:
     metadata:
       labels:
         {{- include "turgon.selector" . | nindent 8 }}
+        {{- include "turgon.identityLabels" . | nindent 8 }}
         app.kubernetes.io/component: agents
       annotations:
         turgon.dev/specs-checksum: {{ .Values.specs | toJson | sha256sum }}

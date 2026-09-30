@@ -76,8 +76,22 @@ specs: {}
 #   openbao  OpenBao or HashiCorp Vault, KV v2: openbao://shop-db/dsn is the
 #            key dsn of <mount>/data/shop-db. Pods sign in as their service
 #            account (kubernetes auth), with an AppRole, or with a token.
+#   aws      AWS Secrets Manager; azure  Azure Key Vault; gcp  Google Secret
+#            Manager. openbao://shop-db/dsn is the field dsn of the JSON
+#            secret <prefix>shop-db (Key Vault and Secret Manager names turn
+#            "/" into "--"). Pods sign in with the platform's workload
+#            identity: set serviceAccount.annotations.
 secrets:
   backend: env
+  # Put before every cloud secret name, e.g. turgon/ or turgon-.
+  prefix: ""
+  aws:
+    region: ""               # e.g. eu-central-1
+  azure:
+    vaultURL: ""             # e.g. https://acme-turgon.vault.azure.net
+    workloadIdentity: true   # label pods azure.workload.identity/use=true
+  gcp:
+    project: ""
   openbao:
     address: ""              # e.g. https://openbao.openbao.svc:8200
     mount: secret
@@ -261,7 +275,9 @@ networkPolicy:
   # namespace; list your ingress controller's pods to narrow it.
   webhooksFrom: []
   # Egress. With allowAllEgress false, only DNS and egressRules are allowed:
-  # list Temporal, the state database and every connected system.
+  # list Temporal, the state database, every connected system and the secret
+  # manager (OpenBao, the cloud's endpoint; on GKE also the metadata server,
+  # 169.254.169.254:80, which Workload Identity tokens come from).
   allowAllEgress: true
   egressRules: []
 
@@ -278,3 +294,11 @@ securityContext:
 nodeSelector: {}
 tolerations: []
 affinity: {}
+
+# The service account the pods run as. Its annotations bind it to a cloud
+# identity for the secret manager, e.g.
+#   eks.amazonaws.com/role-arn: arn:aws:iam::123456789012:role/turgon
+#   azure.workload.identity/client-id: 00000000-0000-0000-0000-000000000000
+#   iam.gke.io/gcp-service-account: turgon@acme-prod.iam.gserviceaccount.com
+serviceAccount:
+  annotations: {}

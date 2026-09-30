@@ -436,7 +436,7 @@ func runCmd() *cobra.Command {
 	cmd.Flags().StringVar(&consoleURL, "console-url", os.Getenv("TURGON_CONSOLE_URL"), "the console's URL, linked from notifications, e.g. https://turgon.example.com")
 	cmd.Flags().DurationVar(&reconcile, "reconcile", engine.DefaultReconcile, "how often events received by webhook are also polled, for missed deliveries")
 	cmd.Flags().DurationVar(&approvalTimeout, "approval-timeout", engine.DefaultApprovalTimeout, "reject approvals nobody answers within this time")
-	cmd.Flags().DurationVar(&secretsRefresh, "secrets-refresh", 5*time.Minute, "with OpenBao, how often secrets are read again; a changed one reconnects the connectors (0: never; SIGHUP reconnects at once)")
+	cmd.Flags().DurationVar(&secretsRefresh, "secrets-refresh", 5*time.Minute, "with OpenBao or a cloud secret manager, how often secrets are read again; a changed one reconnects the connectors (0: never; SIGHUP reconnects at once)")
 	return cmd
 }
 

@@ -145,8 +145,40 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- fail "secrets.openbao.auth must be kubernetes, approle or token" }}
 {{- end }}
 {{- end }}
+{{- else if eq .Values.secrets.backend "aws" }}
+- name: TURGON_SECRETS
+  value: aws
+- name: TURGON_AWS_REGION
+  value: {{ required "secrets.aws.region is required with secrets.backend aws" .Values.secrets.aws.region | quote }}
+{{- include "turgon.secretsPrefix" . }}
+{{- else if eq .Values.secrets.backend "azure" }}
+- name: TURGON_SECRETS
+  value: azure
+- name: TURGON_AZURE_VAULT_URL
+  value: {{ required "secrets.azure.vaultURL is required with secrets.backend azure" .Values.secrets.azure.vaultURL | quote }}
+{{- include "turgon.secretsPrefix" . }}
+{{- else if eq .Values.secrets.backend "gcp" }}
+- name: TURGON_SECRETS
+  value: gcp
+- name: TURGON_GCP_PROJECT
+  value: {{ required "secrets.gcp.project is required with secrets.backend gcp" .Values.secrets.gcp.project | quote }}
+{{- include "turgon.secretsPrefix" . }}
 {{- else if ne .Values.secrets.backend "env" }}
-{{- fail "secrets.backend must be env or openbao" }}
+{{- fail "secrets.backend must be env, openbao, aws, azure or gcp" }}
+{{- end }}
+{{- end -}}
+
+{{- define "turgon.secretsPrefix" -}}
+{{- with .Values.secrets.prefix }}
+- name: TURGON_SECRETS_PREFIX
+  value: {{ . | quote }}
+{{- end }}
+{{- end -}}
+
+{{/* Pod labels the platform's workload identity needs (AKS). */}}
+{{- define "turgon.identityLabels" -}}
+{{- if and (eq .Values.secrets.backend "azure") .Values.secrets.azure.workloadIdentity }}
+azure.workload.identity/use: "true"
 {{- end }}
 {{- end -}}
 
@@ -278,6 +310,7 @@ affinity:
 metadata:
   labels:
     {{- include "turgon.selector" . | nindent 4 }}
+    {{- include "turgon.identityLabels" . | nindent 4 }}
 spec:
   {{- include "turgon.podSettings" . | nindent 2 }}
   containers:

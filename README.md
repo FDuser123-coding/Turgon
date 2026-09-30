@@ -873,6 +873,61 @@ Verified live against Vault 2.1.1 and OpenBao 2.7.0 dev servers (`go test -tags 
   - A rotation written to the two secrets six seconds apart reconnected each connector as
     its secret arrived.
 
+#### Connection secrets from AWS, Azure or Google Cloud
+
+On a cloud, the same references can be read from the cloud's own secret manager:
+`secrets.backend` is `aws` (Secrets Manager), `azure` (Key Vault) or `gcp` (Secret Manager).
+
+**Where each reference is read.** A connection's secret is one secret holding a JSON object.
+`openbao://shop-db/dsn` is the field `dsn` of the secret named `<prefix>shop-db`. Key Vault and
+Secret Manager do not allow `/` in names, so `team/erp-db` becomes `team--erp-db`. `turgon
+secrets <spec>` prints each secret's name. The scheme of a reference is only a label, so
+catalogs keep their references whichever manager a deployment uses.
+
+```sh
+aws secretsmanager create-secret --name turgon/shop-db --secret-string '{"dsn": "postgres://..."}'
+helm upgrade turgon deploy/helm/turgon -n integrations --reuse-values \
+  --set secrets.backend=aws --set secrets.aws.region=eu-central-1 --set secrets.prefix=turgon/ \
+  --set serviceAccount.annotations.eks\\.amazonaws\\.com/role-arn=arn:aws:iam::123456789012:role/turgon
+```
+
+**Identity.** Pods sign in with the platform's workload identity, bound through
+`serviceAccount.annotations`:
+
+| Backend | Identity | Service account annotation | Access the identity needs |
+|---|---|---|---|
+| `aws` | IRSA or EKS Pod Identity | `eks.amazonaws.com/role-arn` | `secretsmanager:GetSecretValue` on the secrets, `kms:Decrypt` on their key if it has its own |
+| `azure` | AKS workload identity (the chart labels the pods `azure.workload.identity/use`) | `azure.workload.identity/client-id` | the Key Vault Secrets User role |
+| `gcp` | GKE Workload Identity | `iam.gke.io/gcp-service-account` | `roles/secretmanager.secretAccessor` |
+
+Outside Kubernetes (the appliance, a VM), the SDKs' default chains apply: an instance role or
+managed identity, or `AWS_*`, `AZURE_*` and `GOOGLE_APPLICATION_CREDENTIALS`.
+
+**Checks and rotation.**
+- `turgon check` reads every reference. It says how to create a missing secret, and which
+  permission is missing if access is denied.
+- A secret holding a plain value instead of a JSON object is refused, with the reason.
+- Values are cached for five minutes (`TURGON_SECRETS_TTL`).
+- Rotations reach running workers as they do with OpenBao (`--secrets-refresh`, `SIGHUP`).
+
+**Settings.**
+
+| Variable | Used by |
+|---|---|
+| `TURGON_SECRETS` = `aws`, `azure` or `gcp`; `TURGON_SECRETS_PREFIX` | all three |
+| `TURGON_AWS_REGION`, `TURGON_AWS_SECRETS_ENDPOINT` (a VPC endpoint) | AWS |
+| `TURGON_AZURE_VAULT_URL`, `TURGON_AZURE_API_VERSION` (for clouds that lag behind, such as Azure Stack Hub) | Azure |
+| `TURGON_GCP_PROJECT`, `TURGON_GCP_SECRETS_ENDPOINT` | Google Cloud |
+
+**Verification.** Verified locally against emulators, with the real `turgon` binary:
+- **AWS**, with moto: the SDK's SigV4 client read the DSNs, `turgon check` passed,
+  `shop-orders-to-erp` ran, and a password rotation in Postgres and Secrets Manager reconnected
+  the worker. The run waiting for approval then wrote with the new password.
+- **Azure**, with Lowkey Vault: `DefaultAzureCredential` got a managed identity token and
+  followed Key Vault's authentication challenge. The same run and rotation passed.
+- **Google Secret Manager** is covered by unit tests against a fake of its REST API only.
+- None of the three has been tested against a real cloud account yet.
+
 #### Temporal: TLS and encrypted payloads
 
 Everything Turgon passes through Temporal (events, mapped records, write requests and results,
@@ -1186,7 +1241,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/operator`, `cmd/turgon-operator`, `apis/operator` | §11 | The Kubernetes operator: the Integration CRD and its reconciler |
 | `pkg/appliance`, `deploy/appliance` | §11 | The single-host appliance: `turgon appliance`, systemd units, the offline bundle's installer |
 | `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox and change capture events, rollback dry-runs, idempotent writes); `salesforce/` reads by SOQL and the Bulk API 2.0, and subscribes over the Pub/Sub API (`pubsub/`: the gRPC wire protocol); `debezium/` consumes Debezium change events from Kafka |
-| `pkg/secrets` | §9 | Secret references resolved from OpenBao or HashiCorp Vault (KV v2), signing in with Kubernetes service accounts, AppRoles or tokens |
+| `pkg/secrets` | §9 | Secret references resolved from OpenBao or HashiCorp Vault (KV v2), signing in with Kubernetes service accounts, AppRoles or tokens; or from AWS Secrets Manager, Azure Key Vault and Google Secret Manager with the platform's workload identity |
 | `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled list or search events (ascending, or newest-first paged back to the cursor), also received as signed webhooks (Stripe, Shopify, generic HMAC), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/`, `stripetest/` and `hubspottest/` fake the Shopify Admin, Stripe and HubSpot CRM APIs |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references, the webhook inbox |
