@@ -1,0 +1,36 @@
+# Orders still entered in the legacy system reach the new ERP: each open
+# order row inserted into its SQL Server database is captured by Debezium,
+# read from Kafka, and becomes an ERP sales order for the customer's master
+# record. The legacy system is never written to or queried.
+apiVersion: turgon.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: legacy-orders-to-erp
+  version: 1.0.0
+  description: "An order row inserted into the legacy SQL Server system, captured by Debezium, becomes an ERP sales order."
+spec:
+  trigger:
+    source: legacy-erp
+    event: Order.Placed
+  steps:
+    - map:
+        from: legacy-erp.Order
+        to: model.SalesOrder
+        mapping: legacy-order-to-sales-order@1
+    - resolve:
+        entity: model.Customer
+        strategy: exact
+        match:
+          - { field: customerRef, kind: email }
+          - { field: customerRef, kind: domain }
+        autoMatchAbove: 1.0
+    - write:
+        target: erp-db
+        operation: create-sales-order
+        idempotencyKey: "LEGACY-{{ source.id }}"
+        simulate: true
+  policies: [writeback-default]
+  capacity:
+    peakPerSecond: 20
+  slo:
+    p95Latency: 2s

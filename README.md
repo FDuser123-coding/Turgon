@@ -169,6 +169,78 @@ With the fake org, `account <AccountId> <ERP number> <name>` on `sf.cmds` create
 and `accounts 100000` creates many. After the load, a won deal for a loaded account resolves
 without `turgon xref set`.
 
+### Change capture from SQL Server, Oracle, MySQL and Db2: Debezium
+
+Turgon reads Postgres' log itself (`logical-replication`, above). For the other databases,
+[Debezium](https://debezium.io) reads the log (the SQL Server change tables, Oracle LogMiner,
+the MySQL binlog, Db2 ASN) and writes each row change to a Kafka topic, and the `debezium`
+connector consumes that topic. Debezium runs as Kafka Connect or as Debezium Server; Turgon
+only needs the topic. `legacy-orders-to-erp` uses it: every open order inserted into a legacy
+SQL Server system becomes an ERP sales order, and the legacy system is never queried or
+written to.
+
+```yaml
+spec:
+  connector: debezium@^1
+  secretRef: openbao://legacy-erp/kafka          # {"username", "password"} with sasl
+  events:
+    - { name: Order.Placed, entity: Order, interface: debezium }
+  config:
+    brokers: [kafka-1.internal:9093, kafka-2.internal:9093]
+    tls: true                                  # required unless the brokers are on this host
+    sasl: scram-sha-512                        # or scram-sha-256, or plain (over TLS)
+    events:
+      Order.Placed:
+        topic: legacy.dbo.Orders               # <topic.prefix>.<schema>.<table>
+        operations: [create]                   # create, update, delete, read (snapshot rows)
+        match: { status: open }
+        # start: earliest reads what the topic still holds, the snapshot included
+```
+
+- **Nothing lost, nothing read twice.**
+  - Changes are stored in Turgon's inbox in one transaction with the Kafka offsets to resume
+    after them, the same as Salesforce subscriptions.
+  - A new subscription first stores where it starts (the topic's end, or its start with
+    `earliest`). A worker that restarts before the first change therefore does not skip one.
+  - If Kafka deleted changes that were never read (retention), the subscription stops and says
+    so instead of skipping them.
+- **Replays are recognized.**
+  - After Debezium restarts, it sends changes again from its last committed position.
+  - Each change's ID comes from its position in the database log (SQL Server's
+    `change_lsn`/`commit_lsn`/`event_serial_no`, Oracle's SCN, the binlog file and position,
+    Postgres' LSN), plus the row's key and the operation.
+  - The inbox therefore drops the second copy, even though it sits at another Kafka offset.
+- **Values mean what the database stored.** With the JSON converter's schemas on (Kafka
+  Connect's default), Connect's encodings are decoded:
+  - `Decimal` and `VariableScaleDecimal` become exact numbers;
+  - `Date` becomes a date;
+  - `Timestamp`, `MicroTimestamp` and `NanoTimestamp` become UTC timestamps;
+  - `Time` becomes a time of day;
+  - `Json` columns become documents.
+  Without schemas, set `decimal.handling.mode=string`.
+- **The payload** is the row: after the change, or the deleted row for a delete. Under
+  `debezium` it also carries:
+  - the operation (`op`);
+  - the table (`source`);
+  - the time (`ts`);
+  - for an update, the row before it (`before`), so a flow can react to a status changing.
+
+  Tombstones are skipped. A flattened event (the `ExtractNewRecordState` transform) is refused
+  with an explanation, because Turgon needs the envelope.
+- **`turgon check`** connects to the brokers and finds each topic. If a topic is missing, it
+  explains Debezium's naming and the Kafka ACLs the user needs.
+
+Measured with Postgres 16, Debezium Server 3.7.0 (Kafka sink), Apache Kafka 4.3.1 (KRaft)
+and two workers:
+- **Normal run.** An order row inserted into the legacy database became a run with its
+  `DECIMAL`, `DATE` and JSON columns decoded, and was written to the ERP after approval.
+  Draft rows and the snapshot were left alone.
+- **Workers killed.** After `kill -9` of the worker holding the subscription, 5 new rows gave 5
+  events. With every worker down, 3 more rows were read when a worker came back.
+- **Replays.** After Debezium's own `kill -9`, and with 4 changes replayed onto the topic, the
+  inbox held 9 events with 9 distinct IDs.
+- **Throughput.** A burst of 1,000 inserted rows reached the inbox in 3.3 s.
+
 ### Any HTTP API: Shopify to ERP
 
 The `rest` connector integrates HTTP JSON APIs (Shopify, Stripe, HubSpot, in-house services) with
@@ -1037,7 +1109,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow, and one for agent writes; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher; webhook receiver with a durable inbox, reconciled by polling |
 | `pkg/operator`, `cmd/turgon-operator`, `apis/operator` | §11 | The Kubernetes operator: the Integration CRD and its reconciler |
 | `pkg/appliance`, `deploy/appliance` | §11 | The single-host appliance: `turgon appliance`, systemd units, the offline bundle's installer |
-| `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox and change capture events, rollback dry-runs, idempotent writes); `salesforce/` reads by SOQL and the Bulk API 2.0, and subscribes over the Pub/Sub API (`pubsub/`: the gRPC wire protocol) |
+| `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox and change capture events, rollback dry-runs, idempotent writes); `salesforce/` reads by SOQL and the Bulk API 2.0, and subscribes over the Pub/Sub API (`pubsub/`: the gRPC wire protocol); `debezium/` consumes Debezium change events from Kafka |
 | `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled list or search events (ascending, or newest-first paged back to the cursor), also received as signed webhooks (Stripe, Shopify, generic HMAC), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/`, `stripetest/` and `hubspottest/` fake the Shopify Admin, Stripe and HubSpot CRM APIs |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references, the webhook inbox |
@@ -1088,6 +1160,6 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 ## Not built yet
 
 In rough roadmap order (§16, §19): Salesforce managed subscriptions (the Pub/Sub API keeping the replay position);
-change capture from databases other than Postgres (Debezium); an external Splink service; the metadata
+an external Splink service; the metadata
 graph and discovery; A2A streaming and push notifications; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

@@ -1,0 +1,24 @@
+# Change capture from databases Turgon has no log reader for: SQL Server,
+# Oracle, MySQL, MariaDB, Db2 (and Postgres). Debezium reads the database's
+# log and writes each row change to a Kafka topic; Turgon consumes the
+# topic. Each Connection names its tables' topics (pkg/connector/debezium).
+apiVersion: turgon.dev/v1alpha1
+kind: ConnectorManifest
+metadata:
+  name: debezium
+  version: 1.0.0
+spec:
+  system: "SQL Server, Oracle, MySQL, MariaDB, Db2 and Postgres through Debezium 2.x/3.x and Kafka"
+  runtime: native
+  auth:
+    # None on a local broker; SASL/SCRAM (or PLAIN over TLS) with a Kafka user.
+    methods: [none, sasl-scram, sasl-plain]
+    secretRef: openbao://kafka/turgon
+  interfaces:
+    events:
+      # Debezium's change events (JSON converter), read from Kafka with the
+      # offsets stored in Turgon's inbox transaction.
+      - kind: debezium
+  limits:
+    maxConcurrentCalls: 4
+    requestsPerSecond: 100
