@@ -28,6 +28,7 @@
       ],
       "flows": [
         "hubspot-won-deals-to-erp",
+        "legacy-orders-to-erp",
         "salesforce-won-deals-to-erp",
         "salesforce-won-deals-to-erp-cdc",
         "shop-order-rows-to-erp",
@@ -55,6 +56,24 @@
       "flows": [
         "hubspot-won-deals-to-dynamics",
         "hubspot-won-deals-to-erp"
+      ]
+    },
+    {
+      "name": "legacy-erp",
+      "description": "The legacy order system on SQL Server, its order table captured by Debezium.",
+      "connector": "debezium",
+      "product": "SQL Server, Oracle, MySQL, MariaDB, Db2 and Postgres through Debezium 2.x/3.x and Kafka",
+      "role": "source",
+      "events": [
+        {
+          "name": "Order.Placed",
+          "entity": "Order",
+          "delivery": "change capture"
+        }
+      ],
+      "operations": [],
+      "flows": [
+        "legacy-orders-to-erp"
       ]
     },
     {
@@ -334,6 +353,46 @@
         "hubspot-crm"
       ],
       "slo": "p95 10s"
+    },
+    {
+      "name": "legacy-orders-to-erp",
+      "version": "1.0.0",
+      "description": "An order row inserted into the legacy SQL Server system, captured by Debezium, becomes an ERP sales order.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "legacy-erp",
+        "event": "Order.Placed",
+        "delivery": "change capture"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "legacy-order-to-sales-order@1.0.0",
+          "from": "legacy-erp.Order",
+          "to": "model.SalesOrder",
+          "fields": 6
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "exact"
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "erp-db",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "rollback",
+          "compensation": "cancel-sales-order"
+        }
+      ],
+      "targets": [
+        "erp-db"
+      ],
+      "slo": "p95 2s"
     },
     {
       "name": "s4-sales-orders-to-dynamics",

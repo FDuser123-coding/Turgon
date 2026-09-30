@@ -1,0 +1,24 @@
+# The legacy order system, a SQL Server database nobody wants touched.
+# Debezium's SQL Server connector reads its change tables (CDC enabled on
+# dbo.Orders) and writes to Kafka with topic.prefix legacy; Turgon reads
+# the topic as a Kafka user (the secret, {"username", "password"}).
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata:
+  name: legacy-erp
+  description: "The legacy order system on SQL Server, its order table captured by Debezium."
+spec:
+  connector: debezium@^1
+  secretRef: openbao://legacy-erp/kafka
+  entities: [Order]
+  events:
+    - { name: Order.Placed, entity: Order, interface: debezium }
+  config:
+    brokers: [kafka-1.internal:9093, kafka-2.internal:9093]
+    tls: true
+    sasl: scram-sha-512
+    events:
+      Order.Placed:
+        topic: legacy.dbo.Orders
+        operations: [create]
+        match: { status: open }

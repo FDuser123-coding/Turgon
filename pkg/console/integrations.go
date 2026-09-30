@@ -273,6 +273,9 @@ func delivery(spec *compiler.RuntimeSpec, trig compiler.WorkflowSource) string {
 	}
 	for _, c := range spec.Spec.Connectors {
 		if c.Endpoint == trig.Endpoint {
+			if c.Name == "debezium" {
+				return "change capture" // read from the database's log by Debezium
+			}
 			_ = json.Unmarshal(c.Config, &cfg)
 		}
 	}

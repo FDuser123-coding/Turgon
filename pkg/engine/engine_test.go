@@ -23,6 +23,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/catalog"
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
+	"github.com/fduser123-coding/turgon/pkg/connector/debezium"
 	"github.com/fduser123-coding/turgon/pkg/connector/postgres"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/dataversetest"
@@ -120,7 +121,8 @@ func newFixtureWith(t *testing.T, recipe string, extra connector.StaticSecrets, 
 		secrets[k] = v
 	}
 	rt, err := New(ctx, spec, Options{
-		Registry: connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory, rest.Name: rest.Factory, sap.Name: sap.Factory},
+		Registry: connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory, rest.Name: rest.Factory, sap.Name: sap.Factory,
+			debezium.Name: debezium.Factory},
 		Secrets:  secrets,
 		Store:    store,
 		Resolver: store,

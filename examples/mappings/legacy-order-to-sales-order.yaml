@@ -1,0 +1,20 @@
+# A row of the legacy system's dbo.Orders, as Debezium captures it (DECIMAL
+# totals, DATE order dates and the JSON items column already decoded).
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: legacy-order-to-sales-order
+  version: 1.0.0
+spec:
+  from: legacy-erp.Order
+  to: model.SalesOrder
+  fields:
+    - { target: externalId,  expression: "'LEGACY-' & $string(id)",   origin: human, confidence: 1.0 }
+    - { target: customerRef, expression: "$lowercase(customer_email)", origin: human, confidence: 0.99 }
+    - { target: orderDate,   expression: "order_date",                 origin: human, confidence: 1.0 }
+    - { target: netValue,    expression: "total",                      origin: human, confidence: 1.0 }
+    - { target: currency,    expression: "$uppercase(currency)",       origin: human, confidence: 1.0 }
+    - target: lines
+      expression: "items.{ 'material': sku, 'quantity': qty }[]"
+      origin: human
+      confidence: 0.98
