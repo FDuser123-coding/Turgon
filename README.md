@@ -36,7 +36,7 @@ Needs Postgres and a Temporal server (`temporal server start-dev`).
 export TURGON_DATABASE_URL=postgres://localhost:5432/turgon_demo
 psql "$TURGON_DATABASE_URL" -f examples/sql/demo.sql           # demo shop + ERP schemas
 make spec                                                      # -> runtime-spec.json
-bin/turgon secrets runtime-spec.json                           # env vars for each secretRef
+bin/turgon secrets runtime-spec.json                           # env vars (or OpenBao paths) for each secretRef
 export TURGON_SECRET_SHOP_DB_DSN=$TURGON_DATABASE_URL TURGON_SECRET_ERP_DB_DSN=$TURGON_DATABASE_URL
 bin/turgon xref set --entity Customer --system shop-db --source ada@example.com --master C-100
 bin/turgon run -s runtime-spec.json &                          # worker + event dispatcher
@@ -770,7 +770,7 @@ the card's URL to its own.
 ### Install on Kubernetes
 
 The chart in `deploy/helm/turgon` installs one worker per compiled spec and the console into
-a single namespace: no cluster roles, no service-account tokens, the "restricted" pod security
+a single namespace: no cluster roles, no API server tokens, the "restricted" pod security
 profile, read-only root filesystems and deny-by-default network policies. Turgon's state and
 the shared, hash-chained audit log live in Postgres: an existing database, or a CloudNativePG
 cluster the chart creates. Temporal is expected to be reachable at `temporal.address`.
@@ -796,6 +796,64 @@ To receive webhooks, add the signing secrets to the connection secrets and
 `--set workers.webhooks.enabled=true --set workers.webhooks.ingress.enabled=true
 --set workers.webhooks.ingress.host=hooks.example.com`; the ingress routes only
 `/webhooks/<endpoint>/<event>` for the events configured for webhooks.
+
+#### Connection secrets from OpenBao or Vault
+
+Every `secretRef` in a spec (`openbao://shop-db/dsn`) can be read from OpenBao or HashiCorp
+Vault instead of environment variables. The reference is the key `dsn` of the KV v2 secret at
+path `shop-db`, read from `secret/data/shop-db`; `vault://` works too. A value may be a string
+or a JSON object; Salesforce's credentials are then kept as fields.
+
+```sh
+bao kv put -mount=secret shop-db dsn='postgres://...'
+bao policy write turgon-read - <<'EOF_POLICY'
+path "secret/data/shop-db" { capabilities = ["read"] }
+path "secret/data/erp-db"  { capabilities = ["read"] }
+EOF_POLICY
+bao write auth/kubernetes/role/turgon bound_service_account_names=turgon \
+  bound_service_account_namespaces=integrations audience=openbao token_policies=turgon-read token_ttl=1h
+helm upgrade turgon deploy/helm/turgon -n integrations --reuse-values \
+  --set secrets.backend=openbao --set secrets.openbao.address=https://openbao.openbao.svc:8200 \
+  --set secrets.openbao.caSecret=openbao-ca     # a Secret with ca.crt, if the server's CA is private
+```
+
+- **How pods sign in.**
+  - With `kubernetes` auth, the default, each pod mounts a service account token for OpenBao
+    alone. It is projected, bound to the audience `openbao`, valid for an hour and rotated by
+    the kubelet.
+  - The pods still mount no API server token.
+  - The role must name the release's service account (the release's full name, `turgon`
+    here), its namespace, and the audience.
+  - `approle` (`secrets.openbao.existingSecret` with key `secret-id`) and `token` (key
+    `token`) are the alternatives. On the appliance, set the `TURGON_OPENBAO_*` variables in
+    `/etc/turgon/turgon.env`.
+- **Least privilege.** Turgon only reads `<mount>/data/<path>`. The policy can name each path
+  a spec uses, and `turgon secrets <spec>` lists them.
+- **`turgon check`** (and `helm test`) signs in and reads every reference. Each failure says
+  what to fix:
+  - a role that does not bind the pod;
+  - a policy without read on the path;
+  - a secret that was never written, or whose latest version was deleted (restore it with
+    `kv undelete`).
+
+  Values never appear in checks, logs or the audit log.
+- **Caching and rotation.**
+  - Values are cached for five minutes (`TURGON_OPENBAO_TTL`).
+  - Login tokens are replaced at two thirds of their lease, or at once if revoked.
+  - Connectors read their secrets when they start, so a rotated password reaches a worker
+    at its next restart, for example `kubectl rollout restart`.
+- **Settings.** `TURGON_SECRETS=openbao` and `TURGON_OPENBAO_{ADDR, MOUNT, NAMESPACE, CACERT,
+  AUTH, ROLE, AUTH_MOUNT, JWT_FILE, SECRET_ID_FILE, TOKEN, TTL}`. `BAO_*` and `VAULT_*`
+  (`BAO_ADDR`, `VAULT_TOKEN`, ...) are read as fallbacks. HTTPS is required unless the server
+  is on the same host.
+
+Verified live against Vault 2.1.1 and OpenBao 2.7.0 dev servers (`go test -tags live`, see
+`pkg/secrets/live_test.go`):
+- **Kubernetes auth**, with a real kube-apiserver that issues the projected token and answers
+  OpenBao's TokenReview. A token for another audience, or from an unbound namespace, is
+  refused.
+- **AppRole**, and **`shop-orders-to-erp` run end to end** with both DSNs read from Vault.
+  After approval the order reached the ERP, with no DSN or token in the logs or the audit log.
 
 #### Temporal: TLS and encrypted payloads
 
@@ -1110,6 +1168,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/operator`, `cmd/turgon-operator`, `apis/operator` | §11 | The Kubernetes operator: the Integration CRD and its reconciler |
 | `pkg/appliance`, `deploy/appliance` | §11 | The single-host appliance: `turgon appliance`, systemd units, the offline bundle's installer |
 | `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox and change capture events, rollback dry-runs, idempotent writes); `salesforce/` reads by SOQL and the Bulk API 2.0, and subscribes over the Pub/Sub API (`pubsub/`: the gRPC wire protocol); `debezium/` consumes Debezium change events from Kafka |
+| `pkg/secrets` | §9 | Secret references resolved from OpenBao or HashiCorp Vault (KV v2), signing in with Kubernetes service accounts, AppRoles or tokens |
 | `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled list or search events (ascending, or newest-first paged back to the cursor), also received as signed webhooks (Stripe, Shopify, generic HMAC), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/`, `stripetest/` and `hubspottest/` fake the Shopify Admin, Stripe and HubSpot CRM APIs |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references, the webhook inbox |

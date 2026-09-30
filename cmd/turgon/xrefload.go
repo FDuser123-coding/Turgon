@@ -58,7 +58,11 @@ func xrefLoadCmd() *cobra.Command {
 			if !ok {
 				return fmt.Errorf("connector %s is not built into this binary", cfg.Name)
 			}
-			inst, err := factory(ctx, cfg, connector.EnvSecrets{})
+			secretsFrom, err := openSecrets()
+			if err != nil {
+				return err
+			}
+			inst, err := factory(ctx, cfg, secretsFrom)
 			if err != nil {
 				return err
 			}

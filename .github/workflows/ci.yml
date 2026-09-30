@@ -177,6 +177,20 @@ jobs:
           if helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" "${backup[@]}" --set database.cloudNativePG.recovery.enabled=true >/dev/null 2>&1; then
             echo "a restore archiving over its source was not refused"; exit 1
           fi
+          # Connection secrets from OpenBao: pods sign in with a projected,
+          # audience-bound token (or an AppRole), and mount no other token.
+          helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" --set secrets.backend=openbao \
+            --set secrets.openbao.address=https://openbao.openbao.svc:8200 --set secrets.openbao.caSecret=openbao-ca \
+            > /tmp/rendered-openbao.yaml
+          grep -q 'audience: "openbao"' /tmp/rendered-openbao.yaml
+          grep -q 'value: openbao' /tmp/rendered-openbao.yaml
+          if grep -q 'automountServiceAccountToken: true' /tmp/rendered-openbao.yaml; then echo "a pod mounts its service account token"; exit 1; fi
+          helm template turgon deploy/helm/turgon -n turgon --kube-version 1.31.0 "${args[@]}" --set operator.enabled=true \
+            --set secrets.backend=openbao --set secrets.openbao.address=https://openbao.openbao.svc:8200 \
+            --set secrets.openbao.auth=approle --set secrets.openbao.role=turgon-role-id \
+            --set secrets.openbao.existingSecret=turgon-approle > /tmp/rendered-openbao-operator.yaml
+          grep -q 'TURGON_OPENBAO_SECRET_ID_FILE' /tmp/rendered-openbao-operator.yaml
+          go run ./cmd/turgon-operator --validate /tmp/rendered-openbao-operator.yaml
           # With the operator, specs become Integrations; the operator
           # accepts what the chart renders for it.
           helm template turgon deploy/helm/turgon -n turgon --kube-version 1.31.0 "${args[@]}" --set operator.enabled=true \
@@ -196,7 +210,7 @@ jobs:
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
             /tmp/rendered.yaml /tmp/rendered-oidc.yaml /tmp/rendered-tls.yaml /tmp/rendered-monitoring.yaml \
             /tmp/rendered-backup.yaml /tmp/rendered-restore.yaml /tmp/rendered-signed.yaml /tmp/rendered-operator.yaml \
-            /tmp/rendered-operator-unsigned.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
+            /tmp/rendered-operator-unsigned.yaml /tmp/rendered-openbao.yaml /tmp/rendered-openbao-operator.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
       - name: Lint the Dockerfile
         run: hadolint Dockerfile
 

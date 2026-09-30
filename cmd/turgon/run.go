@@ -190,9 +190,13 @@ func runCmd() *cobra.Command {
 				log = fl
 			}
 
+			secretsFrom, err := openSecrets()
+			if err != nil {
+				return err
+			}
 			rt, err := engine.New(ctx, spec, engine.Options{
 				Registry: connectorRegistry(),
-				Secrets:  connector.EnvSecrets{},
+				Secrets:  secretsFrom,
 				Store:    store, Resolver: store, Audit: log,
 				Webhooks: webhookAddr != "",
 			})
@@ -518,17 +522,26 @@ func xrefCmd() *cobra.Command {
 func secretsCmd() *cobra.Command {
 	return &cobra.Command{
 		Use:   "secrets SPEC",
-		Short: "List the environment variables `turgon run` reads secrets from",
-		Args:  cobra.ExactArgs(1),
+		Short: "List where `turgon run` reads each secret: environment variables, or OpenBao/Vault paths",
+		Long: "List each secret reference a spec uses and where it is read from: the TURGON_SECRET_*\n" +
+			"variable (TURGON_SECRETS=env, the default) or the OpenBao/Vault KV path and key\n" +
+			"(TURGON_SECRETS=openbao). `turgon check` reads them.",
+		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			spec, err := loadSpec(args[0])
 			if err != nil {
 				return err
 			}
+			b, err := openSecrets()
+			if err != nil {
+				return err
+			}
 			for _, c := range spec.Spec.Connectors {
-				fmt.Fprintf(cmd.OutOrStdout(), "%-14s %-44s %s\n", c.Endpoint, c.SecretRef, connector.EnvName(c.SecretRef))
-				for _, ref := range connector.ConfigSecretRefs(c.Config) {
-					fmt.Fprintf(cmd.OutOrStdout(), "%-14s %-44s %s\n", c.Endpoint, ref, connector.EnvName(ref))
+				refs := append([]string{c.SecretRef}, connector.ConfigSecretRefs(c.Config)...)
+				for _, ref := range refs {
+					if ref != "" {
+						fmt.Fprintf(cmd.OutOrStdout(), "%-14s %-44s %s\n", c.Endpoint, ref, b.Where(ref))
+					}
 				}
 			}
 			return nil

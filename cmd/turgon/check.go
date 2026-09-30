@@ -78,6 +78,16 @@ func checkCmd() *cobra.Command {
 				}
 			}
 
+			secretsFrom, err := openSecrets()
+			if err != nil {
+				report("turgon", connector.Fail("secrets", err.Error(), "Set TURGON_SECRETS to env or openbao, and the TURGON_OPENBAO_* settings for OpenBao."))
+				fmt.Fprintf(out, "%d check(s) failed\n", failed)
+				return errSilent
+			}
+			for _, r := range checkSecrets(ctx, secretsFrom, specSecretRefs(spec)) {
+				report("turgon", r)
+			}
+
 			registry := connectorRegistry()
 			conns := spec.Spec.Connectors
 			sort.Slice(conns, func(i, j int) bool { return conns[i].Endpoint < conns[j].Endpoint })
@@ -87,9 +97,9 @@ func checkCmd() *cobra.Command {
 					report(c.Endpoint, connector.Fail("runtime", "no runtime for connector "+c.Name+" in this worker", "This connector runs on another worker type; check it there."))
 					continue
 				}
-				inst, err := factory(ctx, c, connector.EnvSecrets{})
+				inst, err := factory(ctx, c, secretsFrom)
 				if err != nil {
-					report(c.Endpoint, connector.Fail("configure", err.Error(), fmt.Sprintf("Set %s to the secret for %s.", connector.EnvName(c.SecretRef), c.SecretRef)))
+					report(c.Endpoint, connector.Fail("configure", err.Error(), secretsFrom.Missing(c.SecretRef)))
 					continue
 				}
 				if chk, ok := inst.(connector.Checker); ok {
