@@ -12,8 +12,12 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -152,12 +156,14 @@ func runCmd() *cobra.Command {
 	var specPath, dbURL, auditPath string
 	var poll, approvalTimeout, reconcile time.Duration
 	var healthAddr, webhookAddr, consoleURL, pollers string
+	var secretsRefresh time.Duration
 	cmd := &cobra.Command{
 		Use:   "run",
 		Short: "Run a compiled runtime spec: Temporal worker plus event dispatcher",
 		Long: "Run connects the spec's endpoints, registers the integration workflow with Temporal\n" +
 			"and polls event sources, starting one workflow run per event. Secrets are read from\n" +
-			"TURGON_SECRET_* environment variables (see `turgon secrets`).",
+			"TURGON_SECRET_* environment variables or OpenBao/Vault (see `turgon secrets`); with\n" +
+			"OpenBao a rotated secret reconnects the connectors, and SIGHUP reconnects them at once.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if dbURL == "" {
 				return errors.New("--database-url (or TURGON_DATABASE_URL) is required for Turgon's state")
@@ -194,26 +200,12 @@ func runCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			rt, err := engine.New(ctx, spec, engine.Options{
-				Registry: connectorRegistry(),
-				Secrets:  secretsFrom,
-				Store:    store, Resolver: store, Audit: log,
-				Webhooks: webhookAddr != "",
-			})
-			if err != nil {
-				return err
-			}
-			defer rt.Close()
 			// Channels come from TURGON_NOTIFY_* variables (the webhook URLs
 			// are credentials).
 			hub, err := notify.FromEnv(consoleURL, &http.Client{Timeout: 15 * time.Second})
 			if err != nil {
 				return fmt.Errorf("notifications: %w", err)
 			}
-			if hub != nil {
-				rt.Activities.Notifier = hub
-			}
-
 			c, err := tf.dial()
 			if err != nil {
 				return fmt.Errorf("temporal: %w", err)
@@ -226,39 +218,56 @@ func runCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			w := worker.New(c, tf.taskQueue, wopts)
-			engine.Register(w, rt.Activities)
-			if err := w.Start(); err != nil {
-				return err
-			}
-			defer w.Stop()
 			if healthAddr != "" {
 				go serveHealth(ctx, healthAddr, pool, cmd.ErrOrStderr())
 			}
-
-			d := &engine.Dispatcher{Runtime: rt, Cursors: store, Starter: engine.TemporalStarter{Client: c, TaskQueue: tf.taskQueue},
-				ApprovalTimeout: approvalTimeout, Inbox: store, Reconcile: reconcile}
 			out := cmd.ErrOrStderr()
-			fmt.Fprintf(out, "turgon: running %s (%s, level %s), %d workflow(s) on task queue %s, polling every %s\n",
-				spec.Metadata.Name, spec.Metadata.Digest[:19], spec.Metadata.Level, len(spec.Spec.Workflows), tf.taskQueue, poll)
-			if hub != nil {
-				var names []string
-				for _, ch := range hub.Channels {
-					names = append(names, ch.Name())
-				}
-				fmt.Fprintf(out, "turgon: notifying %s about approvals, steward work and failed compensations\n", strings.Join(names, ", "))
-			}
 			wake := make(chan struct{}, 1)
+			woken := func() {
+				select {
+				case wake <- struct{}{}:
+				default:
+				}
+			}
+
+			// The connectors, the Temporal worker, the dispatcher and the
+			// subscriptions form a generation, rebuilt when a secret changes
+			// (or on SIGHUP) so rotated credentials are used without a restart.
+			newRuntime := func() (*engine.Runtime, error) {
+				rt, err := engine.New(ctx, spec, engine.Options{
+					Registry: connectorRegistry(),
+					Secrets:  secretsFrom,
+					Store:    store, Resolver: store, Audit: log,
+					Webhooks: webhookAddr != "",
+				})
+				if err == nil && hub != nil {
+					rt.Activities.Notifier = hub
+				}
+				return rt, err
+			}
+			refs := specSecretRefs(spec)
+			prints, err := secretsFrom.Fingerprints(ctx, refs)
+			if err != nil {
+				return err
+			}
+			rt, err := newRuntime()
+			if err != nil {
+				return err
+			}
+			var hooks atomic.Pointer[http.Handler]
 			if webhookAddr != "" {
 				srv := &http.Server{Addr: webhookAddr, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute,
-					Handler: engine.WebhookHandler(rt, store, func() {
-						select {
-						case wake <- struct{}{}:
-						default:
+					Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						h := hooks.Load()
+						if h == nil { // not ready yet: the provider retries
+							http.Error(w, "starting", http.StatusServiceUnavailable)
+							return
 						}
+						(*h).ServeHTTP(w, r)
 					})}
 				ln, err := net.Listen("tcp", webhookAddr)
 				if err != nil {
+					rt.Close()
 					return fmt.Errorf("webhooks: %w", err)
 				}
 				go func() { _ = srv.Serve(ln) }()
@@ -270,27 +279,110 @@ func runCmd() *cobra.Command {
 					}
 				}
 			}
-			if len(rt.Streams) > 0 {
-				streams := &engine.Streams{Runtime: rt, Inbox: store, Locker: store,
-					Delivered: func() {
-						select {
-						case wake <- struct{}{}:
-						default:
-						}
-					},
-					Log: func(format string, args ...any) { fmt.Fprintf(out, format+"\n", args...) }}
-				go streams.Run(ctx)
-				for ep, events := range rt.Streams {
-					for ev := range events {
-						fmt.Fprintf(out, "turgon: subscribed to %s %s (one worker at a time holds the subscription)\n", ep, ev)
+			start := func(rt *engine.Runtime) (*generation, error) {
+				g := &generation{rt: rt, done: make(chan struct{})}
+				g.w = worker.New(c, tf.taskQueue, wopts)
+				engine.Register(g.w, rt.Activities)
+				if err := g.w.Start(); err != nil {
+					rt.Close()
+					return nil, err
+				}
+				g.d = &engine.Dispatcher{Runtime: rt, Cursors: store, Starter: engine.TemporalStarter{Client: c, TaskQueue: tf.taskQueue},
+					ApprovalTimeout: approvalTimeout, Inbox: store, Reconcile: reconcile}
+				if webhookAddr != "" {
+					h := engine.WebhookHandler(rt, store, woken)
+					hooks.Store(&h)
+				}
+				sctx, cancel := context.WithCancel(ctx)
+				g.cancel = cancel
+				go func() {
+					defer close(g.done)
+					if len(rt.Streams) > 0 {
+						(&engine.Streams{Runtime: rt, Inbox: store, Locker: store, Delivered: woken,
+							Log: func(format string, args ...any) { fmt.Fprintf(out, format+"\n", args...) }}).Run(sctx)
 					}
+				}()
+				return g, nil
+			}
+			gen, err := start(rt)
+			if err != nil {
+				return err
+			}
+			defer func() { gen.stop() }()
+
+			fmt.Fprintf(out, "turgon: running %s (%s, level %s), %d workflow(s) on task queue %s, polling every %s\n",
+				spec.Metadata.Name, spec.Metadata.Digest[:19], spec.Metadata.Level, len(spec.Spec.Workflows), tf.taskQueue, poll)
+			if hub != nil {
+				var names []string
+				for _, ch := range hub.Channels {
+					names = append(names, ch.Name())
+				}
+				fmt.Fprintf(out, "turgon: notifying %s about approvals, steward work and failed compensations\n", strings.Join(names, ", "))
+			}
+			for ep, events := range rt.Streams {
+				for ev := range events {
+					fmt.Fprintf(out, "turgon: subscribed to %s %s (one worker at a time holds the subscription)\n", ep, ev)
 				}
 			}
+			hup := make(chan os.Signal, 1)
+			signal.Notify(hup, syscall.SIGHUP)
+			defer signal.Stop(hup)
+			var refresh <-chan time.Time
+			if secretsRefresh > 0 && secretsFrom.Rotates() {
+				t := time.NewTicker(secretsRefresh)
+				defer t.Stop()
+				refresh = t.C
+				fmt.Fprintf(out, "turgon: checking %d secret(s) for rotation every %s\n", len(refs), secretsRefresh)
+			}
+			// reconnect builds the next generation with the secrets as they
+			// are now, then retires the current one. If the new secrets do not
+			// work, the current connections are kept.
+			refused := "" // the last refusal reported, not repeated at every check
+			reconnect := func(why string, changed []string) bool {
+				next, err := newRuntime()
+				if err != nil {
+					fmt.Fprintf(out, "turgon: %s, but the new connections failed; keeping the current ones: %v\n", why, err)
+					return false
+				}
+				// Connectors may connect lazily: check the ones whose secrets
+				// changed (all of them on SIGHUP) before switching, so a wrong
+				// password in the secret manager does not stop a working worker.
+				msgs := regressions(ctx, gen.rt, next, endpointsUsing(spec, changed))
+				if len(msgs) > 0 {
+					next.Close()
+					key := why + "\x00" + strings.Join(msgs, "\x00")
+					if key == refused {
+						return false
+					}
+					refused = key
+					fmt.Fprintf(out, "turgon: %s, but the new connections failed their checks; keeping the current ones: %s\n", why, strings.Join(msgs, "; "))
+					if _, err := log.Record("turgon", "connections.reload-refused", map[string]any{"spec": spec.Metadata.Name, "reason": why, "secrets": changed, "failed": msgs}); err != nil {
+						fmt.Fprintf(out, "turgon: audit: %v\n", err)
+					}
+					return false
+				}
+				gen.stop()
+				g, err := start(next)
+				if err != nil {
+					// The worker could not start again: exit, and let the
+					// supervisor restart the process.
+					fmt.Fprintf(out, "turgon: restarting the worker failed: %v\n", err)
+					stop()
+					return false
+				}
+				gen, refused = g, ""
+				fmt.Fprintf(out, "turgon: %s; reconnected\n", why)
+				if _, err := log.Record("turgon", "connections.reloaded", map[string]any{"spec": spec.Metadata.Name, "reason": why, "secrets": changed}); err != nil {
+					fmt.Fprintf(out, "turgon: audit: %v\n", err)
+				}
+				return true
+			}
+
 			ticker := time.NewTicker(poll)
 			defer ticker.Stop()
 			pruned := time.Time{}
 			for {
-				n, err := d.Poll(ctx)
+				n, err := gen.d.Poll(ctx)
 				if n > 0 {
 					fmt.Fprintf(out, "turgon: started %d run(s)\n", n)
 				}
@@ -311,6 +403,24 @@ func runCmd() *cobra.Command {
 					return nil
 				case <-ticker.C:
 				case <-wake:
+				case <-hup:
+					p, err := secretsFrom.Fingerprints(ctx, refs)
+					if reconnect("reload requested (SIGHUP)", nil) && err == nil {
+						prints = p
+					}
+				case <-refresh:
+					p, err := secretsFrom.Fingerprints(ctx, refs)
+					if err != nil {
+						// The secret manager is unreachable: keep going with
+						// what the connectors have.
+						fmt.Fprintf(out, "turgon: checking secrets for rotation: %v\n", err)
+						continue
+					}
+					// A refused change is tried again at the next check.
+					if changed := prints.changed(p); len(changed) > 0 &&
+						reconnect(fmt.Sprintf("secret %s changed", strings.Join(changed, ", ")), changed) {
+						prints = p
+					}
 				}
 			}
 		},
@@ -326,7 +436,72 @@ func runCmd() *cobra.Command {
 	cmd.Flags().StringVar(&consoleURL, "console-url", os.Getenv("TURGON_CONSOLE_URL"), "the console's URL, linked from notifications, e.g. https://turgon.example.com")
 	cmd.Flags().DurationVar(&reconcile, "reconcile", engine.DefaultReconcile, "how often events received by webhook are also polled, for missed deliveries")
 	cmd.Flags().DurationVar(&approvalTimeout, "approval-timeout", engine.DefaultApprovalTimeout, "reject approvals nobody answers within this time")
+	cmd.Flags().DurationVar(&secretsRefresh, "secrets-refresh", 5*time.Minute, "with OpenBao, how often secrets are read again; a changed one reconnects the connectors (0: never; SIGHUP reconnects at once)")
 	return cmd
+}
+
+// regressions checks the new connections against the current ones and
+// returns the checks the current connections pass and the new ones fail: a
+// wrong password in the secret manager. A check failing either way (a
+// missing permission), or one the current connections cannot even reach
+// (their password was revoked), does not hold the new connections back.
+func regressions(ctx context.Context, now, next *engine.Runtime, endpoints []string) []string {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	return regressionsOf(now.Verify(ctx, endpoints...), next.Verify(ctx, endpoints...))
+}
+
+func regressionsOf(before, after map[string][]connector.CheckResult) []string {
+	var out []string
+	for ep, rs := range after {
+		for _, r := range rs {
+			if !r.OK && slices.ContainsFunc(before[ep], func(o connector.CheckResult) bool { return o.Name == r.Name && o.OK }) {
+				out = append(out, fmt.Sprintf("%s: %s: %s", ep, r.Name, r.Detail))
+			}
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+// endpointsUsing returns the endpoints whose connectors use one of the
+// secret references; none for no references (then every endpoint counts).
+func endpointsUsing(spec *compiler.RuntimeSpec, refs []string) []string {
+	var out []string
+	for _, c := range spec.Spec.Connectors {
+		uses := append([]string{c.SecretRef}, connector.ConfigSecretRefs(c.Config)...)
+		for _, u := range uses {
+			if slices.Contains(refs, u) {
+				out = append(out, c.Endpoint)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// generation is what `turgon run` rebuilds when secrets change: the
+// connectors, the Temporal worker, the dispatcher and the subscriptions.
+type generation struct {
+	rt     *engine.Runtime
+	w      worker.Worker
+	d      *engine.Dispatcher
+	cancel context.CancelFunc
+	done   chan struct{}
+	once   sync.Once
+}
+
+// stop ends the subscriptions, lets the worker finish the activities it is
+// running (up to the worker's stop timeout; Temporal retries the rest on
+// the next generation, and writes are idempotent), then closes the
+// connectors.
+func (g *generation) stop() {
+	g.once.Do(func() {
+		g.cancel()
+		<-g.done
+		g.w.Stop()
+		g.rt.Close()
+	})
 }
 
 // workerOptions sets how many requests the worker keeps open to Temporal
@@ -344,7 +519,9 @@ func workerOptions(pollers string) (worker.Options, error) {
 		}
 		b = worker.NewPollerBehaviorSimpleMaximum(worker.PollerBehaviorSimpleMaximumOptions{MaximumNumberOfPollers: n})
 	}
-	return worker.Options{WorkflowTaskPollerBehavior: b, ActivityTaskPollerBehavior: b}, nil
+	// Running activities get a minute to finish when the worker stops (at
+	// shutdown, or to reconnect with rotated secrets).
+	return worker.Options{WorkflowTaskPollerBehavior: b, ActivityTaskPollerBehavior: b, WorkerStopTimeout: time.Minute}, nil
 }
 
 // inboxRetention keeps webhook deliveries long enough to drop every

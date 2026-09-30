@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"sort"
@@ -20,6 +22,39 @@ type secretBackend interface {
 	Where(ref string) string
 	// Missing says how to provide a reference that could not be read.
 	Missing(ref string) string
+	// Fingerprints reads every reference now (not from a cache) and
+	// returns a hash of each value, to notice rotations.
+	Fingerprints(ctx context.Context, refs []string) (fingerprints, error)
+	// Rotates reports whether values can change while Turgon runs.
+	Rotates() bool
+}
+
+// fingerprints are SHA-256 hashes of secret values by reference: enough to
+// tell that a value changed, without keeping it.
+type fingerprints map[string]string
+
+func (f fingerprints) changed(now fingerprints) []string {
+	var out []string
+	for ref, h := range now {
+		if f[ref] != h {
+			out = append(out, ref)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func fingerprint(ctx context.Context, r connector.SecretResolver, refs []string) (fingerprints, error) {
+	out := fingerprints{}
+	for _, ref := range refs {
+		v, err := r.Resolve(ctx, ref)
+		if err != nil {
+			return nil, err
+		}
+		sum := sha256.Sum256([]byte(v))
+		out[ref] = hex.EncodeToString(sum[:])
+	}
+	return out, nil
 }
 
 func openSecrets() (secretBackend, error) {
@@ -39,12 +74,24 @@ func openSecrets() (secretBackend, error) {
 
 type envBackend struct{ connector.EnvSecrets }
 
+// Environment variables cannot change inside a running process.
+func (envBackend) Rotates() bool { return false }
+func (b envBackend) Fingerprints(ctx context.Context, refs []string) (fingerprints, error) {
+	return fingerprint(ctx, b, refs)
+}
+
 func (envBackend) Where(ref string) string { return connector.EnvName(ref) }
 func (envBackend) Missing(ref string) string {
 	return fmt.Sprintf("Set %s to the secret for %s.", connector.EnvName(ref), ref)
 }
 
 type openBaoBackend struct{ *secrets.OpenBao }
+
+func (openBaoBackend) Rotates() bool { return true }
+func (b openBaoBackend) Fingerprints(ctx context.Context, refs []string) (fingerprints, error) {
+	b.Forget() // read what OpenBao holds now, not the cache
+	return fingerprint(ctx, b, refs)
+}
 
 func (b openBaoBackend) Missing(ref string) string {
 	return fmt.Sprintf("Put the secret in OpenBao at %s, readable by the token Turgon signs in with.", b.Where(ref))

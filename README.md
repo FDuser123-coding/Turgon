@@ -837,11 +837,21 @@ helm upgrade turgon deploy/helm/turgon -n integrations --reuse-values \
     `kv undelete`).
 
   Values never appear in checks, logs or the audit log.
-- **Caching and rotation.**
-  - Values are cached for five minutes (`TURGON_OPENBAO_TTL`).
-  - Login tokens are replaced at two thirds of their lease, or at once if revoked.
-  - Connectors read their secrets when they start, so a rotated password reaches a worker
-    at its next restart, for example `kubectl rollout restart`.
+- **Caching.** Values are cached for five minutes (`TURGON_OPENBAO_TTL`). Login tokens are
+  replaced at two thirds of their lease, or at once if revoked.
+- **Rotation without a restart.** Workers read their secrets again every
+  `--secrets-refresh` (5 minutes by default). When one changed, they reconnect the
+  connectors that use it:
+  - The new connections are built next to the current ones and checked first.
+  - If the new connections fail a check the current ones pass (a wrong password was
+    written), the worker keeps working with what it has. It reports the refusal once, as
+    `connections.reload-refused` in the audit log, and tries again at the next check.
+  - Otherwise the worker lets its running activities finish (up to a minute; Temporal
+    retries the rest, and writes are idempotent) and switches over. Runs waiting for an
+    approval, subscriptions and the webhook listener carry on. The switch is audited as
+    `connections.reloaded`.
+  - `kill -HUP` reconnects at once.
+  - `turgon mcp` still reads its secrets at start.
 - **Settings.** `TURGON_SECRETS=openbao` and `TURGON_OPENBAO_{ADDR, MOUNT, NAMESPACE, CACERT,
   AUTH, ROLE, AUTH_MOUNT, JWT_FILE, SECRET_ID_FILE, TOKEN, TTL}`. `BAO_*` and `VAULT_*`
   (`BAO_ADDR`, `VAULT_TOKEN`, ...) are read as fallbacks. HTTPS is required unless the server
@@ -854,6 +864,14 @@ Verified live against Vault 2.1.1 and OpenBao 2.7.0 dev servers (`go test -tags 
   refused.
 - **AppRole**, and **`shop-orders-to-erp` run end to end** with both DSNs read from Vault.
   After approval the order reached the ERP, with no DSN or token in the logs or the audit log.
+- **Rotation**, with Postgres checking passwords (SCRAM) for the connection's role:
+  - A run waited for approval while the password was changed in Postgres, existing
+    sessions were cut, and the new password was written to Vault. Within one refresh the
+    worker reconnected, and the approved write went through with the new password.
+  - A wrong password written to Vault was refused once and retried. Orders kept flowing with
+    the current connections meanwhile.
+  - A rotation written to the two secrets six seconds apart reconnected each connector as
+    its secret arrived.
 
 #### Temporal: TLS and encrypted payloads
 

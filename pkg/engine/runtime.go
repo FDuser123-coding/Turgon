@@ -139,6 +139,26 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Runtim
 	return rt, nil
 }
 
+// Verify runs the live checks of the named endpoints' connectors (every
+// endpoint if none is named) and returns their results, by endpoint. A
+// worker verifies a runtime built with rotated secrets before using it.
+func (rt *Runtime) Verify(ctx context.Context, endpoints ...string) map[string][]connector.CheckResult {
+	want := map[string]bool{}
+	for _, ep := range endpoints {
+		want[ep] = true
+	}
+	out := map[string][]connector.CheckResult{}
+	for ep, inst := range rt.instances {
+		if len(want) > 0 && !want[ep] {
+			continue
+		}
+		if chk, ok := inst.(connector.Checker); ok {
+			out[ep] = chk.Check(ctx)
+		}
+	}
+	return out
+}
+
 // Close releases connector resources.
 func (rt *Runtime) Close() {
 	for _, inst := range rt.instances {

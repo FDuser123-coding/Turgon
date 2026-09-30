@@ -202,6 +202,13 @@ func loopback(host string) bool {
 	return host == "localhost" || host == "127.0.0.1" || host == "::1"
 }
 
+// Forget empties the cache, so the next reads get what OpenBao holds now.
+func (o *OpenBao) Forget() {
+	o.mu.Lock()
+	o.cache = map[string]cached{}
+	o.mu.Unlock()
+}
+
 // Where returns where a reference is read from, for `turgon secrets`.
 func (o *OpenBao) Where(ref string) string {
 	path, key, err := parseRef(ref)
