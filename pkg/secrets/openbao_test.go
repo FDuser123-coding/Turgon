@@ -114,6 +114,14 @@ func TestTokenAuthReadsKVAndCaches(t *testing.T) {
 	if _, err := o.Resolve(ctx, "openbao://shop-db/dsn"); err != nil || f.reads != reads+1 {
 		t.Fatalf("an expired entry was not read again: %d reads, %v", f.reads, err)
 	}
+	// Forget drops the cache: a rotated value is read at once.
+	f.mu.Lock()
+	f.secrets["shop-db"] = map[string]any{"dsn": "postgres://rotated"}
+	f.mu.Unlock()
+	o.Forget()
+	if v, _ := o.Resolve(ctx, "openbao://shop-db/dsn"); v != "postgres://rotated" {
+		t.Fatalf("after Forget: %q", v)
+	}
 	if w := o.Where("openbao://team/erp/db/dsn"); w != "secret/data/team/erp/db key dsn" {
 		t.Fatalf("where = %s", w)
 	}
