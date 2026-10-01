@@ -251,6 +251,31 @@ agents:
       requests: { cpu: 50m, memory: 64Mi }
       limits: { memory: 256Mi }
 
+# The Splink service (deploy/splink) scores records for resolve steps with
+# strategy: splink: it trains a model per entity on the links in Turgon's
+# database (turgon_xref) and answers which master records a new record may
+# be. Workers link a certain match and send the rest to a data steward,
+# whose links train the next model. It needs only read access to
+# turgon_xref: give it a read-only role in database.existingSecret.
+splink:
+  enabled: false
+  url: ""                  # a Splink service run elsewhere, instead of deploying one
+  image:
+    repository: ghcr.io/fduser123-coding/turgon-splink
+    tag: ""                # defaults to the chart's appVersion
+    pullPolicy: IfNotPresent
+  replicas: 1
+  retrain: 300             # seconds between checks for new links
+  prior: 0.05              # prior that a record and a blocked candidate are the same entity
+  database:
+    existingSecret: ""     # default: Turgon's database secret
+    existingSecretKey: url
+  # A Secret with key "token": the service requires it and workers send it.
+  existingSecret: ""
+  resources:
+    requests: { cpu: 100m, memory: 512Mi }
+    limits: { memory: 2Gi }
+
 # Prometheus metrics: workers serve /metrics on their health port (8081),
 # the console on 9090, each MCP server on 9100 and up.
 monitoring:

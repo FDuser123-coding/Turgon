@@ -122,6 +122,9 @@ func checkCmd() *cobra.Command {
 			for _, r := range checkPlugins(ctx, spec, secretsFrom) {
 				report(r.where, r.CheckResult)
 			}
+			for _, r := range checkSplink(ctx, spec) {
+				report("turgon", r)
+			}
 			if failed > 0 {
 				fmt.Fprintf(out, "%d check(s) failed\n", failed)
 				return errSilent

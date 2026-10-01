@@ -696,7 +696,7 @@ already linked with a Fellegi-Sunter model, as record-linkage tools such as Spli
 ```yaml
 - resolve:
     entity: model.Customer
-    strategy: probabilistic      # or exact: never links on its own, but stewards get suggestions
+    strategy: probabilistic      # or splink (below), or exact: never links on its own, but stewards get suggestions
     autoMatchAbove: 0.95
     match:
       - { field: customerRef, kind: email }
@@ -708,8 +708,40 @@ and audited as `xref.matched` (score and reasons); anything else goes to the ste
 the best suggestions, such as "C-100, 88%, same company email domain", one click to use. Each
 link a steward confirms keeps the record's attributes, so the next order from that buyer links
 at once. `turgon xref set --email --name` seeds known contacts. The model's weights are
-conservative defaults for customer data, not trained per deployment; an external Splink
-service (`strategy: splink`) is not wired in, and records resolved that way go to the steward.
+conservative defaults for customer data until `turgon identity train` estimates them from the
+deployment's links (below).
+
+**The Splink service.** With `strategy: splink`, records are scored by
+[Splink](https://moj-analytical-services.github.io/splink/) instead, run as a service next to the
+workers (`deploy/splink`, image `ghcr.io/<owner>/turgon-splink`). It reads the confirmed links
+from `turgon_xref`, trains a model per entity on them (m from the links, u from pairs of different
+master records, both drawn towards the built-in model's values while links are few), and retrains
+when the links change, so each steward decision improves the next match. Comparisons are the
+built-in ones: the email address, else the company domain, the name by Jaro-Winkler, exact fields.
+Turgon still decides: a certain match is linked and audited (`xref.matched` with the model, say
+`splink (240 records of 180 masters)`), anything else goes to the steward queue with Splink's
+suggestions. An entity without links yet, or workers without `TURGON_SPLINK_URL`, send records to
+the steward with the built-in suggestions; while the service is unreachable the step is retried.
+
+```sh
+docker run -d -p 8095:8080 -e TURGON_SPLINK_DATABASE_URL=postgres://splink_ro@db/turgon \
+  -e TURGON_SPLINK_TOKEN=s3cret ghcr.io/<owner>/turgon-splink:<version>
+export TURGON_SPLINK_URL=http://127.0.0.1:8095 TURGON_SPLINK_TOKEN=s3cret
+bin/turgon check -s hubspot.json          # ok  splink Customer: 8 records of 5 masters, trained: m, u
+bin/turgon run -s hubspot.json
+```
+
+| Setting | |
+|---|---|
+| `TURGON_SPLINK_DATABASE_URL` | Turgon's database; read access to `turgon_xref` is enough |
+| `TURGON_SPLINK_TOKEN` | bearer token workers must send (`TURGON_SPLINK_TOKEN` on the workers too) |
+| `TURGON_SPLINK_RETRAIN` | seconds between checks for changed links (300) |
+| `TURGON_SPLINK_PRIOR` | prior that a record and a blocked candidate are the same entity (0.05) |
+
+The API is `POST /v1/match` (`{"entity", "attributes", "limit"}` → candidates with probability,
+match weight and reasons), `POST /v1/train` and `GET /healthz` (models per entity, no record data).
+Attributes are personal data: the service logs counts only. In the Helm chart, `splink.enabled`
+deploys it with a NetworkPolicy that admits only Turgon's pods, and points the workers at it.
 
 ### Tools for AI agents (MCP)
 
@@ -1461,6 +1493,5 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 ## Not built yet
 
 In rough roadmap order (§16, §19): Salesforce managed subscriptions (the Pub/Sub API keeping the replay position);
-an external Splink service; the metadata
-graph and discovery. The native Postgres, Salesforce and REST connectors run inside the Go
+the metadata graph and discovery. The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

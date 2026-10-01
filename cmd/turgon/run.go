@@ -252,6 +252,17 @@ func runCmd() *cobra.Command {
 				return err
 			}
 			defer plugins.Close(context.Background())
+			splink, err := splinkFromEnv()
+			if err != nil {
+				return err
+			}
+			if entities := splinkEntities(spec); len(entities) > 0 {
+				if splink == nil {
+					fmt.Fprintf(out, "turgon: warning: %s resolve with strategy splink but TURGON_SPLINK_URL is not set; unmatched records go to a data steward\n", strings.Join(entities, ", "))
+				} else {
+					fmt.Fprintf(out, "turgon: matching %s with the Splink service at %s\n", strings.Join(entities, ", "), splink.URL)
+				}
+			}
 			newRuntime := func() (*engine.Runtime, error) {
 				rt, err := engine.New(ctx, spec, engine.Options{
 					Registry: connectorRegistry(),
@@ -264,6 +275,9 @@ func runCmd() *cobra.Command {
 				}
 				if err == nil {
 					rt.Activities.Plugins = plugins.Bind(rt.Activities.Guard)
+				}
+				if err == nil && splink != nil {
+					rt.Activities.Splink = splink
 				}
 				return rt, err
 			}

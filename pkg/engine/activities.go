@@ -37,6 +37,9 @@ type Activities struct {
 	Notifier notify.Notifier
 	// Plugins runs logic plugins on the model events writes cause.
 	Plugins PluginRunner
+	// Splink scores records for resolve steps with strategy: splink;
+	// nil leaves them to a data steward.
+	Splink SplinkScorer
 
 	mu      sync.Mutex
 	mappers map[string]*mapping.Mapper
@@ -99,13 +102,20 @@ type MatchModels interface {
 	MatchModel(ctx context.Context, entity string) (identity.Model, bool, error)
 }
 
+// SplinkScorer asks a Splink service which master records a record may
+// be (identity.Splink).
+type SplinkScorer interface {
+	Suggest(ctx context.Context, entity string, a identity.Attributes, limit int) ([]identity.Suggestion, identity.SplinkModel, error)
+}
+
 // Resolve links the document to a master record. The document names the
 // source record in <entity>Ref (customerRef) and gains <entity>Id.
 //
 // A known cross-reference is used as it is. Otherwise the record is scored
-// against records already linked (pkg/identity). With the probabilistic
-// strategy a certain, unambiguous match is linked and audited; anything
-// else goes to a data steward with the best suggestions.
+// against records already linked: by the built-in model (pkg/identity),
+// or with strategy splink by the Splink service. With the probabilistic
+// and splink strategies a certain, unambiguous match is linked and
+// audited; anything else goes to a data steward with the best suggestions.
 func (x *Activities) Resolve(ctx context.Context, in ResolveInput) (map[string]any, error) {
 	entity := strings.TrimPrefix(in.Config.Entity, "model.")
 	field := lowerFirst(entity)
@@ -129,7 +139,26 @@ func (x *Activities) Resolve(ctx context.Context, in ResolveInput) (map[string]a
 		attrs := identity.Extract(in.Doc, in.Config.Match)
 		var suggestions []identity.Suggestion
 		m, canMatch := x.Resolver.(Matcher)
-		if canMatch && len(attrs) > 0 {
+		scorer, why := "", ""
+		if in.Config.Strategy == v1alpha1.StrategySplink && canMatch && len(attrs) > 0 {
+			if x.Splink == nil {
+				why = "; no Splink service is configured (TURGON_SPLINK_URL)"
+			} else {
+				s, model, err := x.Splink.Suggest(ctx, entity, attrs, 3)
+				var refused *identity.SplinkError
+				switch {
+				case errors.Is(err, identity.ErrNoSplinkModel):
+					why = "; the Splink service has no model for it until a steward links some"
+				case errors.As(err, &refused):
+					return nil, nonRetryable(ErrTypeInvalid, err)
+				case err != nil:
+					return nil, err // transient: retry
+				default:
+					suggestions, scorer = s, fmt.Sprintf("splink (%d records of %d masters)", model.Records, model.Masters)
+				}
+			}
+		}
+		if scorer == "" && canMatch && len(attrs) > 0 {
 			candidates, err := m.Candidates(ctx, entity, attrs)
 			if err != nil {
 				return nil, err // transient: retry
@@ -147,10 +176,12 @@ func (x *Activities) Resolve(ctx context.Context, in ResolveInput) (map[string]a
 			suggestions = model.Suggest(attrs, candidates, 3)
 		}
 		master, certain := identity.Decide(suggestions, in.Config.AutoMatchAbove)
-		if !certain || in.Config.Strategy != v1alpha1.StrategyProbabilistic {
+		auto := in.Config.Strategy == v1alpha1.StrategyProbabilistic ||
+			(in.Config.Strategy == v1alpha1.StrategySplink && scorer != "")
+		if !certain || !auto {
 			// The record's reference stays in the details (encrypted with
 			// payload encryption); the message must not quote it.
-			msg := fmt.Sprintf("a %s from %s has no master record; it needs a data steward", entity, in.System)
+			msg := fmt.Sprintf("a %s from %s has no master record; it needs a data steward%s", entity, in.System, why)
 			return nil, temporal.NewNonRetryableApplicationError(msg, ErrTypeUnresolved, nil,
 				Unresolved{Entity: entity, System: in.System, Ref: ref, Attributes: attrs, Suggestions: suggestions})
 		}
@@ -158,10 +189,14 @@ func (x *Activities) Resolve(ctx context.Context, in ResolveInput) (map[string]a
 			return nil, err
 		}
 		if x.Audit != nil {
-			if _, err := x.Audit.Record("turgon/resolver", "xref.matched", map[string]any{
+			detail := map[string]any{
 				"entity": entity, "system": in.System, "ref": ref, "master": master,
 				"score": suggestions[0].Score, "reasons": suggestions[0].Reasons, "threshold": in.Config.AutoMatchAbove,
-			}); err != nil {
+			}
+			if scorer != "" {
+				detail["model"] = scorer
+			}
+			if _, err := x.Audit.Record("turgon/resolver", "xref.matched", detail); err != nil {
 				return nil, err
 			}
 		}
