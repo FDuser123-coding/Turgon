@@ -284,3 +284,16 @@ jobs:
         run: |
           go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           "$HOME/go/bin/actionlint"
+
+  plugins:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install wasm-tools
+        run: |
+          curl -sSfL https://github.com/bytecodealliance/wasm-tools/releases/download/v1.260.0/wasm-tools-1.260.0-x86_64-linux.tar.gz \
+            | tar -xz -C /tmp
+          sudo mv /tmp/wasm-tools-1.260.0-x86_64-linux/wasm-tools /usr/local/bin/
+      - name: The committed Wasm modules are what their sources build
+        # rust-toolchain.toml in each crate pins the compiler; rustup installs it.
+        run: scripts/build-plugins.sh --check

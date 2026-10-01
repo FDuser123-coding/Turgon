@@ -42,6 +42,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/identity"
 	"github.com/fduser123-coding/turgon/pkg/metrics"
 	"github.com/fduser123-coding/turgon/pkg/notify"
+	"github.com/fduser123-coding/turgon/pkg/plugin/runner"
 	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
 )
 
@@ -235,6 +236,16 @@ func runCmd() *cobra.Command {
 			// The connectors, the Temporal worker, the dispatcher and the
 			// subscriptions form a generation, rebuilt when a secret changes
 			// (or on SIGHUP) so rotated credentials are used without a restart.
+			// Logic plugins are compiled once; each generation binds them to
+			// its connections.
+			plugins, err := runner.New(ctx, spec, runner.TemporalProposer{
+				Writes:     engine.AgentWrites{Client: c, TaskQueue: tf.taskQueue},
+				SpecDigest: spec.Metadata.Digest, ApprovalTimeout: approvalTimeout,
+			}, log)
+			if err != nil {
+				return err
+			}
+			defer plugins.Close(context.Background())
 			newRuntime := func() (*engine.Runtime, error) {
 				rt, err := engine.New(ctx, spec, engine.Options{
 					Registry: connectorRegistry(),
@@ -244,6 +255,9 @@ func runCmd() *cobra.Command {
 				})
 				if err == nil && hub != nil {
 					rt.Activities.Notifier = hub
+				}
+				if err == nil {
+					rt.Activities.Plugins = plugins.Bind(rt.Activities.Guard)
 				}
 				return rt, err
 			}
@@ -331,6 +345,9 @@ func runCmd() *cobra.Command {
 				for ev := range events {
 					fmt.Fprintf(out, "turgon: subscribed to %s %s (one worker at a time holds the subscription)\n", ep, ev)
 				}
+			}
+			if names := plugins.Names(); len(names) > 0 {
+				fmt.Fprintf(out, "turgon: logic plugins %s (wasm, sandboxed)\n", strings.Join(names, ", "))
 			}
 			hup := make(chan os.Signal, 1)
 			signal.Notify(hup, syscall.SIGHUP)

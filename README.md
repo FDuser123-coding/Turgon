@@ -803,6 +803,73 @@ the customer's network.
 Behind agentgateway each spec's agent is at `/<spec>/a2a`, with the same token authentication
 and identity headers; the gateway rewrites the card's URL to its own.
 
+### Logic plugins: sandboxed WebAssembly
+
+A logic plugin (§18.4) is customer- or partner-written code that reacts to what Turgon writes.
+It runs as WebAssembly in the worker, isolated from everything but the calls an administrator
+granted it. `credit-check` is the example. It is installed next to a recipe
+(`shop-orders-with-credit-check`) or in a stack blueprint (`eu-distributor-core`). When a sales
+order is committed, it reads the customer's credit limit and proposes the order's credit status:
+`approved` within the limit, `review` above it.
+
+```yaml
+# examples/plugins/credit-check.yaml          # examples/recipes/shop-orders-with-credit-check.yaml
+spec:                                         spec:
+  type: logic                                   ...
+  runtime: wasm                                 extensions: [credit-check@1.2]
+  world: turgon:stack/logic-plugin@0.1.0
+  module: credit-check/credit-check.wasm
+  subscribes: [model.SalesOrder.created]
+  permissions:
+    entities: { read: [Customer], propose: [SalesOrder.creditStatus] }
+  limits: { memoryMB: 64, timeoutMs: 2000 }
+```
+
+- **The interface** is the WIT world in `wit/turgon-stack.wit`.
+  - The plugin exports `handle(event)`. It receives the event as JSON: its `type`, the
+    `entity`, its `id` and the written `record`.
+  - It may import `get` and `propose-change`. `publish` is declared but not available yet.
+  - Build it with wit-bindgen for `wasm32-unknown-unknown`: the example is Rust
+    (`examples/plugins/credit-check/`). A component made with `wasm-tools component new` works
+    too.
+- **The sandbox.** Turgon runs plugins with wazero, in-process.
+  - A plugin gets no WASI: no files, clock, randomness, environment or network. A module that
+    imports anything outside the world is refused.
+  - Each event runs in a fresh instance, within `memoryMB` and `timeoutMs`. Invocations are
+    capped at 64 host calls and 1 MiB per argument.
+  - A plugin that traps, loops or runs out of memory fails its invocation only. The run's
+    write stands, and the next event starts clean.
+- **Grants, enforced on every call.**
+  - `get` reads an entity the plugin may read. Reads go through the write guard with the
+    plugin's identity (`plugin:credit-check@1.2.0`), so policy, the rate governor, the
+    circuit breaker and the audit log apply.
+  - `propose-change` takes a JSON patch of fields the plugin may change (`SalesOrder.creditStatus`
+    allows only `creditStatus`). It becomes a governed write: policy decides, and a high-risk
+    or large change waits for a person in the console like an agent's write.
+  - A proposal is idempotent per run, entity and change. Anything else answers `denied`.
+- **Which operations serve them.** By convention, `get-<entity>` reads and
+  `update-<entity>` applies proposals, on a connection that declares the entity: `erp-db`
+  gains `update-sales-order`, which sets `credit_status`. The verifier warns when an entity
+  has no such operation.
+- **When plugins run.** After a write step commits, every plugin subscribed to the model event
+  the write causes (`model.SalesOrder.created`, `.updated`, `.deleted`, by operation name)
+  runs once with the written record. A redelivered event that finds the write already done runs
+  nothing again. Runs started by older workers are unaffected (a recorded history replays in
+  the tests).
+- **The code is part of the spec.** The compiler embeds the module and its SHA-256 in the
+  runtime spec, so the spec's digest and signature cover the plugin's code. Workers check the
+  digest before loading.
+  - `turgon verify` loads each module within its limits and reports its imports.
+  - It warns about grants the world cannot use, such as network or secrets.
+- **Reproducible modules.** `scripts/build-plugins.sh` rebuilds the committed modules with a
+  pinned Rust toolchain and remapped paths. CI checks that they match their sources.
+- **Verified live.**
+  - Setup: the real binary, with Temporal and Postgres. Customer `C-100` has a credit limit
+    of 1000.
+  - Orders of 349.90 and 2500.00 were approved. The plugin then set `credit_status` to
+    `approved` and `review` within about 60 ms each, through low-risk governed writes.
+  - The audit log records each read, policy decision and write as the plugin's.
+
 ### Install on Kubernetes
 
 The chart in `deploy/helm/turgon` installs one worker per compiled spec and the console into
@@ -1301,6 +1368,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
 | `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
 | `cmd/turgon` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check`, `mcp`, `gateway-config` |
+| `pkg/plugin` | §18.4 | Logic plugin host: wazero sandbox speaking the Canonical ABI of `turgon:stack/logic-plugin`; `runner/` enforces grants, reads through the write guard, proposes governed writes and audits each invocation |
 | `wit/turgon-stack.wit` | §18.4 | Host interface for Wasm plugins |
 | `examples/` | App. A–C, §18.5 | SAP ECC, Salesforce, Shopify, Stripe, HubSpot, Power BI connectors and connections; slot contracts; the `eu-distributor-core` blueprint |
 
@@ -1341,5 +1409,6 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 In rough roadmap order (§16, §19): Salesforce managed subscriptions (the Pub/Sub API keeping the replay position);
 an external Splink service; the metadata
-graph and discovery; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
+graph and discovery; plugins publishing events, and network or secret access for them (a later version of
+the plugin world). The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

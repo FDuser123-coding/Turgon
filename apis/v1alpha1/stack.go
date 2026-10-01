@@ -3,6 +3,7 @@ package v1alpha1
 import (
 	"fmt"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -86,6 +87,10 @@ type PluginSpec struct {
 	Runtime string `json:"runtime"`
 	// World is the WIT world a Wasm component targets, e.g. turgon:stack/logic-plugin@0.1.0.
 	World string `json:"world,omitempty"`
+	// Module is the Wasm module of a logic plugin, a path relative to this
+	// manifest. The compiler embeds it in the runtime spec, so the spec's
+	// signature covers the plugin's code.
+	Module string `json:"module,omitempty"`
 	// Implements lists slot contracts a connector plugin satisfies, e.g. ["erp@1"].
 	Implements []string `json:"implements,omitempty"`
 	// Connector names the ConnectorManifest a connector plugin packages.
@@ -156,6 +161,14 @@ func (p *Plugin) Validate() FieldErrors {
 	}
 	if s.Runtime == PluginRuntimeWasm && s.World == "" {
 		es.add("spec.world", "is required for wasm plugins")
+	}
+	if s.Type == PluginLogic {
+		switch {
+		case s.Module == "":
+			es.add("spec.module", "is required for logic plugins: the .wasm file, relative to this manifest")
+		case !strings.HasSuffix(s.Module, ".wasm") || strings.HasPrefix(s.Module, "/") || slices.Contains(strings.Split(s.Module, "/"), ".."):
+			es.add("spec.module", "must be a .wasm file next to or below this manifest, got %q", s.Module)
+		}
 	}
 	if (s.Runtime == PluginRuntimeWasm || s.Runtime == PluginRuntimeContainer) &&
 		(s.Limits == nil || s.Limits.MemoryMB <= 0 || s.Limits.TimeoutMs <= 0) {

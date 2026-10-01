@@ -35,6 +35,8 @@ type Activities struct {
 	Audit audit.Recorder
 	// Notifier tells people when a run needs them; nil sends nothing.
 	Notifier notify.Notifier
+	// Plugins runs logic plugins on the model events writes cause.
+	Plugins PluginRunner
 
 	mu      sync.Mutex
 	mappers map[string]*mapping.Mapper

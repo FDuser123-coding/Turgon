@@ -1,0 +1,5 @@
+# Pinned so scripts/build-plugins.sh rebuilds the committed module byte for byte.
+[toolchain]
+channel = "1.94.1"
+targets = ["wasm32-unknown-unknown", "wasm32-wasip1"]
+profile = "minimal"

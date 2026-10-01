@@ -107,6 +107,16 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 	// own task instead of a round trip each through the Temporal server.
 	// Runs started before this change replay them as they ran.
 	local := workflow.GetVersion(ctx, localStepsVersion, workflow.DefaultVersion, 1) == 1
+	// Asked only when a write has plugins, so runs without plugins keep
+	// their histories as they were.
+	var plugins *bool
+	pluginsOn := func() bool {
+		if plugins == nil {
+			on := workflow.GetVersion(ctx, pluginsVersion, workflow.DefaultVersion, 1) == 1
+			plugins = &on
+		}
+		return *plugins
+	}
 	step := func(name string, input, out any) error {
 		if !local {
 			return workflow.ExecuteActivity(ctx, name, input).Get(ctx, out)
@@ -177,6 +187,9 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 			result.Writes = append(result.Writes, rec)
 			done = append(done, committedWrite{step: st.Name, request: prep.Request, result: out.Result})
 			doc = withOutput(doc, st.Write.Output, out.Result)
+			if len(st.Write.Plugins) > 0 && out.Status == writeguard.StatusCommitted && pluginsOn() {
+				runPlugins(ctx, in.Workflow.Name, st.Name, st.Write, out.Result)
+			}
 		}
 	}
 	return result, nil

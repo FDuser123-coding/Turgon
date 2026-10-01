@@ -26,6 +26,10 @@ type RecipeSpec struct {
 	Policies   []string          `json:"policies,omitempty"`
 	Capacity   *Capacity         `json:"capacity,omitempty"`
 	SLO        *SLO              `json:"slo,omitempty"`
+	// Extensions installs logic plugins next to the recipe, e.g.
+	// ["credit-check@1.2"]: they react to the entities the recipe writes,
+	// within the grants their manifests ask for.
+	Extensions []string `json:"extensions,omitempty"`
 }
 
 type Trigger struct {
@@ -162,6 +166,11 @@ func (r *Recipe) Validate() FieldErrors {
 	}
 	if len(r.Spec.Steps) == 0 {
 		es.add("spec.steps", "at least one step is required")
+	}
+	for i, x := range r.Spec.Extensions {
+		if name, _ := ParseRef(x); !nameRE.MatchString(name) {
+			es.add(fmt.Sprintf("spec.extensions[%d]", i), "must be a plugin reference such as credit-check@1.2, got %q", x)
+		}
 	}
 	for i, s := range r.Spec.Steps {
 		path := fmt.Sprintf("spec.steps[%d]", i)

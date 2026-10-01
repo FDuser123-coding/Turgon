@@ -200,6 +200,9 @@ function Step({ step, mapped, source }: { step: FlowStep; mapped?: FlowStep; sou
               <Pill tone="info">{step.approval === "policy" ? "approval by policy" : `approval: ${step.approval}`}</Pill>
             )}
             {step.compensation && <Pill tone="neutral">undo: {step.compensation}</Pill>}
+            {step.plugins?.map((p) => (
+              <Pill key={p} tone="info">then plugin {p}</Pill>
+            ))}
           </span>
         </li>
       );

@@ -14,7 +14,8 @@ import (
 //   - old-completed, old-waiting: runs started before notifications
 //     existed, one finished and one waiting for approval;
 //   - new-completed, new-steward: runs that sent notifications;
-//   - local-steps-completed: map and resolve steps as local activities.
+//   - local-steps-completed: map and resolve steps as local activities;
+//   - plugins-completed: a logic plugin run after the write committed.
 //
 // Record a new one with `temporal workflow show -w <id> -o json`.
 func TestRecordedRunsReplay(t *testing.T) {

@@ -125,6 +125,7 @@ func (v *Verifier) recipe(rec *v1alpha1.Recipe, bound map[string]*v1alpha1.Conne
 		}
 		r.Resolution.Connectors[ep] = m
 	}
+	v.extensions(r, rec.Spec.Extensions, r.Resolution.Connectors)
 	for name := range rec.Spec.Connectors {
 		if !contains(rec.Endpoints(), name) {
 			r.add(StageResolve, SeverityWarning, "spec.connectors."+name, "pinned connector %q is not used by any step", name)
@@ -352,6 +353,8 @@ func (v *Verifier) Plugin(p *v1alpha1.Plugin) *Report {
 	}
 	if p.Spec.Runtime == v1alpha1.PluginRuntimeWasm && !strings.HasPrefix(p.Spec.World, "turgon:stack/") {
 		r.add(StageContract, SeverityError, "spec.world", "wasm plugins must target a turgon:stack world, got %q", p.Spec.World)
+	} else if p.Spec.Type == v1alpha1.PluginLogic {
+		v.logicPlugin(r, p)
 	}
 	if p.Spec.Type == v1alpha1.PluginConnector {
 		m, err := v.cat.Connector(v1alpha1.ParseRef(p.Spec.Connector))
@@ -505,6 +508,7 @@ func (v *Verifier) Blueprint(b *v1alpha1.StackBlueprint) *Report {
 			r.add(StageContract, SeverityError, path, "connector plugins fill slots; %s cannot be an extension", p.Metadata.Name)
 		}
 		checkExtension(r, path, p, entities, events)
+		checkPluginOperations(r, path, p, bound)
 	}
 
 	for i, ref := range b.Spec.Recipes {

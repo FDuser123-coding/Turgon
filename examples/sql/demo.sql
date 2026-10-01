@@ -38,6 +38,11 @@ CREATE TABLE IF NOT EXISTS erp.sales_orders (
 
 INSERT INTO erp.customers (id, name) VALUES ('C-100', 'Ada Lovelace GmbH') ON CONFLICT DO NOTHING;
 
+-- For the credit-check plugin (examples/plugins/credit-check.yaml): each
+-- customer's credit limit, and the status the plugin proposes for an order.
+ALTER TABLE erp.customers ADD COLUMN IF NOT EXISTS credit_limit numeric(12,2) NOT NULL DEFAULT 5000;
+ALTER TABLE erp.sales_orders ADD COLUMN IF NOT EXISTS credit_status text;
+
 -- Payments received, for the stripe-payments-to-erp recipe.
 CREATE TABLE IF NOT EXISTS erp.payments (
 	id          bigserial PRIMARY KEY,
