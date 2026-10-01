@@ -16,6 +16,20 @@
       ]
     },
     {
+      "name": "ecc-prod",
+      "description": "SAP ECC 6.0, sales orders through BAPIs over RFC.",
+      "connector": "sap-ecc",
+      "product": "SAP ECC 6.0, EHP 6-8",
+      "role": "target",
+      "events": [],
+      "operations": [
+        "create-sales-order"
+      ],
+      "flows": [
+        "salesforce-won-deals-to-ecc"
+      ]
+    },
+    {
       "name": "erp-db",
       "description": "The ERP's database: customers, sales orders and payments.",
       "connector": "postgres",
@@ -148,6 +162,7 @@
         "update-opportunity"
       ],
       "flows": [
+        "salesforce-won-deals-to-ecc",
         "salesforce-won-deals-to-erp",
         "salesforce-won-deals-to-erp-cdc"
       ]
@@ -442,6 +457,64 @@
         "dynamics-crm"
       ],
       "slo": "p95 10s"
+    },
+    {
+      "name": "salesforce-won-deals-to-ecc",
+      "version": "1.0.0",
+      "description": "An opportunity won in Salesforce becomes an SAP ECC sales order through BAPIs; the SAP number is written back, and the order is deleted if that fails.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "salesforce-prod",
+        "event": "Opportunity.ClosedWon",
+        "delivery": "polling"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "sf-opportunity-to-order@3.0.0",
+          "from": "salesforce.Opportunity",
+          "to": "model.SalesOrder",
+          "fields": 6
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "exact"
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "ecc-prod",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "testrun",
+          "compensation": "cancel-sales-order"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-opportunity-link@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.Opportunity",
+          "fields": 2
+        },
+        {
+          "kind": "write",
+          "entity": "Opportunity",
+          "system": "salesforce-prod",
+          "operation": "update-opportunity",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "restore-opportunity"
+        }
+      ],
+      "targets": [
+        "ecc-prod",
+        "salesforce-prod"
+      ],
+      "slo": "p95 5s"
     },
     {
       "name": "salesforce-won-deals-to-erp",

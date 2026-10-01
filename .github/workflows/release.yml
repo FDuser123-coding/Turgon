@@ -2,6 +2,7 @@
 # tag like v0.2.0 builds, scans, signs and publishes:
 #   ghcr.io/<owner>/turgon:<version>          multi-arch image, provenance + SBOM
 #   ghcr.io/<owner>/turgon-splink:<version>   the Splink service (deploy/splink), the same
+#   ghcr.io/<owner>/turgon-connector-<name>   Camel/Java connector sidecars (connectors/), the same
 #   oci://ghcr.io/<owner>/charts/turgon       Helm chart
 #   GitHub release                             binaries, appliance bundles,
 #                                              checksums, SBOM
@@ -151,8 +152,77 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
+  connector-images:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        connector: [sap-ecc]
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Registry name and version
+        run: |
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/turgon-connector-${{ matrix.connector }}" >> "$GITHUB_ENV"
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+      - name: Test
+        run: gradle -p connectors build
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: connectors/Dockerfile
+          build-args: CONNECTOR=${{ matrix.connector }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ env.VERSION }}
+          provenance: mode=max
+          sbom: true
+      - name: Scan for vulnerabilities
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign the image
+        run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
+      - name: SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: connector-image.spdx.json
+      - name: Attest the SBOM
+        run: cosign attest --yes --type spdxjson --predicate connector-image.spdx.json "${IMAGE}@${{ steps.build.outputs.digest }}"
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
   chart:
-    needs: [image, splink-image]
+    needs: [image, splink-image, connector-images]
     runs-on: ubuntu-latest
     permissions:
       contents: read

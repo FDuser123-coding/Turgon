@@ -1,0 +1,163 @@
+// The connector protocol (architecture §7.1): how a Turgon worker drives a
+// connector that runs outside it, such as a Camel/Java connector in a
+// sidecar container. The worker keeps everything that governs a write
+// (policy, approval, idempotency records, the rate governor, the circuit
+// breaker, audit); the connector only talks to its system.
+//
+// Errors are gRPC status codes:
+//   INVALID_ARGUMENT    the payload or ID is not valid for the system
+//   FAILED_PRECONDITION the system refused the write (a business rule)
+//   NOT_FOUND           Read: no such record
+//   UNIMPLEMENTED       the connector does not do this (Simulate: no dry run)
+//   UNAUTHENTICATED     the worker did not send the sidecar's token
+//   ABORTED             the instance is not configured (the sidecar
+//                       restarted): the worker configures it again and
+//                       repeats the call once
+//   anything else       transient: the worker retries
+// Messages are shown to operators: they name fields, never values.
+syntax = "proto3";
+
+package turgon.connector.v1;
+
+option go_package = "github.com/fduser123-coding/turgon/pkg/connector/remote/connectorpb";
+option java_multiple_files = true;
+option java_package = "dev.turgon.connector.v1";
+
+service Connector {
+  // Describe names the connector and what it implements.
+  rpc Describe(DescribeRequest) returns (DescribeResponse);
+  // Configure binds an endpoint's compiled configuration and resolved
+  // secrets to an instance. A rotated secret configures a new instance;
+  // the old one is released once its work is done.
+  rpc Configure(ConfigureRequest) returns (ConfigureResponse);
+  rpc Release(InstanceRequest) returns (ReleaseResponse);
+  // Check verifies the connection and configuration against the system.
+  rpc Check(InstanceRequest) returns (CheckResponse);
+  // Simulate dry-runs a write (test run, validate-only API) and returns a
+  // preview of the resulting document.
+  rpc Simulate(WriteRequest) returns (WriteResponse);
+  // Commit performs a write. The idempotency key is passed so the system
+  // can de-duplicate too (a reference field it is looked up by).
+  rpc Commit(WriteRequest) returns (WriteResponse);
+  // Confirm reads a committed write back.
+  rpc Confirm(ConfirmRequest) returns (ConfirmResponse);
+  rpc Read(ReadRequest) returns (ReadResponse);
+  // Poll returns up to limit events with position > after, in order.
+  rpc Poll(PollRequest) returns (PollResponse);
+  // Export streams the records of a named export.
+  rpc Export(ExportRequest) returns (stream ExportRecord);
+}
+
+// The protocol version this file describes.
+enum Protocol {
+  PROTOCOL_UNSPECIFIED = 0;
+  PROTOCOL_V1 = 1;
+}
+
+message DescribeRequest {
+  Protocol protocol = 1;
+}
+
+message DescribeResponse {
+  Protocol protocol = 1;
+  // The connector's manifest name and version, such as sap-ecc 0.4.0.
+  string connector = 2;
+  string version = 3;
+  // What it implements beyond Commit: "simulate", "confirm", "read",
+  // "poll", "export", "check".
+  repeated string capabilities = 4;
+}
+
+message ConfigureRequest {
+  // Chosen by the worker, unique per configuration (endpoint and generation).
+  string instance = 1;
+  string endpoint = 2;
+  // The connector's compiled configuration: the runtime spec's connector
+  // entry (pkg/compiler.ConnectorConfig) as JSON, without secret values.
+  bytes spec = 3;
+  // The value of the entry's secretRef, and of every secretRef inside its
+  // configuration, by reference.
+  string secret = 4;
+  map<string, string> secrets = 5;
+}
+
+message ConfigureResponse {}
+
+message InstanceRequest {
+  string instance = 1;
+}
+
+message ReleaseResponse {}
+
+message CheckResult {
+  string name = 1;
+  bool ok = 2;
+  string detail = 3;
+  string fix = 4;
+}
+
+message CheckResponse {
+  repeated CheckResult results = 1;
+}
+
+message WriteRequest {
+  string instance = 1;
+  string operation = 2;
+  string idempotency_key = 3;
+  // JSON.
+  bytes payload = 4;
+}
+
+message WriteResponse {
+  // JSON.
+  bytes result = 1;
+}
+
+message ConfirmRequest {
+  string instance = 1;
+  string operation = 2;
+  // Commit's result.
+  bytes result = 3;
+}
+
+message ConfirmResponse {}
+
+message ReadRequest {
+  string instance = 1;
+  string operation = 2;
+  string id = 3;
+}
+
+message ReadResponse {
+  // JSON.
+  bytes record = 1;
+}
+
+message PollRequest {
+  string instance = 1;
+  string event = 2;
+  int64 after = 3;
+  int32 limit = 4;
+}
+
+message Event {
+  // Unique within the source and stable across re-reads.
+  string id = 1;
+  int64 position = 2;
+  string name = 3;
+  // JSON.
+  bytes payload = 4;
+}
+
+message PollResponse {
+  repeated Event events = 1;
+}
+
+message ExportRequest {
+  string instance = 1;
+  string name = 2;
+}
+
+message ExportRecord {
+  map<string, string> fields = 1;
+}

@@ -1,0 +1,21 @@
+# The ERP on SAP ECC 6.0, through BAPIs over RFC: the Camel/Java sap-ecc
+# connector, in a sidecar next to the worker (connectors/, Helm
+# connectors.sidecars). The secret is the RFC user, "user:password"; SAP
+# JCo is SAP's to license and is mounted into the sidecar. Orders are test
+# run first (TESTRUN); the opportunity's ID becomes the purchase order
+# number, so a retried create finds the order instead of making a second.
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata:
+  name: ecc-prod
+  description: "SAP ECC 6.0, sales orders through BAPIs over RFC."
+spec:
+  connector: sap-ecc@^0.4
+  secretRef: openbao://sap/ecc/prod
+  entities: [SalesOrder, Customer]
+  limits: { maxConcurrentCalls: 4, requestsPerSecond: 10 }
+  config:
+    rfc:
+      destination: { ashost: ecc.acme.internal, sysnr: "00", client: "100", lang: EN }
+    salesArea: { salesOrg: "1000", distributionChannel: "10", division: "00" }
+    orderType: TA

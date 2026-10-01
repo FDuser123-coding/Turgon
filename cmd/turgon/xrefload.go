@@ -54,7 +54,11 @@ func xrefLoadCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			factory, ok := connectorRegistry()[cfg.Name]
+			registry, err := connectorRegistry()
+			if err != nil {
+				return err
+			}
+			factory, ok := registry[cfg.Name]
 			if !ok {
 				return fmt.Errorf("connector %s is not built into this binary", cfg.Name)
 			}

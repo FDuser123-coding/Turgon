@@ -7,3 +7,5 @@ pkg/console/dist/index.html
 *.json.tmp
 sf.*
 runtime-spec*.json
+connectors/**/build
+connectors/.gradle
