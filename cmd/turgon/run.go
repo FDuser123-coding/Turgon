@@ -36,6 +36,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/connector/debezium"
 	"github.com/fduser123-coding/turgon/pkg/connector/postgres"
+	"github.com/fduser123-coding/turgon/pkg/connector/remote"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce"
 	"github.com/fduser123-coding/turgon/pkg/connector/sap"
@@ -125,10 +126,28 @@ func (f *temporalFlags) tlsConfig() (*tls.Config, error) {
 	return cfg, nil
 }
 
-// connectorRegistry lists the connectors built into this worker.
-func connectorRegistry() connector.Registry {
-	return connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory, rest.Name: rest.Factory, sap.Name: sap.Factory,
+// sidecars holds the connections to connectors running next to this
+// process (Camel/Java connectors, say), shared across secret rotations.
+var sidecars = remote.NewPool()
+
+// connectorRegistry lists the connectors this process runs: those built
+// in, and those in sidecars it reaches over the connector protocol
+// (TURGON_CONNECTORS, such as
+// sap-ecc=unix:///var/run/turgon/connectors/sap-ecc.sock).
+func connectorRegistry() (connector.Registry, error) {
+	reg := connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory, rest.Name: rest.Factory, sap.Name: sap.Factory,
 		debezium.Name: debezium.Factory}
+	addrs, err := remote.ParseAddresses(os.Getenv("TURGON_CONNECTORS"), os.Getenv("TURGON_CONNECTOR_TOKEN"))
+	if err != nil {
+		return nil, fmt.Errorf("TURGON_CONNECTORS: %w", err)
+	}
+	for name, a := range addrs {
+		if _, native := reg[name]; native {
+			return nil, fmt.Errorf("TURGON_CONNECTORS: %s is built into this worker and cannot also run in a sidecar", name)
+		}
+		reg[name] = sidecars.Factory(a)
+	}
+	return reg, nil
 }
 
 func envOr(key, def string) string {
@@ -263,9 +282,13 @@ func runCmd() *cobra.Command {
 					fmt.Fprintf(out, "turgon: matching %s with the Splink service at %s\n", strings.Join(entities, ", "), splink.URL)
 				}
 			}
+			registry, err := connectorRegistry()
+			if err != nil {
+				return err
+			}
 			newRuntime := func() (*engine.Runtime, error) {
 				rt, err := engine.New(ctx, spec, engine.Options{
-					Registry: connectorRegistry(),
+					Registry: registry,
 					Secrets:  secretsFrom,
 					Store:    store, Resolver: store, Audit: log,
 					Webhooks: webhookAddr != "",

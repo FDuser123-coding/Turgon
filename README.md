@@ -430,6 +430,89 @@ echo "ada@example.com 310.00" >> shop.cmds
 The approval shows SAP's simulated order. Once approved, the fake prints the new sales order, and
 the Shopify order's note gets its number.
 
+### SAP ECC: BAPIs from a Camel/Java connector
+
+Connectors with `runtime: camel-java` run outside the Go worker, in a sidecar container next to it,
+and the worker drives them over the **connector protocol** (`proto/turgon/connector/v1`, gRPC on a
+Unix socket in a volume only the pod mounts). The worker keeps everything that governs a write:
+policy, approval, idempotency records, the rate governor and circuit breaker, audit, sagas. The
+connector only talks to its system. So a connector can be written in the language its system needs,
+and SAP ECC's RFC needs SAP JCo, which exists only for Java.
+
+The protocol mirrors the worker's connector interfaces:
+
+| Call | What it does |
+|---|---|
+| `Describe` | Names the connector, its version and capabilities |
+| `Configure` | Binds an endpoint's compiled configuration and resolved secrets to an instance. A rotated secret configures a new one. |
+| `Simulate`, `Commit`, `Confirm` | The write's dry run, the write, and reading it back |
+| `Read`, `Poll`, `Export`, `Check` | Reads, events, exports and connection checks |
+
+Errors are status codes:
+
+| Status | Meaning |
+|---|---|
+| `INVALID_ARGUMENT` | The payload is invalid |
+| `FAILED_PRECONDITION` | The system refused the write |
+| `NOT_FOUND` | The record is not there |
+| `UNIMPLEMENTED` | The connector does not do this |
+| `ABORTED` | The sidecar restarted: the worker configures the instance again and repeats the call |
+| Anything else | Transient: the call is retried |
+
+`connectors/` holds the Java side (Gradle, Java 21):
+
+- `sdk` serves the protocol. A connector implements `Connector` and `Endpoint`, or extends
+  `CamelEndpoint`, whose operations are Camel routes (`direct:<operation>`). The sidecar finds it
+  with `ServiceLoader`.
+- `sap-ecc` is SAP ECC 6.0 through BAPIs (`examples/connectors/sap-ecc.yaml`):
+  - **create-sales-order** calls `BAPI_SALESORDER_CREATEFROMDAT2`, with `TESTRUN` for the preview.
+    The idempotency key is the purchase order number, so a retried create finds the order with
+    `BAPI_SALESORDER_GETLIST` instead of making a second. The create and `BAPI_TRANSACTION_COMMIT`
+    run in one SAP session. The order is confirmed with `BAPI_SALESORDER_GETSTATUS`.
+  - **cancel-sales-order** is its compensation. It deletes the order through
+    `BAPI_SALESORDER_CHANGE`, which SAP refuses once there is a delivery.
+  - **get-customer** calls `BAPI_CUSTOMER_GETDETAIL2`.
+  - **Messages:** SAP's `RETURN` messages become the rejection's reason, such as
+    `V1 462: Sold-to party 0000001002 is blocked for sales`.
+- `sap-ecc-fake` is an in-memory ECC for tests and demos. It follows SAP's rules where they matter:
+  an order is kept only if committed in the same session, and a test run saves nothing. It is never
+  part of the production image.
+
+JCo is SAP's to license, so the connector calls it by reflection and the image does not carry it.
+Download SAP Java Connector 3.1 from the SAP Support Portal and mount `sapjco3.jar` and
+`libsapjco3.so` at `/opt/turgon/lib`. Without them, configuring the endpoint fails with that
+instruction. The connection (`examples/connections/ecc-prod.yaml`) holds the RFC destination
+(`ashost`, `sysnr`, `client`), the sales area and the order type. The secret is the RFC user,
+`user:password`. The recipe is `salesforce-won-deals-to-ecc`: a won deal becomes an ECC order,
+whose number is written back to the opportunity; if that fails, the order is deleted again.
+
+```sh
+make connectors                                                 # Java tests, then Go drives the sidecar
+connectors/sap-ecc-fake/build/install/turgon-connector-sap-ecc-demo/bin/turgon-connector-sap-ecc-demo &
+#   listens on unix:///var/run/turgon/connectors/sap-ecc.sock (TURGON_CONNECTOR_LISTEN to change)
+export TURGON_CONNECTORS=sap-ecc=unix:///var/run/turgon/connectors/sap-ecc.sock
+export TURGON_SECRET_SAP_ECC_PROD=TURGON:demo TURGON_SECRET_SALESFORCE_PROD_JWT="$(cat sf.creds)"
+bin/turgon compile -c examples salesforce-won-deals-to-ecc -o ecc.json
+bin/turgon check -s ecc.json                    # the sidecar, RFC_PING, each BAPI, the sales area
+bin/turgon xref set --entity Customer --system salesforce-prod --source 001000000000001AAA --master 1000
+bin/turgon run -s ecc.json &
+echo "001000000000001AAA 7800" >> sf.cmds       # approve: an ECC order, its number on the opportunity
+echo "reject 006000000000002AAA" >> sf.cmds     # the next deal's write-back fails...
+echo "001000000000001AAA 900" >> sf.cmds        # ...and the saga deletes its ECC order
+```
+
+In the Helm chart, `connectors.sidecars` adds a connector's container to every worker and agent pod,
+with the socket volume and `TURGON_CONNECTORS`. With the operator, its Integrations get it too.
+
+```yaml
+connectors:
+  sidecars:
+    - name: sap-ecc
+      image: { repository: ghcr.io/<owner>/turgon-connector-sap-ecc }
+      volumes: [{ name: sapjco, persistentVolumeClaim: { claimName: sapjco } }]
+      volumeMounts: [{ name: sapjco, mountPath: /opt/turgon/lib, readOnly: true }]
+```
+
 #### Business events through SAP Event Mesh
 
 S/4HANA publishes business events, such as `sap.s4.beh.salesorder.v1.SalesOrder.Created.v1`, to
@@ -1442,6 +1525,8 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox and change capture events, rollback dry-runs, idempotent writes); `salesforce/` reads by SOQL and the Bulk API 2.0, and subscribes over the Pub/Sub API (`pubsub/`: the gRPC wire protocol); `debezium/` consumes Debezium change events from Kafka |
 | `pkg/secrets` | §9 | Secret references resolved from OpenBao or HashiCorp Vault (KV v2), signing in with Kubernetes service accounts, AppRoles or tokens; or from AWS Secrets Manager, Azure Key Vault and Google Secret Manager with the platform's workload identity |
 | `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled list or search events (ascending, or newest-first paged back to the cursor), also received as signed webhooks (Stripe, Shopify, generic HMAC), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/`, `stripetest/` and `hubspottest/` fake the Shopify Admin, Stripe and HubSpot CRM APIs |
+| `pkg/connector/remote`, `proto/` | §7.1 | The connector protocol (gRPC) and its Go client: connectors running in a sidecar, configured per endpoint with resolved secrets, reconfigured after a sidecar restart |
+| `connectors/` | §7.1 | Camel/Java connectors: `sdk` (the protocol's server, Camel routes per operation), `sap-ecc` (BAPIs over RFC through SAP JCo), `sap-ecc-fake` (an in-memory ECC) |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references, the webhook inbox |
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
@@ -1493,5 +1578,6 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 ## Not built yet
 
 In rough roadmap order (§16, §19): Salesforce managed subscriptions (the Pub/Sub API keeping the replay position);
-the metadata graph and discovery. The native Postgres, Salesforce and REST connectors run inside the Go
-worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.
+the metadata graph and discovery. Of the Camel/Java connectors, only SAP ECC exists so far, without
+events (change pointers or IDocs). It is tested against a fake ECC and a JCo stand-in, not yet against
+a real SAP system. The `shopify` and `powerbi-export` manifests still have no runtime.

@@ -46,6 +46,7 @@ spec:
             {{- end }}
           env:
             {{- include "turgon.commonEnv" $ | nindent 12 }}
+            {{- include "turgon.connectorEnv" $ | nindent 12 }}
             {{- with $.Values.workers.consoleURL }}
             - name: TURGON_CONSOLE_URL
               value: {{ . | quote }}
@@ -78,8 +79,11 @@ spec:
             - { name: specs, mountPath: /specs, readOnly: true }
             - { name: tmp, mountPath: /tmp }
             {{- include "turgon.sharedMounts" $ | nindent 12 }}
+            {{- include "turgon.connectorMounts" $ | nindent 12 }}
+        {{- include "turgon.connectorSidecars" $ | nindent 8 }}
       volumes:
         {{- include "turgon.sharedVolumes" $ | nindent 8 }}
+        {{- include "turgon.connectorVolumes" $ | nindent 8 }}
         - name: specs
           configMap:
             name: {{ include "turgon.fullname" $ }}-specs

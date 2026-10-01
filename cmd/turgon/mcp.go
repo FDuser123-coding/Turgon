@@ -105,8 +105,12 @@ func mcpCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			registry, err := connectorRegistry()
+			if err != nil {
+				return err
+			}
 			opts := agent.Options{
-				Registry: connectorRegistry(), Secrets: secretsFrom, Audit: rec, Auth: auth, Version: version,
+				Registry: registry, Secrets: secretsFrom, Audit: rec, Auth: auth, Version: version,
 				ApprovalTimeout: approvalTimeout, A2AURL: a2aURL, Push: guard, StreamLimit: streamLimit,
 			}
 			if writes {

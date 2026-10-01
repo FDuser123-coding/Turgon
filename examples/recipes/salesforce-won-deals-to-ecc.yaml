@@ -1,0 +1,45 @@
+# The Salesforce saga with SAP ECC: a won deal becomes an ECC sales order
+# (BAPI, test run first, approved before commit), and the SAP order number
+# is written back to the opportunity. If the write-back fails, the ECC
+# order is deleted again. ECC runs on the Camel/Java connector in a sidecar.
+apiVersion: turgon.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: salesforce-won-deals-to-ecc
+  version: 1.0.0
+  description: "An opportunity won in Salesforce becomes an SAP ECC sales order through BAPIs; the SAP number is written back, and the order is deleted if that fails."
+spec:
+  trigger:
+    source: salesforce-prod
+    event: Opportunity.ClosedWon
+  steps:
+    - map:
+        from: salesforce.Opportunity
+        to: model.SalesOrder
+        mapping: sf-opportunity-to-order@3
+    # Salesforce names the account by its ID; the master record is the SAP
+    # customer number.
+    - resolve:
+        entity: model.Customer
+        strategy: exact
+        autoMatchAbove: 1.0
+    - write:
+        target: ecc-prod
+        operation: create-sales-order
+        idempotencyKey: "{{ source.Id }}"
+        simulate: true
+        output: erpOrder
+    - map:
+        from: model.SalesOrder
+        to: model.Opportunity
+        mapping: sales-order-to-opportunity-link@1
+    - write:
+        target: salesforce-prod
+        operation: update-opportunity
+        idempotencyKey: "{{ source.Id }}"
+        simulate: true
+  policies: [writeback-default]
+  capacity:
+    peakPerSecond: 2
+  slo:
+    p95Latency: 5s

@@ -168,6 +168,35 @@
         "agentsFrom": { "type": "array" }
       }
     },
+    "connectors": {
+      "type": "object",
+      "properties": {
+        "sidecars": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "image"],
+            "properties": {
+              "name": { "type": "string", "pattern": "^[a-z0-9]([-a-z0-9]{0,40}[a-z0-9])?$" },
+              "image": {
+                "type": "object",
+                "required": ["repository"],
+                "properties": {
+                  "repository": { "type": "string", "minLength": 1 },
+                  "tag": { "type": "string" },
+                  "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+                }
+              },
+              "env": { "type": "array" },
+              "volumes": { "type": "array" },
+              "volumeMounts": { "type": "array" },
+              "resources": { "type": "object" }
+            }
+          }
+        },
+        "resources": { "type": "object" }
+      }
+    },
     "splink": {
       "type": "object",
       "properties": {

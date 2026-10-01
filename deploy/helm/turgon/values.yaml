@@ -251,6 +251,26 @@ agents:
       requests: { cpu: 50m, memory: 64Mi }
       limits: { memory: 256Mi }
 
+# Connectors that run beside each worker in their own container: the
+# Camel/Java ones (runtime camel-java, built from connectors/). The worker
+# reaches each over the connector protocol on a Unix socket in a volume
+# only its pod mounts, and keeps policy, approval, idempotency, rate limits
+# and audit; the sidecar only talks to its system. The name is the
+# connector's, as specs name it.
+connectors:
+  sidecars: []
+  # - name: sap-ecc
+  #   image: { repository: ghcr.io/fduser123-coding/turgon-connector-sap-ecc, tag: "" }
+  #   # SAP JCo is SAP's to license and not in the image: mount sapjco3.jar
+  #   # and libsapjco3.so (SAP Java Connector 3.1, Linux x86_64) at /opt/turgon/lib.
+  #   volumes: [{ name: sapjco, persistentVolumeClaim: { claimName: sapjco } }]
+  #   volumeMounts: [{ name: sapjco, mountPath: /opt/turgon/lib, readOnly: true }]
+  #   env: []                # e.g. SAP_ROUTER settings, or JAVA_TOOL_OPTIONS
+  #   resources: {}          # default: connectors.resources
+  resources:
+    requests: { cpu: 100m, memory: 256Mi }
+    limits: { memory: 768Mi }
+
 # The Splink service (deploy/splink) scores records for resolve steps with
 # strategy: splink: it trains a model per entity on the links in Turgon's
 # database (turgon_xref) and answers which master records a new record may

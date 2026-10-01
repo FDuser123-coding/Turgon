@@ -1,4 +1,4 @@
-.PHONY: all build console test test-integration vet fmt demo spec chart image licenses generate envtest appliance
+.PHONY: all build console test test-integration vet fmt demo spec chart image licenses generate envtest appliance proto connectors
 
 all: fmt vet test console build
 
@@ -11,6 +11,18 @@ build:
 generate:
 	go run sigs.k8s.io/controller-tools/cmd/controller-gen@v0.19.0 object paths=./apis/operator/... \
 		crd:crdVersions=v1 output:crd:dir=deploy/helm/turgon/crds
+
+# Regenerate the connector protocol's Go code from proto/ (needs protoc,
+# protoc-gen-go and protoc-gen-go-grpc; CI checks it is up to date).
+proto:
+	scripts/gen-proto.sh
+
+# Build and test the Camel/Java connectors, and drive the SAP ECC sidecar
+# (with its fake ECC) from Go over the protocol.
+connectors:
+	gradle -p connectors build :sap-ecc-fake:installDist
+	TURGON_TEST_CONNECTOR_SAP_ECC=$$PWD/connectors/sap-ecc-fake/build/install/turgon-connector-sap-ecc-demo/bin/turgon-connector-sap-ecc-demo \
+		go test -count=1 -run TestJavaSidecar ./pkg/connector/remote/
 
 # The operator's tests run a real kube-apiserver and etcd (envtest):
 #   make envtest && export KUBEBUILDER_ASSETS=$$PWD/bin/envtest
