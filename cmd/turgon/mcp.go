@@ -26,7 +26,7 @@ func mcpCmd() *cobra.Command {
 	var trusted []string
 	var writes bool
 	var a2aURL string
-	var wait, approvalTimeout, secretsRefresh time.Duration
+	var wait, approvalTimeout, secretsRefresh, streamLimit time.Duration
 	var tf temporalFlags
 	cmd := &cobra.Command{
 		Use:   "mcp",
@@ -39,7 +39,10 @@ func mcpCmd() *cobra.Command {
 			"for the same spec. Agents need the integration-operator role to write, and high-risk\n" +
 			"writes wait for a person to approve them in the console.\n\n" +
 			"The same server is an A2A agent at /a2a (agent card at /a2a/.well-known/agent-card.json):\n" +
-			"skills are the tools, called with a data part {\"skill\": ..., \"arguments\": {...}}.\n\n" +
+			"skills are the tools, called with a data part {\"skill\": ..., \"arguments\": {...}}.\n" +
+			"An agent follows a write by streaming (message/stream, tasks/resubscribe) or by push\n" +
+			"notifications, which `turgon run` sends to public https URLs only, unless\n" +
+			"TURGON_A2A_PUSH_ALLOW lists more address ranges.\n\n" +
 			"With OpenBao or a cloud secret manager, a rotated secret reconnects the read tools'\n" +
 			"connectors without dropping requests, and SIGHUP reconnects them at once.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -98,9 +101,13 @@ func mcpCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			guard, err := pushGuard()
+			if err != nil {
+				return err
+			}
 			opts := agent.Options{
 				Registry: connectorRegistry(), Secrets: secretsFrom, Audit: rec, Auth: auth, Version: version,
-				ApprovalTimeout: approvalTimeout, A2AURL: a2aURL,
+				ApprovalTimeout: approvalTimeout, A2AURL: a2aURL, Push: guard, StreamLimit: streamLimit,
 			}
 			if writes {
 				c, err := tf.dial()
@@ -179,6 +186,7 @@ func mcpCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&writes, "writes", false, "serve write tools, run as governed writes on Temporal")
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "how long a write tool call waits for the write to finish")
 	cmd.Flags().DurationVar(&approvalTimeout, "approval-timeout", engine.DefaultApprovalTimeout, "reject agent writes nobody approves within this time")
+	cmd.Flags().DurationVar(&streamLimit, "a2a-stream-limit", time.Hour, "end an A2A stream following a write after this long; the agent resubscribes")
 	cmd.Flags().DurationVar(&secretsRefresh, "secrets-refresh", 5*time.Minute, "with OpenBao or a cloud secret manager, how often secrets are read again; a changed one reconnects the connectors (0: never; SIGHUP reconnects at once)")
 	tf.register(cmd)
 	return cmd

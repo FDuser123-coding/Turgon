@@ -30,3 +30,19 @@ func TestRecordedRunsReplay(t *testing.T) {
 		}
 	}
 }
+
+// Agent writes recorded before push notifications existed (one waiting for
+// approval, one approved, one rejected) replay against the current code.
+func TestRecordedAgentWritesReplay(t *testing.T) {
+	files, _ := filepath.Glob("testdata/agent-histories/*.json")
+	if len(files) < 3 {
+		t.Fatalf("histories: %v", files)
+	}
+	for _, f := range files {
+		r := worker.NewWorkflowReplayer()
+		r.RegisterWorkflowWithOptions(AgentWriteWorkflow, workflow.RegisterOptions{Name: AgentWriteWorkflowName})
+		if err := r.ReplayWorkflowHistoryFromJSONFile(nil, f); err != nil {
+			t.Errorf("%s: %v", filepath.Base(f), err)
+		}
+	}
+}

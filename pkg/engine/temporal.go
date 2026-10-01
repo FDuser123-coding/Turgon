@@ -25,6 +25,7 @@ func TaskQueueFor(spec *compiler.RuntimeSpec) string {
 func Register(w worker.Registry, acts *Activities) {
 	w.RegisterWorkflowWithOptions(IntegrationWorkflow, workflow.RegisterOptions{Name: WorkflowName})
 	w.RegisterWorkflowWithOptions(AgentWriteWorkflow, workflow.RegisterOptions{Name: AgentWriteWorkflowName})
+	w.RegisterWorkflowWithOptions(AgentPushWorkflow, workflow.RegisterOptions{Name: AgentPushWorkflowName})
 	w.RegisterActivity(acts)
 }
 

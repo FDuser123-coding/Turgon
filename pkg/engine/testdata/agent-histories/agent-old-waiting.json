@@ -1,0 +1,394 @@
+{
+  "events": [
+    {
+      "eventId": "1",
+      "eventTime": "2026-10-01T11:57:31.337976773Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+      "taskId": "1048587",
+      "workflowExecutionStartedEventAttributes": {
+        "workflowType": {
+          "name": "turgon.agent-write"
+        },
+        "taskQueue": {
+          "name": "turgon-shop-orders-to-erp",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJzcGVjRGlnZXN0Ijoic2hhMjU2OmQ0YTkzYzRjZmEyMWI5MWYyMzlmODE0YjgyNGZmMzg0NGViM2M1NmFjODhhNDBiNTMyMTk4OTVhMjlkOGEzMmQiLCJyZXF1ZXN0Ijp7InRhcmdldCI6ImVycC1kYiIsIm9wZXJhdGlvbiI6ImNyZWF0ZS1zYWxlcy1vcmRlciIsInRvb2wiOiJjcmVhdGVfc2FsZXNfb3JkZXIiLCJyaXNrIjoiaGlnaCIsInN1YmplY3QiOnsiaWQiOiJjbGF1ZGUtdGVzdCIsInJvbGVzIjpbImludGVncmF0aW9uLW9wZXJhdG9yIl0sImFnZW50Ijp0cnVlfSwiaWRlbXBvdGVuY3lLZXkiOiJhZ2VudDpjbGF1ZGUtdGVzdDpBMkEtUkVDLTEiLCJwYXlsb2FkIjp7ImN1cnJlbmN5IjoiRVVSIiwiY3VzdG9tZXJJZCI6IkMtMTAwIiwiZXh0ZXJuYWxJZCI6IkEyQS1SRUMtMSIsImxpbmVzIjpbeyJtYXRlcmlhbCI6Ik0tNyIsInF1YW50aXR5IjoxfV0sIm5ldFZhbHVlIjoyNTAwMCwib3JkZXJEYXRlIjoiMjAyNi0xMC0wMSJ9LCJlbnRpdHkiOiJTYWxlc09yZGVyIiwiYW1vdW50IjoyNTAwMCwic2ltdWxhdGUiOnRydWUsInJlYXNvbiI6InJlcGxheSB0ZXN0In0sImFwcHJvdmFsVGltZW91dCI6MjU5MjAwMDAwMDAwMDAwfQ=="
+            }
+          ]
+        },
+        "workflowExecutionTimeout": "0s",
+        "workflowRunTimeout": "0s",
+        "workflowTaskTimeout": "10s",
+        "originalExecutionRunId": "01a0f753-ad49-7ee3-9c8a-4d963c6fd40a",
+        "identity": "1942@vm@",
+        "firstExecutionRunId": "01a0f753-ad49-7ee3-9c8a-4d963c6fd40a",
+        "attempt": 1,
+        "firstWorkflowTaskBackoff": "0s",
+        "header": {},
+        "workflowId": "create_sales_order/claude-test:A2A-REC-1"
+      }
+    },
+    {
+      "eventId": "2",
+      "eventTime": "2026-10-01T11:57:31.338090912Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048588",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "turgon-shop-orders-to-erp",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "3",
+      "eventTime": "2026-10-01T11:57:31.344332018Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048593",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "2",
+        "identity": "1940@vm@",
+        "requestId": "16aaaed7-4fad-4a7c-b8af-6bd2ef294b7f",
+        "historySizeBytes": "910",
+        "workerVersion": {
+          "buildId": "f2ba8ff1a78b8f045e5b7a8a52cac94c"
+        }
+      }
+    },
+    {
+      "eventId": "4",
+      "eventTime": "2026-10-01T11:57:31.354932385Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048597",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "2",
+        "startedEventId": "3",
+        "identity": "1940@vm@",
+        "workerVersion": {
+          "buildId": "f2ba8ff1a78b8f045e5b7a8a52cac94c"
+        },
+        "sdkMetadata": {
+          "langUsedFlags": [
+            3
+          ],
+          "sdkName": "temporal-go",
+          "sdkVersion": "1.45.0"
+        },
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "5",
+      "eventTime": "2026-10-01T11:57:31.355113450Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId": "1048598",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "5",
+        "activityType": {
+          "name": "PrepareAgentWrite"
+        },
+        "taskQueue": {
+          "name": "turgon-shop-orders-to-erp",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {},
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJyZXF1ZXN0Ijp7InRhcmdldCI6ImVycC1kYiIsIm9wZXJhdGlvbiI6ImNyZWF0ZS1zYWxlcy1vcmRlciIsInRvb2wiOiJjcmVhdGVfc2FsZXNfb3JkZXIiLCJyaXNrIjoiaGlnaCIsInN1YmplY3QiOnsiaWQiOiJjbGF1ZGUtdGVzdCIsInJvbGVzIjpbImludGVncmF0aW9uLW9wZXJhdG9yIl0sImFnZW50Ijp0cnVlfSwiaWRlbXBvdGVuY3lLZXkiOiJhZ2VudDpjbGF1ZGUtdGVzdDpBMkEtUkVDLTEiLCJwYXlsb2FkIjp7ImN1cnJlbmN5IjoiRVVSIiwiY3VzdG9tZXJJZCI6IkMtMTAwIiwiZXh0ZXJuYWxJZCI6IkEyQS1SRUMtMSIsImxpbmVzIjpbeyJtYXRlcmlhbCI6Ik0tNyIsInF1YW50aXR5IjoxfV0sIm5ldFZhbHVlIjoyNTAwMCwib3JkZXJEYXRlIjoiMjAyNi0xMC0wMSJ9LCJlbnRpdHkiOiJTYWxlc09yZGVyIiwiYW1vdW50IjoyNTAwMCwic2ltdWxhdGUiOnRydWUsInJlYXNvbiI6InJlcGxheSB0ZXN0In19"
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "0s",
+        "scheduleToStartTimeout": "0s",
+        "startToCloseTimeout": "60s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "4",
+        "retryPolicy": {
+          "initialInterval": "1s",
+          "backoffCoefficient": 2,
+          "maximumInterval": "60s",
+          "maximumAttempts": 8,
+          "nonRetryableErrorTypes": [
+            "TurgonDenied",
+            "TurgonRejected",
+            "TurgonInvalid"
+          ]
+        },
+        "useWorkflowBuildId": true
+      }
+    },
+    {
+      "eventId": "6",
+      "eventTime": "2026-10-01T11:57:31.359225103Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId": "1048604",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "5",
+        "identity": "1940@vm@",
+        "requestId": "c82663a0-fe73-4919-8cd1-d3330ba3aaf9",
+        "attempt": 1,
+        "workerVersion": {
+          "buildId": "f2ba8ff1a78b8f045e5b7a8a52cac94c"
+        }
+      }
+    },
+    {
+      "eventId": "7",
+      "eventTime": "2026-10-01T11:57:31.393339776Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId": "1048605",
+      "activityTaskCompletedEventAttributes": {
+        "result": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJkZWNpc2lvbiI6eyJhbGxvdyI6ZmFsc2UsInJlcXVpcmVBcHByb3ZhbCI6dHJ1ZSwicmVhc29ucyI6WyJoaWdoLXJpc2sgdG9vbCJdfSwicHJldmlldyI6eyJtb2RlIjoicm9sbGJhY2siLCJyb3ciOnsiaWQiOjE0LCJsaW5lcyI6W3sibWF0ZXJpYWwiOiJNLTciLCJxdWFudGl0eSI6MX1dLCJzdGF0dXMiOiJvcGVuIiwiY3VycmVuY3kiOiJFVVIiLCJuZXRfdmFsdWUiOjI1MDAwLjAwLCJvcmRlcl9kYXRlIjoiMjAyNi0xMC0wMSIsImN1c3RvbWVyX2lkIjoiQy0xMDAiLCJleHRlcm5hbF9pZCI6IkEyQS1SRUMtMSJ9fSwibmVlZHNBcHByb3ZhbCI6dHJ1ZX0="
+            }
+          ]
+        },
+        "scheduledEventId": "5",
+        "startedEventId": "6",
+        "identity": "1940@vm@"
+      }
+    },
+    {
+      "eventId": "8",
+      "eventTime": "2026-10-01T11:57:31.393346917Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048606",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "vm:e142d8cb-3fe9-4427-ad18-f91397179a76",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "turgon-shop-orders-to-erp"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "9",
+      "eventTime": "2026-10-01T11:57:31.395452482Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048610",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "8",
+        "identity": "1940@vm@",
+        "requestId": "e98ebd0f-53c8-4c6f-94ab-c862babc0fa3",
+        "historySizeBytes": "2404",
+        "workerVersion": {
+          "buildId": "f2ba8ff1a78b8f045e5b7a8a52cac94c"
+        }
+      }
+    },
+    {
+      "eventId": "10",
+      "eventTime": "2026-10-01T11:57:31.401912770Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048614",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "8",
+        "startedEventId": "9",
+        "identity": "1940@vm@",
+        "workerVersion": {
+          "buildId": "f2ba8ff1a78b8f045e5b7a8a52cac94c"
+        },
+        "sdkMetadata": {
+          "langUsedFlags": [
+            1
+          ]
+        },
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "11",
+      "eventTime": "2026-10-01T11:57:31.402032409Z",
+      "eventType": "EVENT_TYPE_MARKER_RECORDED",
+      "taskId": "1048615",
+      "markerRecordedEventAttributes": {
+        "markerName": "Version",
+        "details": {
+          "change-id": {
+            "payloads": [
+              {
+                "metadata": {
+                  "encoding": "anNvbi9wbGFpbg=="
+                },
+                "data": "Im5vdGlmeS1wZW9wbGUi"
+              }
+            ]
+          },
+          "version": {
+            "payloads": [
+              {
+                "metadata": {
+                  "encoding": "anNvbi9wbGFpbg=="
+                },
+                "data": "MQ=="
+              }
+            ]
+          }
+        },
+        "workflowTaskCompletedEventId": "10"
+      }
+    },
+    {
+      "eventId": "12",
+      "eventTime": "2026-10-01T11:57:31.402572732Z",
+      "eventType": "EVENT_TYPE_UPSERT_WORKFLOW_SEARCH_ATTRIBUTES",
+      "taskId": "1048616",
+      "upsertWorkflowSearchAttributesEventAttributes": {
+        "workflowTaskCompletedEventId": "10",
+        "searchAttributes": {
+          "indexedFields": {
+            "TemporalChangeVersion": {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg==",
+                "type": "S2V5d29yZExpc3Q="
+              },
+              "data": "WyJub3RpZnktcGVvcGxlLTEiXQ=="
+            }
+          }
+        }
+      }
+    },
+    {
+      "eventId": "13",
+      "eventTime": "2026-10-01T11:57:31.402603066Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_SCHEDULED",
+      "taskId": "1048617",
+      "activityTaskScheduledEventAttributes": {
+        "activityId": "13",
+        "activityType": {
+          "name": "Notify"
+        },
+        "taskQueue": {
+          "name": "turgon-shop-orders-to-erp",
+          "kind": "TASK_QUEUE_KIND_NORMAL"
+        },
+        "header": {},
+        "input": {
+          "payloads": [
+            {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "eyJraW5kIjoiYXBwcm92YWwucGVuZGluZyIsIndvcmtmbG93IjoiYWdlbnQvY3JlYXRlX3NhbGVzX29yZGVyIiwicnVuSWQiOiJjcmVhdGVfc2FsZXNfb3JkZXIvY2xhdWRlLXRlc3Q6QTJBLVJFQy0xIiwic3RlcCI6ImFnZW50LXdyaXRlIiwidGl0bGUiOiJBcHByb3ZhbCBuZWVkZWQ6IGNyZWF0ZS1zYWxlcy1vcmRlciBvbiBlcnAtZGIiLCJ0ZXh0IjoiQSBydW4gaXMgd2FpdGluZyBmb3Igc29tZW9uZSB0byBhcHByb3ZlIG9yIHJlamVjdCB0aGlzIHdyaXRlLiBOb3RoaW5nIGlzIHdyaXR0ZW4gdW50aWwgdGhlbi4iLCJmYWN0cyI6W3sibmFtZSI6IkFtb3VudCIsInZhbHVlIjoiMjUwMDAuMDAifSx7Im5hbWUiOiJEZWNpZGUgYmVmb3JlIiwidmFsdWUiOiIyMDI2LTEwLTA0IDExOjU3IFVUQyJ9LHsibmFtZSI6IkVudGl0eSIsInZhbHVlIjoiU2FsZXNPcmRlciJ9LHsibmFtZSI6Ik9wZXJhdGlvbiIsInZhbHVlIjoiY3JlYXRlLXNhbGVzLW9yZGVyIn0seyJuYW1lIjoiUmVmZXJlbmNlIiwidmFsdWUiOiJhZ2VudDpjbGF1ZGUtdGVzdDpBMkEtUkVDLTEifSx7Im5hbWUiOiJSZXF1ZXN0ZWQgYnkiLCJ2YWx1ZSI6ImFnZW50IGNsYXVkZS10ZXN0In0seyJuYW1lIjoiUmlzayIsInZhbHVlIjoiaGlnaCJ9LHsibmFtZSI6IlN0ZXAiLCJ2YWx1ZSI6ImFnZW50LXdyaXRlIn0seyJuYW1lIjoiVGFyZ2V0IiwidmFsdWUiOiJlcnAtZGIifSx7Im5hbWUiOiJXaHkgYXBwcm92YWwiLCJ2YWx1ZSI6ImhpZ2gtcmlzayB0b29sIn1dLCJhdCI6IjIwMjYtMTAtMDFUMTE6NTc6MzEuMzk1NDUyNDgyWiJ9"
+            }
+          ]
+        },
+        "scheduleToCloseTimeout": "0s",
+        "scheduleToStartTimeout": "0s",
+        "startToCloseTimeout": "30s",
+        "heartbeatTimeout": "0s",
+        "workflowTaskCompletedEventId": "10",
+        "retryPolicy": {
+          "initialInterval": "2s",
+          "backoffCoefficient": 2,
+          "maximumInterval": "30s",
+          "maximumAttempts": 5
+        },
+        "useWorkflowBuildId": true
+      }
+    },
+    {
+      "eventId": "14",
+      "eventTime": "2026-10-01T11:57:31.404874122Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_STARTED",
+      "taskId": "1048623",
+      "activityTaskStartedEventAttributes": {
+        "scheduledEventId": "13",
+        "identity": "1940@vm@",
+        "requestId": "ba366b22-92eb-42bc-b999-ad1bd748094d",
+        "attempt": 1,
+        "workerVersion": {
+          "buildId": "f2ba8ff1a78b8f045e5b7a8a52cac94c"
+        }
+      }
+    },
+    {
+      "eventId": "15",
+      "eventTime": "2026-10-01T11:57:31.414484047Z",
+      "eventType": "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+      "taskId": "1048624",
+      "activityTaskCompletedEventAttributes": {
+        "scheduledEventId": "13",
+        "startedEventId": "14",
+        "identity": "1940@vm@"
+      }
+    },
+    {
+      "eventId": "16",
+      "eventTime": "2026-10-01T11:57:31.414492673Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+      "taskId": "1048625",
+      "workflowTaskScheduledEventAttributes": {
+        "taskQueue": {
+          "name": "vm:e142d8cb-3fe9-4427-ad18-f91397179a76",
+          "kind": "TASK_QUEUE_KIND_STICKY",
+          "normalName": "turgon-shop-orders-to-erp"
+        },
+        "startToCloseTimeout": "10s",
+        "attempt": 1
+      }
+    },
+    {
+      "eventId": "17",
+      "eventTime": "2026-10-01T11:57:31.416846527Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+      "taskId": "1048629",
+      "workflowTaskStartedEventAttributes": {
+        "scheduledEventId": "16",
+        "identity": "1940@vm@",
+        "requestId": "7ca19992-51a3-4748-9751-2ef360657096",
+        "historySizeBytes": "4036",
+        "workerVersion": {
+          "buildId": "f2ba8ff1a78b8f045e5b7a8a52cac94c"
+        }
+      }
+    },
+    {
+      "eventId": "18",
+      "eventTime": "2026-10-01T11:57:31.421804640Z",
+      "eventType": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+      "taskId": "1048633",
+      "workflowTaskCompletedEventAttributes": {
+        "scheduledEventId": "16",
+        "startedEventId": "17",
+        "identity": "1940@vm@",
+        "workerVersion": {
+          "buildId": "f2ba8ff1a78b8f045e5b7a8a52cac94c"
+        },
+        "sdkMetadata": {},
+        "meteringMetadata": {}
+      }
+    },
+    {
+      "eventId": "19",
+      "eventTime": "2026-10-01T11:57:31.421849263Z",
+      "eventType": "EVENT_TYPE_TIMER_STARTED",
+      "taskId": "1048634",
+      "timerStartedEventAttributes": {
+        "timerId": "19",
+        "startToFireTimeout": "259200s",
+        "workflowTaskCompletedEventId": "18"
+      }
+    }
+  ]
+}

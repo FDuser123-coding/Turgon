@@ -53,8 +53,9 @@ func setup(t *testing.T, trusted string) (string, *lockedBuffer) {
 	return setupWith(t, trusted, nil)
 }
 
-// setupWith also serves write tools through writes, when it is not nil.
-func setupWith(t *testing.T, trusted string, writes WriteSubmitter) (string, *lockedBuffer) {
+// setupWith also serves write tools through writes, when it is not nil;
+// more changes the options.
+func setupWith(t *testing.T, trusted string, writes WriteSubmitter, more ...func(*Options)) (string, *lockedBuffer) {
 	t.Helper()
 	pool, schema := pgtest.Pool(t)
 	ctx := context.Background()
@@ -92,7 +93,7 @@ func setupWith(t *testing.T, trusted string, writes WriteSubmitter) (string, *lo
 		spec.Spec.Connectors[i].Config = json.RawMessage(local(string(spec.Spec.Connectors[i].Config)))
 	}
 	var log lockedBuffer
-	s, err := New(ctx, spec, Options{
+	opts := Options{
 		Registry: connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory},
 		Secrets: connector.StaticSecrets{
 			"openbao://erp-db/dsn":          pgtest.URL(t, schema),
@@ -101,7 +102,11 @@ func setupWith(t *testing.T, trusted string, writes WriteSubmitter) (string, *lo
 		Audit:  audit.New(&log),
 		Auth:   GatewayAuth{Trusted: []netip.Prefix{netip.MustParsePrefix(trusted)}},
 		Writes: writes,
-	})
+	}
+	for _, m := range more {
+		m(&opts)
+	}
+	s, err := New(ctx, spec, opts)
 	if err != nil {
 		t.Fatal(err)
 	}

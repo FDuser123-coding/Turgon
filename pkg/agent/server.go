@@ -57,6 +57,11 @@ type Options struct {
 	// card; defaults to the request's own host.
 	A2AURL  string
 	Version string
+	// Push decides which URLs agents may have notified (A2A push
+	// notifications). StreamLimit ends an A2A stream following a write
+	// after this long (default an hour); the agent resubscribes or polls.
+	Push        PushGuard
+	StreamLimit time.Duration
 }
 
 // WriteSubmitter starts agent writes, or reports on one already started
@@ -66,6 +71,14 @@ type WriteSubmitter interface {
 	// Status reports on a write already started; engine.ErrUnknownWrite
 	// if there is none.
 	Status(ctx context.Context, id string) (engine.AgentWriteStatus, error)
+	// Watch waits up to wait for a write to end, then reports on it.
+	Watch(ctx context.Context, id string, wait time.Duration) (engine.AgentWriteStatus, error)
+	// SetPush, Push and DeletePush manage where a write's changes are
+	// pushed to; SetPush and DeletePush return engine.ErrWriteFinished
+	// once it has ended.
+	SetPush(ctx context.Context, id string, c engine.PushConfig) error
+	Push(ctx context.Context, id string) ([]engine.PushConfig, error)
+	DeletePush(ctx context.Context, id, configID string) error
 }
 
 // Server is an MCP endpoint over a runtime spec's read tools.
@@ -78,6 +91,8 @@ type Server struct {
 	version   string
 	a2aURL    string
 	a2a       http.Handler
+	push      PushGuard
+	streamFor time.Duration
 	tools     []compiler.Tool
 	instances map[string]connector.Instance // by endpoint
 	handler   http.Handler
@@ -92,7 +107,10 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Server
 		opts.Policy = policy.WritebackDefault{}
 	}
 	s := &Server{auth: opts.Auth, writes: opts.Writes, digest: spec.Metadata.Digest, timeout: opts.ApprovalTimeout, a2aURL: opts.A2AURL,
-		instances: map[string]connector.Instance{}}
+		instances: map[string]connector.Instance{}, push: opts.Push, streamFor: opts.StreamLimit}
+	if s.streamFor <= 0 {
+		s.streamFor = time.Hour
+	}
 	needed := map[string]bool{}
 	for _, t := range spec.Spec.Tools {
 		switch {

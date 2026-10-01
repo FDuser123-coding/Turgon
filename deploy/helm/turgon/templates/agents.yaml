@@ -80,6 +80,7 @@ spec:
             - --auth=gateway
             - --trusted-gateway=127.0.0.1/32
             - --audit-log=postgres
+            - --a2a-stream-limit={{ $.Values.agents.streamLimit }}
             {{- if has $name $.Values.agents.writes }}
             - --writes
             - --wait={{ $.Values.agents.wait }}
