@@ -73,7 +73,7 @@ type ResolveStep struct {
 	// Strategy is exact (a known cross-reference, else a data steward),
 	// probabilistic (the built-in matcher: link automatically when the
 	// match is certain enough, else a steward with suggestions), or splink
-	// (reserved for an external Splink service).
+	// (the same, scored by the Splink service in deploy/splink).
 	Strategy       string  `json:"strategy"`
 	AutoMatchAbove float64 `json:"autoMatchAbove"`
 	// Match names the document fields that identify a record and how to

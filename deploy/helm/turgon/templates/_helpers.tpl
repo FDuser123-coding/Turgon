@@ -50,6 +50,15 @@ app.kubernetes.io/instance: {{ .Release.Name }}
     secretKeyRef:
       name: {{ include "turgon.databaseSecret" . }}
       key: {{ include "turgon.databaseKey" . }}
+{{- if or .Values.splink.enabled .Values.splink.url }}
+- name: TURGON_SPLINK_URL
+  value: {{ .Values.splink.url | default (printf "http://%s-splink:8080" (include "turgon.fullname" .)) | quote }}
+{{- with .Values.splink.existingSecret }}
+- name: TURGON_SPLINK_TOKEN
+  valueFrom:
+    secretKeyRef: { name: {{ . }}, key: token }
+{{- end }}
+{{- end }}
 - name: TURGON_TEMPORAL_ADDRESS
   value: {{ .Values.temporal.address | quote }}
 - name: TURGON_TEMPORAL_NAMESPACE

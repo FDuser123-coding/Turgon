@@ -1,6 +1,7 @@
 # Signed releases (architecture §9 supply chain, §11 delivery). Pushing a
 # tag like v0.2.0 builds, scans, signs and publishes:
 #   ghcr.io/<owner>/turgon:<version>          multi-arch image, provenance + SBOM
+#   ghcr.io/<owner>/turgon-splink:<version>   the Splink service (deploy/splink), the same
 #   oci://ghcr.io/<owner>/charts/turgon       Helm chart
 #   GitHub release                             binaries, appliance bundles,
 #                                              checksums, SBOM
@@ -89,8 +90,69 @@ jobs:
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
 
+  splink-image:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@v4
+      - name: Registry name and version
+        # Tagged like the turgon image, so the chart's appVersion names both.
+        run: |
+          echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/turgon-splink" >> "$GITHUB_ENV"
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Test
+        run: pip install -r deploy/splink/requirements.txt && python -m unittest discover -s deploy/splink/tests
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: deploy/splink
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ env.IMAGE }}:${{ env.VERSION }}
+          provenance: mode=max
+          sbom: true
+      - name: Scan for vulnerabilities
+        uses: aquasecurity/trivy-action@0.33.1
+        with:
+          image-ref: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          severity: CRITICAL
+          ignore-unfixed: true
+          exit-code: "1"
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign the image
+        run: cosign sign --yes "${IMAGE}@${{ steps.build.outputs.digest }}"
+      - name: SBOM
+        uses: anchore/sbom-action@v0
+        with:
+          image: ${{ env.IMAGE }}@${{ steps.build.outputs.digest }}
+          format: spdx-json
+          output-file: turgon-splink-image.spdx.json
+      - name: Attest the SBOM
+        run: cosign attest --yes --type spdxjson --predicate turgon-splink-image.spdx.json "${IMAGE}@${{ steps.build.outputs.digest }}"
+      - uses: actions/attest-build-provenance@v2
+        with:
+          subject-name: ${{ env.IMAGE }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
   chart:
-    needs: image
+    needs: [image, splink-image]
     runs-on: ubuntu-latest
     permissions:
       contents: read

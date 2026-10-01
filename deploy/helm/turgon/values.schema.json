@@ -168,6 +168,32 @@
         "agentsFrom": { "type": "array" }
       }
     },
+    "splink": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "url": { "type": "string", "pattern": "^(https?://[^/]+/?)?$" },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string" },
+            "pullPolicy": { "enum": ["Always", "IfNotPresent", "Never"] }
+          }
+        },
+        "replicas": { "type": "integer", "minimum": 0 },
+        "retrain": { "type": "integer", "minimum": 10 },
+        "prior": { "type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1 },
+        "database": {
+          "type": "object",
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "existingSecretKey": { "type": "string", "minLength": 1 }
+          }
+        },
+        "existingSecret": { "type": "string" }
+      }
+    },
     "agents": {
       "type": "object",
       "properties": {

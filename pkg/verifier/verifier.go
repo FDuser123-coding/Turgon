@@ -175,7 +175,7 @@ func (v *Verifier) recipe(rec *v1alpha1.Recipe, bound map[string]*v1alpha1.Conne
 			switch s.Resolve.Strategy {
 			case v1alpha1.StrategyExact, v1alpha1.StrategyProbabilistic:
 			case v1alpha1.StrategySplink:
-				r.add(StageMapping, SeverityWarning, path+".resolve.strategy", "the splink strategy needs an external Splink service this runtime does not have; unmatched records go to a data steward (use probabilistic for the built-in matcher)")
+				r.add(StageMapping, SeverityInfo, path+".resolve.strategy", "matched by the Splink service (deploy/splink) the workers reach at TURGON_SPLINK_URL; without it, unmatched records go to a data steward")
 			default:
 				r.add(StageMapping, SeverityError, path+".resolve.strategy", "unknown identity-resolution strategy %q (want exact, probabilistic or splink)", s.Resolve.Strategy)
 			}

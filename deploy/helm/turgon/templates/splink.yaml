@@ -1,0 +1,109 @@
+{{- if .Values.splink.enabled }}
+{{- $s := .Values.splink }}
+---
+# The Splink service scores records for resolve steps with strategy: splink.
+# It reads the confirmed links (turgon_xref) and keeps its models in memory;
+# Turgon decides what to link.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "turgon.fullname" . }}-splink
+  labels:
+    {{- include "turgon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: splink
+spec:
+  replicas: {{ $s.replicas }}
+  selector:
+    matchLabels:
+      {{- include "turgon.selector" . | nindent 6 }}
+      app.kubernetes.io/component: splink
+  template:
+    metadata:
+      labels:
+        {{- include "turgon.selector" . | nindent 8 }}
+        app.kubernetes.io/component: splink
+    spec:
+      {{- include "turgon.podSettings" . | nindent 6 }}
+      containers:
+        - name: splink
+          image: "{{ $s.image.repository }}:{{ $s.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ $s.image.pullPolicy }}
+          env:
+            - name: TURGON_SPLINK_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  {{- if $s.database.existingSecret }}
+                  name: {{ $s.database.existingSecret }}
+                  key: {{ $s.database.existingSecretKey }}
+                  {{- else }}
+                  name: {{ include "turgon.databaseSecret" . }}
+                  key: {{ include "turgon.databaseKey" . }}
+                  {{- end }}
+            - name: TURGON_SPLINK_LISTEN
+              value: "0.0.0.0:8080"
+            - name: TURGON_SPLINK_RETRAIN
+              value: {{ $s.retrain | quote }}
+            - name: TURGON_SPLINK_PRIOR
+              value: {{ $s.prior | quote }}
+            {{- with $s.existingSecret }}
+            - name: TURGON_SPLINK_TOKEN
+              valueFrom:
+                secretKeyRef: { name: {{ . }}, key: token }
+            {{- end }}
+            - name: HOME
+              value: /tmp
+          ports:
+            - { name: http, containerPort: 8080 }
+          readinessProbe:
+            httpGet: { path: /healthz, port: http }
+            periodSeconds: 10
+          livenessProbe:
+            tcpSocket: { port: http }
+            periodSeconds: 30
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          resources:
+            {{- toYaml $s.resources | nindent 12 }}
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: { sizeLimit: 1Gi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "turgon.fullname" . }}-splink
+  labels:
+    {{- include "turgon.labels" . | nindent 4 }}
+    app.kubernetes.io/component: splink
+spec:
+  selector:
+    {{- include "turgon.selector" . | nindent 4 }}
+    app.kubernetes.io/component: splink
+  ports:
+    - { name: http, port: 8080, targetPort: http }
+{{- if .Values.networkPolicy.enabled }}
+---
+# Only Turgon's own pods (the workers) reach the Splink service.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "turgon.fullname" . }}-splink
+  labels:
+    {{- include "turgon.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "turgon.selector" . | nindent 6 }}
+      app.kubernetes.io/component: splink
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: 8080 }
+      from:
+        - podSelector:
+            matchLabels:
+              {{- include "turgon.selector" . | nindent 14 }}
+{{- end }}
+{{- end }}
