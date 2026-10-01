@@ -36,6 +36,9 @@ func TestRecipeExtensionsAreEmbeddedAndWired(t *testing.T) {
 	if want := (EntityOperation{Endpoint: "erp-db", Operation: "update-sales-order", Risk: "low", IDField: "externalId"}); p.Proposals["SalesOrder"] != want {
 		t.Errorf("proposals %+v", p.Proposals)
 	}
+	if p.Secrets["acme-api-key"] != "openbao://plugins/credit-check/acme-api-key" {
+		t.Errorf("secrets %+v", p.Secrets)
+	}
 	w := rt.Spec.Workflows[0].Steps[2].Write
 	if w.Event != "model.SalesOrder.created" || !reflect.DeepEqual(w.Plugins, []string{"credit-check"}) {
 		t.Fatalf("write step %+v", w)

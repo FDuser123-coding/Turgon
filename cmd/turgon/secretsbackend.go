@@ -147,6 +147,11 @@ func specSecretRefs(spec *compiler.RuntimeSpec) []string {
 			seen[ref] = true
 		}
 	}
+	for _, p := range spec.Spec.Plugins {
+		for _, ref := range p.Secrets {
+			seen[ref] = true
+		}
+	}
 	out := make([]string, 0, len(seen))
 	for r := range seen {
 		out = append(out, r)

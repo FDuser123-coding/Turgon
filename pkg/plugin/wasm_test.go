@@ -17,6 +17,7 @@ type recorder struct {
 	entities  map[string]string
 	proposals []string
 	published map[string][][]byte
+	requests  []HTTPRequest
 	fail      error // returned by Get, as a host failure
 }
 
@@ -52,6 +53,23 @@ func (r *recorder) Publish(_ context.Context, topic string, payload []byte) erro
 	}
 	r.published[topic] = append(r.published[topic], payload)
 	return nil
+}
+
+func (r *recorder) Send(_ context.Context, req HTTPRequest) (*HTTPResponse, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.requests = append(r.requests, req)
+	switch {
+	case strings.Contains(req.URL, "denied"):
+		return nil, &ErrorCode{Kind: Denied}
+	case strings.Contains(req.URL, "down"):
+		return nil, &ErrorCode{Kind: Unavailable, Message: "connection refused"}
+	}
+	hs := []Header{{"Content-Type", "application/json"}}
+	for _, h := range req.Headers {
+		hs = append(hs, Header{"Echo-" + h.Name, h.Value})
+	}
+	return &HTTPResponse{Status: 201, Headers: hs, Body: append([]byte(req.Method+" "), req.Body...)}, nil
 }
 
 func (r *recorder) result(t *testing.T) string {
@@ -179,4 +197,52 @@ func TestComponentsRunTheirCoreModule(t *testing.T) {
 	if err := m.Handle(context.Background(), []byte("get Customer C-1"), h); err != nil || h.result(t) != `ok {"id":"C-1"}` {
 		t.Fatalf("%v", err)
 	}
+}
+
+func TestWorld020(t *testing.T) {
+	m := load(t, "probe2.wasm", small)
+	if m.World != "turgon:stack/logic-plugin@0.2.0" || strings.Join(m.Imports, ",") != "entities.get,events.publish,http.send" {
+		t.Fatalf("world %s, imports %v", m.World, m.Imports)
+	}
+	ctx := context.Background()
+	h := &recorder{}
+	for event, want := range map[string]string{
+		"http POST https://api.example.com/score Authorization Bearer {{secret:key}}\n{\"customer\":\"C-1\"}": `ok 201 [Content-Type=application/json,Echo-Authorization=Bearer {{secret:key}}] POST {"customer":"C-1"}`,
+		"http GET https://denied.example.com/":       "err denied",
+		"http GET https://down.example.com/":         "err unavailable connection refused",
+		"get Customer C-404":                         "err not-found",
+		"publish credit.checked {\"status\":\"ok\"}": "ok published",
+	} {
+		if err := m.Handle(ctx, []byte(event), h); err != nil {
+			t.Fatalf("%s: %v", event, err)
+		}
+		if got := h.result(t); got != want {
+			t.Errorf("%s:\n got %q\nwant %q", event, got, want)
+		}
+	}
+	if string(h.published["credit.checked"][0]) != `{"status":"ok"}` {
+		t.Fatalf("published %q", h.published["credit.checked"])
+	}
+	// Requests count as host calls (the runner caps requests lower).
+	if err := m.Handle(ctx, []byte("many-http https://api.example.com/"), h); err != nil || h.result(t) != "sent 40" {
+		t.Fatalf("many requests: %v %q", err, h.result(t))
+	}
+}
+
+// A 0.1.0 plugin sees unavailable as invalid: its world has no such case.
+func TestWorld010SeesUnavailableAsInvalid(t *testing.T) {
+	m := load(t, "probe.wasm", small)
+	if m.World != "turgon:stack/logic-plugin@0.1.0" {
+		t.Fatalf("world %s", m.World)
+	}
+	h := &unavailable{recorder{}}
+	if err := m.Handle(context.Background(), []byte("get Customer C-1"), h); err != nil || h.result(t) != "err invalid unavailable: the ERP is down" {
+		t.Fatalf("%v %q", err, h.result(t))
+	}
+}
+
+type unavailable struct{ recorder }
+
+func (u *unavailable) Get(context.Context, string, string) (string, error) {
+	return "", &ErrorCode{Kind: Unavailable, Message: "the ERP is down"}
 }

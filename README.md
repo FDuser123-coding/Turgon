@@ -808,45 +808,89 @@ and identity headers; the gateway rewrites the card's URL to its own.
 A logic plugin (§18.4) is customer- or partner-written code that reacts to what Turgon writes.
 It runs as WebAssembly in the worker, isolated from everything but the calls an administrator
 granted it. `credit-check` is the example. It is installed next to a recipe
-(`shop-orders-with-credit-check`) or in a stack blueprint (`eu-distributor-core`). When a sales
-order is committed, it reads the customer's credit limit and proposes the order's credit status:
-`approved` within the limit, `review` above it.
+(`shop-orders-with-credit-check`) or in a stack blueprint (`eu-distributor-core`).
+
+When a sales order is committed, `credit-check`:
+- reads the customer's credit limit;
+- asks the risk service at `api.acme-risk.example` for the customer's score, with an API key
+  Turgon puts in for it;
+- proposes the order's credit status: `approved` within the limit and with a score of 50 or
+  more, `review` otherwise (if the risk service does not answer, the limit decides alone);
+- publishes `credit.checked` for other plugins.
 
 ```yaml
 # examples/plugins/credit-check.yaml          # examples/recipes/shop-orders-with-credit-check.yaml
 spec:                                         spec:
   type: logic                                   ...
-  runtime: wasm                                 extensions: [credit-check@1.2]
-  world: turgon:stack/logic-plugin@0.1.0
+  runtime: wasm                                 extensions: [credit-check@1.3]
+  world: turgon:stack/logic-plugin@0.2.0
   module: credit-check/credit-check.wasm
   subscribes: [model.SalesOrder.created]
   permissions:
     entities: { read: [Customer], propose: [SalesOrder.creditStatus] }
-  limits: { memoryMB: 64, timeoutMs: 2000 }
+    network:  { allow: ["api.acme-risk.example"] }
+    secrets:  [acme-api-key]        # a handle, never the value
+    events:   { publish: [credit.checked] }
+  limits: { memoryMB: 64, timeoutMs: 5000 }
 ```
 
-- **The interface** is the WIT world in `wit/turgon-stack.wit`.
+- **The interface** is the WIT world in `wit/turgon-stack.wit`, version 0.2.0. Plugins built
+  for 0.1.0 (`wit/0.1.0/`, no network or secrets) still run unchanged.
   - The plugin exports `handle(event)`. It receives the event as JSON: its `type`, the
-    `entity`, its `id` and the written `record`.
-  - It may import `get` and `propose-change`. `publish` is declared but not available yet.
+    `entity`, its `id`, and the written `record` (or the `payload` of an event another plugin
+    published).
+  - It may import:
+    - `entities.get` and `entities.propose-change`;
+    - `events.publish`;
+    - (0.2.0) `http.send`.
+  - Errors are `denied`, `not-found`, `invalid(reason)` and (0.2.0) `unavailable(reason)`
+    for a service that did not answer. A 0.1.0 plugin sees `unavailable` as `invalid`.
   - Build it with wit-bindgen for `wasm32-unknown-unknown`: the example is Rust
     (`examples/plugins/credit-check/`). A component made with `wasm-tools component new` works
     too.
 - **The sandbox.** Turgon runs plugins with wazero, in-process.
-  - A plugin gets no WASI: no files, clock, randomness, environment or network. A module that
-    imports anything outside the world is refused.
-  - Each event runs in a fresh instance, within `memoryMB` and `timeoutMs`. Invocations are
-    capped at 64 host calls and 1 MiB per argument.
+  - A plugin gets no WASI: no files, clock, randomness or environment. A module that imports
+    anything outside the world is refused.
+  - Each event runs in a fresh instance, within `memoryMB` and `timeoutMs`; HTTP requests
+    count against the same time.
+  - Invocations are capped at 64 host calls, 16 HTTP requests, 16 published events and 1 MiB
+    per argument or response.
   - A plugin that traps, loops or runs out of memory fails its invocation only. The run's
     write stands, and the next event starts clean.
 - **Grants, enforced on every call.**
   - `get` reads an entity the plugin may read. Reads go through the write guard with the
-    plugin's identity (`plugin:credit-check@1.2.0`), so policy, the rate governor, the
+    plugin's identity (`plugin:credit-check@1.3.0`), so policy, the rate governor, the
     circuit breaker and the audit log apply.
-  - `propose-change` takes a JSON patch of fields the plugin may change (`SalesOrder.creditStatus`
-    allows only `creditStatus`). It becomes a governed write: policy decides, and a high-risk
-    or large change waits for a person in the console like an agent's write.
-  - A proposal is idempotent per run, entity and change. Anything else answers `denied`.
+  - `propose-change` takes a JSON patch of fields the plugin may change
+    (`SalesOrder.creditStatus` allows only `creditStatus`). It becomes a governed write:
+    policy decides, and a high-risk or large change waits for a person in the console like an
+    agent's write. A proposal is idempotent per run, entity and change.
+  - `http.send` reaches only the hosts in `network.allow` (port 443 unless a grant names
+    another), over https.
+    - Turgon checks every address the host resolves to and refuses private, loopback and
+      link-local ones (cloud metadata included), at every connection.
+    - There are no redirects and no proxy. `TURGON_PLUGIN_NETWORK_ALLOW` (CIDRs) lets
+      plugins reach internal ranges; plain `http` is accepted only there.
+    - A plugin cannot set `Host`, `Content-Length` or hop-by-hop headers.
+    - Error responses come back as responses; the plugin decides.
+  - **Secrets.** A header value may name a granted secret as `{{secret:acme-api-key}}`, and
+    Turgon puts the value in on the way out.
+    - The plugin never holds the secret, and the audit log records only the hosts called,
+      never paths, headers or bodies.
+    - The value is read with the deployment's secret backend from
+      `openbao://plugins/<plugin>/<handle>`, for example
+      `TURGON_SECRET_PLUGINS_CREDIT_CHECK_ACME_API_KEY` with environment variables, or the
+      field `acme-api-key` of the secret `plugins/credit-check` in OpenBao or a cloud secret
+      manager. It rotates like connection secrets.
+    - Grant network access only to hosts you trust with the secret: a host that echoed
+      request headers back would hand it to the plugin.
+  - `events.publish` sends only granted topics. Plugins subscribe to them as
+    `plugin.<publisher>.<topic>` (`plugin.credit-check.credit.checked`).
+    - Published events are delivered after the publishing invocation succeeds, to every
+      subscribed plugin in the spec, up to three plugins deep.
+    - A plugin never handles an event its own chain started. A subscriber's failure is
+      audited and does not fail the publisher.
+  - Anything else answers `denied`.
 - **Which operations serve them.** By convention, `get-<entity>` reads and
   `update-<entity>` applies proposals, on a connection that declares the entity: `erp-db`
   gains `update-sales-order`, which sets `credit_status`. The verifier warns when an entity
@@ -859,16 +903,24 @@ spec:                                         spec:
 - **The code is part of the spec.** The compiler embeds the module and its SHA-256 in the
   runtime spec, so the spec's digest and signature cover the plugin's code. Workers check the
   digest before loading.
-  - `turgon verify` loads each module within its limits and reports its imports.
-  - It warns about grants the world cannot use, such as network or secrets.
+  - `turgon verify` loads each module within its limits, reports its world and imports, and
+    refuses a module built for another world than its manifest says.
+  - `turgon check` loads each plugin, reads its secrets and checks its hosts resolve to
+    addresses it may reach.
+  - `turgon secrets` lists the plugins' secrets with the connections'.
 - **Reproducible modules.** `scripts/build-plugins.sh` rebuilds the committed modules with a
   pinned Rust toolchain and remapped paths. CI checks that they match their sources.
-- **Verified live.**
-  - Setup: the real binary, with Temporal and Postgres. Customer `C-100` has a credit limit
-    of 1000.
-  - Orders of 349.90 and 2500.00 were approved. The plugin then set `credit_status` to
-    `approved` and `review` within about 60 ms each, through low-risk governed writes.
-  - The audit log records each read, policy decision and write as the plugin's.
+- **Verified live**, with the real binary, Temporal, Postgres and a stand-in risk service at
+  `https://api.acme-risk.example` (a local DNS entry and its own CA). The credit limit was
+  1000.
+  - 500 with a score of 80: `approved`.
+  - 500 with a score of 30: `review`.
+  - 500 with the risk service down: `approved`, on the limit alone.
+  - 1500: `review`.
+  - Each invocation took about 40–70 ms, published `credit.checked`, and recorded only the
+    host it called. The API key reached the risk service and appeared nowhere in the logs or
+    the audit log.
+  - `turgon check` read the plugin's secret and checked its host.
 
 ### Install on Kubernetes
 
@@ -1368,8 +1420,9 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
 | `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
 | `cmd/turgon` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check`, `mcp`, `gateway-config` |
-| `pkg/plugin` | §18.4 | Logic plugin host: wazero sandbox speaking the Canonical ABI of `turgon:stack/logic-plugin`; `runner/` enforces grants, reads through the write guard, proposes governed writes and audits each invocation |
-| `wit/turgon-stack.wit` | §18.4 | Host interface for Wasm plugins |
+| `pkg/plugin` | §18.4 | Logic plugin host: wazero sandbox speaking the Canonical ABI of `turgon:stack/logic-plugin` 0.1.0 and 0.2.0; `runner/` enforces grants, reads through the write guard, proposes governed writes, makes HTTP requests with host-inserted secrets, delivers events between plugins and audits each invocation |
+| `pkg/netguard` | §9 | Keeps requests Turgon makes for others (A2A push notifications, plugins' HTTP) on public addresses |
+| `wit/turgon-stack.wit` | §18.4 | Host interface for Wasm plugins (0.2.0; `wit/0.1.0/` keeps the first version) |
 | `examples/` | App. A–C, §18.5 | SAP ECC, Salesforce, Shopify, Stripe, HubSpot, Power BI connectors and connections; slot contracts; the `eu-distributor-core` blueprint |
 
 ## Design notes
@@ -1409,6 +1462,5 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 In rough roadmap order (§16, §19): Salesforce managed subscriptions (the Pub/Sub API keeping the replay position);
 an external Splink service; the metadata
-graph and discovery; plugins publishing events, and network or secret access for them (a later version of
-the plugin world). The native Postgres, Salesforce and REST connectors run inside the Go
+graph and discovery. The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

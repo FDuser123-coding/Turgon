@@ -139,7 +139,7 @@ jobs:
                 --set agents.enabled=true --set 'agents.writes={shop-orders-to-erp}' --set agents.gateway.rateLimit=100/1m
                 --set agents.gateway.issuer=https://login.example.com --set agents.gateway.jwksURL=https://login.example.com/jwks
                 --set 'agents.gateway.audiences={turgon}' --set agents.gateway.ingress.enabled=true
-                --set agents.gateway.ingress.host=agents.example.com --set 'agents.pushAllow={10.40.0.0/16}'
+                --set agents.gateway.ingress.host=agents.example.com --set 'agents.pushAllow={10.40.0.0/16}' --set 'workers.pluginNetworkAllow={10.41.0.0/16}'
                 --set-file specs.stripe-payments-to-erp=/tmp/stripe.json --set workers.webhooks.enabled=true
                 --set workers.webhooks.ingress.enabled=true --set workers.webhooks.ingress.host=hooks.example.com
                 --set workers.consoleURL=https://turgon.example.com)
@@ -147,6 +147,7 @@ jobs:
           helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" > /tmp/rendered.yaml
           grep -q -- '--a2a-stream-limit=1h' /tmp/rendered.yaml
           grep -A1 'name: TURGON_A2A_PUSH_ALLOW' /tmp/rendered.yaml | grep -q '10.40.0.0/16'
+          grep -A1 'name: TURGON_PLUGIN_NETWORK_ALLOW' /tmp/rendered.yaml | grep -q '10.41.0.0/16'
           # The console signing people in itself, instead of behind a proxy.
           helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" --set console.auth.mode=oidc \
             --set console.auth.oidc.issuer=https://login.example.com --set console.auth.oidc.clientID=turgon \

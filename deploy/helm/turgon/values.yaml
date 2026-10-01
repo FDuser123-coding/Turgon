@@ -109,6 +109,10 @@ secrets:
     existingSecret: ""
 
 workers:
+  # Logic plugins call only the hosts their manifests are granted, and only
+  # at public addresses. List internal address ranges they may reach too
+  # (plain http is accepted only for these).
+  pluginNetworkAllow: []   # e.g. [10.40.0.0/16]
   replicas: 1
   pollInterval: 2s
   # Requests each worker keeps open to Temporal per task kind: "auto"
@@ -283,7 +287,8 @@ networkPolicy:
   # list Temporal, the state database, every connected system and the secret
   # manager (OpenBao, the cloud's endpoint; on GKE also the metadata server,
   # 169.254.169.254:80, which Workload Identity tokens come from), and, for
-  # A2A push notifications, the agents' receivers (443).
+  # A2A push notifications, the agents' receivers (443), and the hosts logic
+  # plugins are granted.
   allowAllEgress: true
   egressRules: []
 

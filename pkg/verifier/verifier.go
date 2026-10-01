@@ -493,6 +493,11 @@ func (v *Verifier) Blueprint(b *v1alpha1.StackBlueprint) *Report {
 		}
 	}
 
+	for _, ref := range b.Spec.Extensions {
+		if p, err := v.cat.Plugin(v1alpha1.ParseRef(ref)); err == nil {
+			addPublished(events, p)
+		}
+	}
 	for i, ref := range b.Spec.Extensions {
 		path := fmt.Sprintf("spec.extensions[%d]", i)
 		name, con := v1alpha1.ParseRef(ref)

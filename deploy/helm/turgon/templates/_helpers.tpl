@@ -41,6 +41,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 - name: TURGON_A2A_PUSH_ALLOW
   value: {{ join "," . | quote }}
 {{- end }}
+{{- with .Values.workers.pluginNetworkAllow }}
+- name: TURGON_PLUGIN_NETWORK_ALLOW
+  value: {{ join "," . | quote }}
+{{- end }}
 - name: TURGON_DATABASE_URL
   valueFrom:
     secretKeyRef:

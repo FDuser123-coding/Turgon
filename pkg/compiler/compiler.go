@@ -169,6 +169,8 @@ type PluginDeployment struct {
 	// and propose-change calls, by entity.
 	Reads     map[string]EntityOperation `json:"reads,omitempty"`
 	Proposals map[string]EntityOperation `json:"proposals,omitempty"`
+	// Secrets maps the plugin's secret handles to secret references.
+	Secrets map[string]string `json:"secrets,omitempty"`
 }
 
 // EntityOperation is an operation serving one entity for plugins. IDField
@@ -515,6 +517,12 @@ func (b *builder) deployment(p *v1alpha1.Plugin, slot string) PluginDeployment {
 		}
 		sum := sha256.Sum256(mod)
 		d.Module, d.ModuleSHA256 = mod, hex.EncodeToString(sum[:])
+		for _, h := range p.Spec.Permissions.Secrets {
+			if d.Secrets == nil {
+				d.Secrets = map[string]string{}
+			}
+			d.Secrets[h] = plugin.SecretRef(p.Metadata.Name, h)
+		}
 	}
 	return d
 }

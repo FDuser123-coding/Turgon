@@ -1,7 +1,7 @@
 // Commands, one per event: "get KIND ID", "propose KIND ID PATCH",
 // "publish TOPIC", "fail MESSAGE", "loop", "grow", "trap", "spam".
 // Results are published on the topic "result", so the test host sees them.
-wit_bindgen::generate!({ world: "logic-plugin", path: "../../../../wit" });
+wit_bindgen::generate!({ world: "logic-plugin", path: "../../../../wit/0.1.0" });
 
 use turgon::stack::entities::{get, propose_change};
 use turgon::stack::events::publish;

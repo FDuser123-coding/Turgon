@@ -104,6 +104,7 @@ type PluginSpec struct {
 type PluginPermissions struct {
 	Entities *EntityPermissions  `json:"entities,omitempty"`
 	Network  *NetworkPermissions `json:"network,omitempty"`
+	Events   *EventPermissions   `json:"events,omitempty"`
 	// Secrets are handles into the host's secret store, never values.
 	Secrets []string `json:"secrets,omitempty"`
 }
@@ -116,7 +117,15 @@ type EntityPermissions struct {
 }
 
 type NetworkPermissions struct {
+	// Allow lists the hosts a plugin may call over HTTPS, with a port when
+	// not 443: api.acme-risk.example, risk.internal.example:8443.
 	Allow []string `json:"allow,omitempty"`
+}
+
+// EventPermissions lists the topics a plugin may publish. Other plugins
+// subscribe to them as plugin.<publisher>.<topic>.
+type EventPermissions struct {
+	Publish []string `json:"publish,omitempty"`
 }
 
 type PluginLimits struct {
@@ -127,6 +136,8 @@ type PluginLimits struct {
 type PluginUI struct {
 	Panel string `json:"panel"`
 }
+
+var topicRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$`)
 
 var hostRE = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+(:\d+)?$`)
 
@@ -187,6 +198,13 @@ func (p *Plugin) Validate() FieldErrors {
 			if strings.Contains(h, "*") || !hostRE.MatchString(h) {
 				es.add(fmt.Sprintf("spec.permissions.network.allow[%d]", i),
 					"must be an explicit host name without wildcards, got %q", h)
+			}
+		}
+	}
+	if e := s.Permissions.Events; e != nil {
+		for i, topic := range e.Publish {
+			if !topicRE.MatchString(topic) {
+				es.add(fmt.Sprintf("spec.permissions.events.publish[%d]", i), "must be a topic such as credit.checked (lowercase, digits, '.', '-'), got %q", topic)
 			}
 		}
 	}

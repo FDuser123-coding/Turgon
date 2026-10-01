@@ -7,10 +7,16 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"maps"
+	"net/http"
+	"net/url"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -18,7 +24,9 @@ import (
 	"github.com/fduser123-coding/turgon/apis/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/audit"
 	"github.com/fduser123-coding/turgon/pkg/compiler"
+	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/engine"
+	"github.com/fduser123-coding/turgon/pkg/netguard"
 	"github.com/fduser123-coding/turgon/pkg/plugin"
 	"github.com/fduser123-coding/turgon/pkg/policy"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
@@ -49,14 +57,25 @@ type Runner struct {
 	read    Reader
 	propose Proposer
 	audit   audit.Recorder
+	opts    Options
+	client  *http.Client
+}
+
+// Options give plugins the network and secrets their grants allow.
+type Options struct {
+	// Network keeps plugins' HTTP requests on public addresses, unless it
+	// allows more ranges (TURGON_PLUGIN_NETWORK_ALLOW).
+	Network netguard.Guard
+	// Secrets resolves the secret references plugins' handles map to.
+	Secrets connector.SecretResolver
 }
 
 var _ engine.PluginRunner = (*Runner)(nil)
 
 // New loads every logic plugin in the spec, checking each module against
 // the digest the spec records.
-func New(ctx context.Context, spec *compiler.RuntimeSpec, propose Proposer, rec audit.Recorder) (*Runner, error) {
-	r := &Runner{plugins: map[string]*deployed{}, propose: propose, audit: rec}
+func New(ctx context.Context, spec *compiler.RuntimeSpec, propose Proposer, rec audit.Recorder, opts Options) (*Runner, error) {
+	r := &Runner{plugins: map[string]*deployed{}, propose: propose, audit: rec, opts: opts, client: opts.Network.Client()}
 	for _, d := range spec.Spec.Plugins {
 		if d.Type != v1alpha1.PluginLogic {
 			continue
@@ -104,17 +123,34 @@ func (r *Runner) Close(ctx context.Context) {
 	}
 }
 
-// event is what a plugin's handle function receives, as JSON.
+// event is what a plugin's handle function receives, as JSON: a model
+// event (type model.<Entity>.<change>, with the written record), or an
+// event another plugin published (type plugin.<publisher>.<topic>, with
+// its payload).
 type event struct {
 	Type     string          `json:"type"`
+	Source   string          `json:"source,omitempty"`
 	Entity   string          `json:"entity"`
 	ID       string          `json:"id,omitempty"`
-	Record   json.RawMessage `json:"record"`
+	Record   json.RawMessage `json:"record,omitempty"`
+	Payload  json.RawMessage `json:"payload,omitempty"`
 	Workflow string          `json:"workflow"`
 	Run      string          `json:"run"`
 }
 
-// Run runs one plugin on one event.
+// published is an event a plugin published during an invocation; it is
+// delivered only if the invocation succeeds.
+type published struct {
+	topic   string
+	payload []byte
+}
+
+// maxChain bounds how far events travel from plugin to plugin from one
+// model event; a plugin never handles an event its own chain started.
+const maxChain = 3
+
+// Run runs one plugin on one event, then the plugins subscribed to what it
+// published.
 func (r *Runner) Run(ctx context.Context, in engine.PluginInput) error {
 	p, ok := r.plugins[in.Plugin]
 	if !ok {
@@ -124,15 +160,35 @@ func (r *Runner) Run(ctx context.Context, in engine.PluginInput) error {
 		return errors.New("plugin runner: no reader bound")
 	}
 	ev := event{Type: in.Event, Entity: in.Entity, ID: p.entityID(in.Entity, in.Record), Record: in.Record, Workflow: in.Workflow, Run: in.RunID}
-	b, err := json.Marshal(ev)
+	pubs, err := r.invoke(ctx, p, ev, in)
 	if err != nil {
 		return err
+	}
+	r.deliver(ctx, p, ev, pubs, in, []string{p.d.Name})
+	return nil
+}
+
+// invoke runs a plugin on one event and audits it.
+func (r *Runner) invoke(ctx context.Context, p *deployed, ev event, in engine.PluginInput) ([]published, error) {
+	b, err := json.Marshal(ev)
+	if err != nil {
+		return nil, err
 	}
 	h := &host{r: r, p: p, in: in}
 	start := time.Now()
 	err = p.module.Handle(ctx, b, h)
-	data := map[string]any{"plugin": p.d.Name, "version": p.d.Version, "event": in.Event, "entity": in.Entity, "id": ev.ID,
+	data := map[string]any{"plugin": p.d.Name, "version": p.d.Version, "event": ev.Type, "entity": ev.Entity, "id": ev.ID,
 		"workflow": in.Workflow, "run": in.RunID, "ms": time.Since(start).Milliseconds(), "proposals": h.proposals, "reads": h.reads}
+	if len(h.hosts) > 0 {
+		data["requests"] = h.hosts // hosts only: never paths, headers or bodies
+	}
+	if len(h.published) > 0 {
+		var topics []string
+		for _, pub := range h.published {
+			topics = append(topics, pub.topic)
+		}
+		data["published"] = topics
+	}
 	action := "plugin.handled"
 	if err != nil {
 		action, data["error"] = "plugin.failed", err.Error()
@@ -140,7 +196,41 @@ func (r *Runner) Run(ctx context.Context, in engine.PluginInput) error {
 	if _, aerr := r.audit.Record(p.actor(), action, data); aerr != nil && err == nil {
 		err = aerr
 	}
-	return err
+	if err != nil {
+		return nil, err
+	}
+	return h.published, nil
+}
+
+// deliver runs the plugins subscribed to what from published. Their
+// failures are audited but do not fail the publisher: it did its part.
+func (r *Runner) deliver(ctx context.Context, from *deployed, cause event, pubs []published, in engine.PluginInput, chain []string) {
+	if len(chain) >= maxChain {
+		return
+	}
+	names := make([]string, 0, len(r.plugins))
+	for n := range r.plugins {
+		names = append(names, n)
+	}
+	slices.Sort(names)
+	for _, pub := range pubs {
+		typ := "plugin." + from.d.Name + "." + pub.topic
+		payload := json.RawMessage(pub.payload)
+		if !json.Valid(pub.payload) {
+			payload, _ = json.Marshal(map[string]string{"base64": base64.StdEncoding.EncodeToString(pub.payload)})
+		}
+		for _, n := range names {
+			sub := r.plugins[n]
+			if !slices.Contains(sub.d.Subscribes, typ) || slices.Contains(chain, n) {
+				continue
+			}
+			ev := event{Type: typ, Source: from.d.Name, Entity: cause.Entity, ID: cause.ID, Payload: payload, Workflow: cause.Workflow, Run: cause.Run}
+			next, err := r.invoke(ctx, sub, ev, in)
+			if err == nil {
+				r.deliver(ctx, sub, ev, next, in, append(slices.Clone(chain), n))
+			}
+		}
+	}
 }
 
 func (p *deployed) actor() string { return "plugin:" + p.d.Name + "@" + p.d.Version }
@@ -189,6 +279,8 @@ type host struct {
 	p                *deployed
 	in               engine.PluginInput
 	reads, proposals int
+	hosts            []string
+	published        []published
 }
 
 func (h *host) subject() policy.Subject {
@@ -292,10 +384,158 @@ func (h *host) ProposeChange(ctx context.Context, kind, id, patch string) (strin
 	return string(out), nil
 }
 
-// Publish: plugins cannot publish events yet; the world declares it so
-// modules built for it load.
-func (h *host) Publish(context.Context, string, []byte) error {
-	return &plugin.ErrorCode{Kind: plugin.Invalid, Message: "publishing events is not available in this Turgon yet"}
+const (
+	maxPublished   = 16
+	maxPayload     = 64 << 10
+	maxRequests    = 16
+	maxResponse    = 1 << 20
+	secretTemplate = `\{\{secret:([a-z0-9]([a-z0-9-]*[a-z0-9])?)\}\}`
+)
+
+var secretRE = regexp.MustCompile(secretTemplate)
+
+// Publish keeps an event to deliver once the invocation succeeds.
+func (h *host) Publish(_ context.Context, topic string, payload []byte) error {
+	var topics []string
+	if e := h.p.d.Grants.Events; e != nil {
+		topics = e.Publish
+	}
+	switch {
+	case !slices.Contains(topics, topic):
+		return &plugin.ErrorCode{Kind: plugin.Denied}
+	case len(payload) > maxPayload:
+		return &plugin.ErrorCode{Kind: plugin.Invalid, Message: fmt.Sprintf("the payload is %d bytes; at most %d", len(payload), maxPayload)}
+	case len(h.published) >= maxPublished:
+		return &plugin.ErrorCode{Kind: plugin.Invalid, Message: fmt.Sprintf("at most %d events per invocation", maxPublished)}
+	}
+	h.published = append(h.published, published{topic: topic, payload: bytes.Clone(payload)})
+	return nil
+}
+
+// Headers a plugin may not set: the transport's own, and hop-by-hop ones.
+var reservedHeaders = []string{"Host", "Content-Length", "Transfer-Encoding", "Connection", "Upgrade", "Te", "Trailer", "Keep-Alive", "Proxy-Authorization", "Proxy-Connection"}
+
+var methods = []string{http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch, http.MethodDelete}
+
+// Send makes an HTTP request to a host the plugin is granted, putting the
+// secrets its headers name in on the way out.
+func (h *host) Send(ctx context.Context, req plugin.HTTPRequest) (*plugin.HTTPResponse, error) {
+	invalid := func(format string, args ...any) error {
+		return &plugin.ErrorCode{Kind: plugin.Invalid, Message: fmt.Sprintf(format, args...)}
+	}
+	if len(h.hosts) >= maxRequests {
+		return nil, invalid("at most %d requests per event", maxRequests)
+	}
+	if !slices.Contains(methods, req.Method) {
+		return nil, invalid("method %q: use %s", req.Method, strings.Join(methods, ", "))
+	}
+	u, err := url.Parse(req.URL)
+	if err != nil || u.Host == "" || u.User != nil || (u.Scheme != "https" && u.Scheme != "http") {
+		return nil, invalid("the URL must be https://host/path, without credentials in it")
+	}
+	if !h.p.allowsHost(u) {
+		return nil, &plugin.ErrorCode{Kind: plugin.Denied}
+	}
+	if err := h.r.opts.Network.CheckURL(ctx, req.URL); err != nil {
+		return nil, invalid("%v", err)
+	}
+	out, err := http.NewRequestWithContext(ctx, req.Method, req.URL, bytes.NewReader(req.Body))
+	if err != nil {
+		return nil, invalid("%v", err)
+	}
+	for _, hd := range req.Headers {
+		name := http.CanonicalHeaderKey(hd.Name)
+		if slices.Contains(reservedHeaders, name) {
+			return nil, invalid("the header %s is set by Turgon", name)
+		}
+		value, err := h.withSecrets(ctx, hd.Value)
+		if err != nil {
+			return nil, err
+		}
+		out.Header.Add(name, value)
+	}
+	h.hosts = append(h.hosts, u.Host)
+	resp, err := h.r.client.Do(out)
+	switch {
+	case errors.Is(err, netguard.ErrRefused):
+		return nil, invalid("%s is not a public address; Turgon only calls public addresses, or ranges its operators allow (TURGON_PLUGIN_NETWORK_ALLOW)", u.Hostname())
+	case err != nil:
+		return nil, &plugin.ErrorCode{Kind: plugin.Unavailable, Message: fmt.Sprintf("%s %s: %v", req.Method, u.Host, unwrapURLError(err))}
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
+	if err != nil {
+		return nil, &plugin.ErrorCode{Kind: plugin.Unavailable, Message: fmt.Sprintf("%s %s: %v", req.Method, u.Host, err)}
+	}
+	if len(body) > maxResponse {
+		return nil, &plugin.ErrorCode{Kind: plugin.Unavailable, Message: fmt.Sprintf("%s %s: the response is larger than 1 MiB", req.Method, u.Host)}
+	}
+	r := &plugin.HTTPResponse{Status: uint16(resp.StatusCode), Body: body}
+	for _, name := range slices.Sorted(maps.Keys(resp.Header)) {
+		for _, v := range resp.Header[name] {
+			r.Headers = append(r.Headers, plugin.Header{Name: name, Value: v})
+		}
+	}
+	return r, nil
+}
+
+// withSecrets puts the values of the {{secret:<handle>}} a header names
+// in. The plugin never sees them, and neither do audit entries or errors.
+func (h *host) withSecrets(ctx context.Context, value string) (string, error) {
+	var failure error
+	out := secretRE.ReplaceAllStringFunc(value, func(m string) string {
+		handle := secretRE.FindStringSubmatch(m)[1]
+		ref, ok := h.p.d.Secrets[handle]
+		if !ok || !slices.Contains(h.p.d.Grants.Secrets, handle) {
+			failure = &plugin.ErrorCode{Kind: plugin.Denied}
+			return ""
+		}
+		if h.r.opts.Secrets == nil {
+			failure = &plugin.ErrorCode{Kind: plugin.Unavailable, Message: "secret " + handle + " is not available"}
+			return ""
+		}
+		v, err := h.r.opts.Secrets.Resolve(ctx, ref)
+		if err != nil {
+			failure = &plugin.ErrorCode{Kind: plugin.Unavailable, Message: "secret " + handle + " is not available"}
+			return ""
+		}
+		return v
+	})
+	if failure != nil {
+		return "", failure
+	}
+	return out, nil
+}
+
+// allowsHost reports whether the plugin is granted u's host and port: a
+// grant without a port allows the scheme's default one.
+func (p *deployed) allowsHost(u *url.URL) bool {
+	if p.d.Grants.Network == nil {
+		return false
+	}
+	host, port := strings.ToLower(u.Hostname()), u.Port()
+	if port == "" {
+		port = map[string]string{"https": "443", "http": "80"}[u.Scheme]
+	}
+	for _, g := range p.d.Grants.Network.Allow {
+		gh, gp, hasPort := strings.Cut(strings.ToLower(g), ":")
+		if !hasPort {
+			gp = map[string]string{"https": "443", "http": "80"}[u.Scheme]
+		}
+		if gh == host && gp == port {
+			return true
+		}
+	}
+	return false
+}
+
+// unwrapURLError drops the URL net/http repeats in its errors.
+func unwrapURLError(err error) error {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		return ue.Err
+	}
+	return err
 }
 
 // TemporalProposer starts proposals as agent writes on Temporal, so they

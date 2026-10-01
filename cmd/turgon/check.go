@@ -3,13 +3,21 @@ package main
 import (
 	"context"
 	"fmt"
+	"maps"
+	"os"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 
+	"github.com/fduser123-coding/turgon/apis/v1alpha1"
+	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
+	"github.com/fduser123-coding/turgon/pkg/netguard"
+	"github.com/fduser123-coding/turgon/pkg/plugin"
 	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
 )
 
@@ -111,6 +119,9 @@ func checkCmd() *cobra.Command {
 				}
 				inst.Close()
 			}
+			for _, r := range checkPlugins(ctx, spec, secretsFrom) {
+				report(r.where, r.CheckResult)
+			}
 			if failed > 0 {
 				fmt.Fprintf(out, "%d check(s) failed\n", failed)
 				return errSilent
@@ -124,4 +135,49 @@ func checkCmd() *cobra.Command {
 	cmd.Flags().StringVar(&dbURL, "database-url", envOr("TURGON_DATABASE_URL", ""), "also check Turgon's state database")
 	cmd.Flags().BoolVar(&skipTemporal, "skip-temporal", false, "do not check the Temporal cluster")
 	return cmd
+}
+
+type pluginCheck struct {
+	where string
+	connector.CheckResult
+}
+
+// checkPlugins loads each logic plugin as `turgon run` will, and checks
+// that its secrets can be read and the hosts it may call resolve to
+// addresses it may reach.
+func checkPlugins(ctx context.Context, spec *compiler.RuntimeSpec, secretsFrom secretBackend) []pluginCheck {
+	var out []pluginCheck
+	allow, _ := netguard.ParseAllow(os.Getenv("TURGON_PLUGIN_NETWORK_ALLOW"))
+	guard := netguard.Guard{Allow: allow}
+	for _, d := range spec.Spec.Plugins {
+		if d.Type != v1alpha1.PluginLogic || d.Limits == nil {
+			continue
+		}
+		where := "plugin " + d.Name
+		add := func(r connector.CheckResult) { out = append(out, pluginCheck{where, r}) }
+		m, err := plugin.Load(ctx, d.Module, plugin.Limits{MemoryMB: d.Limits.MemoryMB, Timeout: time.Duration(d.Limits.TimeoutMs) * time.Millisecond})
+		if err != nil {
+			add(connector.Fail("module", err.Error(), "Rebuild the plugin for "+strings.Join(plugin.Worlds, " or ")+" and compile the spec again."))
+			continue
+		}
+		add(connector.Pass("module", fmt.Sprintf("%s, %d KiB, imports %s", m.World, (len(d.Module)+1023)/1024, strings.Join(m.Imports, ", "))))
+		m.Close(ctx)
+		for _, h := range slices.Sorted(maps.Keys(d.Secrets)) {
+			if _, err := secretsFrom.Resolve(ctx, d.Secrets[h]); err != nil {
+				add(connector.Fail("secret "+h, err.Error(), secretsFrom.Missing(d.Secrets[h])))
+			} else {
+				add(connector.Pass("secret "+h, secretsFrom.Where(d.Secrets[h])))
+			}
+		}
+		if n := d.Grants.Network; n != nil {
+			for _, host := range n.Allow {
+				if err := guard.CheckURL(ctx, "https://"+host+"/"); err != nil {
+					add(connector.Fail("network "+host, err.Error(), "Plugins call public addresses only; list internal ranges in TURGON_PLUGIN_NETWORK_ALLOW."))
+				} else {
+					add(connector.Pass("network "+host, "resolves to addresses the plugin may reach"))
+				}
+			}
+		}
+	}
+	return out
 }
