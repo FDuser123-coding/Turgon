@@ -23,11 +23,13 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
+	"go.temporal.io/sdk/activity"
 	"go.temporal.io/sdk/client"
 	tlog "go.temporal.io/sdk/log"
 	"go.temporal.io/sdk/worker"
 
 	"github.com/fduser123-coding/turgon/apis/v1alpha1"
+	"github.com/fduser123-coding/turgon/pkg/agent"
 	"github.com/fduser123-coding/turgon/pkg/audit"
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
@@ -278,10 +280,17 @@ func runCmd() *cobra.Command {
 					}
 				}
 			}
+			guard, err := pushGuard()
+			if err != nil {
+				return err
+			}
+			pusher := agent.NewPusher(spec, guard)
 			start := func(rt *engine.Runtime) (*generation, error) {
 				g := &generation{rt: rt, done: make(chan struct{})}
 				g.w = worker.New(c, tf.taskQueue, wopts)
 				engine.Register(g.w, rt.Activities)
+				// A2A push notifications for agent writes.
+				g.w.RegisterActivityWithOptions(pusher.Push, activity.RegisterOptions{Name: engine.ActivityAgentPush})
 				if err := g.w.Start(); err != nil {
 					rt.Close()
 					return nil, err
@@ -417,6 +426,17 @@ func regressionsOf(before, after map[string][]connector.CheckResult) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// pushGuard reads which address ranges A2A push notifications may reach
+// although they are not public (TURGON_A2A_PUSH_ALLOW, comma-separated
+// CIDRs).
+func pushGuard() (agent.PushGuard, error) {
+	allow, err := agent.ParseAllow(os.Getenv("TURGON_A2A_PUSH_ALLOW"))
+	if err != nil {
+		return agent.PushGuard{}, fmt.Errorf("TURGON_A2A_PUSH_ALLOW: %w", err)
+	}
+	return agent.PushGuard{Allow: allow}, nil
 }
 
 // connChecker runs connection checks: an engine.Runtime or an agent.Server.

@@ -1,12 +1,22 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"reflect"
+	"slices"
+	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"go.temporal.io/sdk/activity"
+	"go.temporal.io/sdk/converter"
+	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/testsuite"
+	"go.temporal.io/sdk/workflow"
 
 	"github.com/fduser123-coding/turgon/pkg/policy"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
@@ -128,4 +138,116 @@ func TestSameRequestIgnoresRoles(t *testing.T) {
 	if sameRequest(a, b) {
 		t.Error("a different record is the same request")
 	}
+}
+
+func TestAgentWriteNotifiesRegisteredURLs(t *testing.T) {
+	f := newFixture(t)
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestWorkflowEnvironment()
+	recorded := pushEnv(env, f.rt.Activities, "down")
+
+	in := agentOrder("6", policy.RoleOperator)
+	in.Push = []PushConfig{{ID: "start", URL: "https://agent.example/hook", Token: "t1"}}
+	// Before the approval: one added and one removed by signal, and one
+	// whose receiver refuses every notification.
+	env.RegisterDelayedCallback(func() {
+		env.SignalWorkflow(SignalPushSet, PushConfig{ID: "later", URL: "https://agent.example/other"})
+		env.SignalWorkflow(SignalPushSet, PushConfig{ID: "gone", URL: "https://agent.example/gone"})
+		env.SignalWorkflow(SignalPushSet, PushConfig{ID: "down", URL: "https://agent.example/down"})
+		env.SignalWorkflow(SignalPushDelete, "gone")
+	}, time.Millisecond)
+	env.RegisterDelayedCallback(func() {
+		v, err := env.QueryWorkflow(QueryPush)
+		var configs []PushConfig
+		if err != nil || v.Get(&configs) != nil || len(configs) != 3 {
+			t.Errorf("configs %+v, err %v", configs, err)
+		}
+		v, _ = env.QueryWorkflow(QueryPending)
+		var p *PendingApproval
+		_ = v.Get(&p)
+		sig := approve(AgentStep)
+		sig.Digest = p.Digest
+		env.SignalWorkflow(SignalApproval, sig)
+	}, time.Hour)
+	env.ExecuteWorkflow(AgentWriteWorkflow, in)
+	if err := env.GetWorkflowError(); err != nil {
+		t.Fatalf("a refused notification failed the write: %v", err)
+	}
+	sent := *recorded
+
+	// The approval request and the outcome reached the three URLs
+	// registered then; "gone" was removed first.
+	var got []string
+	for _, s := range sent {
+		got = append(got, s.Config.ID+":"+string(s.Status.State))
+		if s.WorkflowID == "" || s.Tool != "create_sales_order" {
+			t.Errorf("notification %+v", s)
+		}
+	}
+	sort.Strings(got)
+	want := []string{"down:committed", "down:pending_approval", "later:committed", "later:pending_approval", "start:committed", "start:pending_approval"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("sent %v, want %v", got, want)
+	}
+	for _, s := range sent {
+		if s.Status.State == AgentWriteCommitted && (s.Status.Write == nil || s.Status.Write.Status != writeguard.StatusCommitted) {
+			t.Errorf("outcome without the write: %+v", s.Status)
+		}
+		if s.Status.State == AgentWritePending && (s.Status.Pending == nil || len(s.Status.Pending.Preview) == 0) {
+			t.Errorf("approval notification without the preview: %+v", s.Status)
+		}
+	}
+}
+
+func TestAgentWriteNotifiesItsFailure(t *testing.T) {
+	f := newFixture(t)
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestWorkflowEnvironment()
+	sent := pushEnv(env, f.rt.Activities)
+	in := agentOrder("7", policy.RoleReader)
+	in.Push = []PushConfig{{ID: "a", URL: "https://agent.example/hook"}}
+	env.ExecuteWorkflow(AgentWriteWorkflow, in)
+	if errType(env.GetWorkflowError()) != ErrTypeDenied {
+		t.Fatalf("err %v", env.GetWorkflowError())
+	}
+	if len(*sent) != 1 || (*sent)[0].Status.State != AgentWriteDenied || !strings.Contains((*sent)[0].Status.Message, "integration-operator") {
+		t.Fatalf("sent %+v", *sent)
+	}
+}
+
+// pushEnv registers the agent write workflow with a notification activity
+// that records what it sends, and refuses the configs named. The outcome
+// goes to a detached workflow, which the test environment does not run:
+// its input is recorded when it starts, then delivered by running it on
+// its own.
+func pushEnv(env *testsuite.TestWorkflowEnvironment, acts *Activities, refuse ...string) *[]AgentPushInput {
+	var mu sync.Mutex
+	var sent []AgentPushInput
+	env.RegisterWorkflowWithOptions(AgentWriteWorkflow, workflow.RegisterOptions{Name: AgentWriteWorkflowName})
+	env.RegisterWorkflowWithOptions(func(workflow.Context, []AgentPushInput) error { return nil }, workflow.RegisterOptions{Name: AgentPushWorkflowName})
+	env.RegisterActivity(acts)
+	record := func(_ context.Context, in AgentPushInput) error {
+		mu.Lock()
+		sent = append(sent, in)
+		mu.Unlock()
+		if slices.Contains(refuse, in.Config.ID) {
+			return temporal.NewNonRetryableApplicationError("404 Not Found", ErrTypePushRefused, nil)
+		}
+		return nil
+	}
+	env.RegisterActivityWithOptions(record, activity.RegisterOptions{Name: ActivityAgentPush})
+	env.SetOnChildWorkflowStartedListener(func(info *workflow.Info, _ workflow.Context, args converter.EncodedValues) {
+		var in []AgentPushInput
+		if info.WorkflowType.Name != AgentPushWorkflowName || !strings.HasSuffix(info.WorkflowExecution.ID, "#outcome") || args.Get(&in) != nil {
+			panic(fmt.Sprintf("unexpected child workflow %+v", info))
+		}
+		var s testsuite.WorkflowTestSuite
+		child := s.NewTestWorkflowEnvironment()
+		child.RegisterActivityWithOptions(record, activity.RegisterOptions{Name: ActivityAgentPush})
+		child.ExecuteWorkflow(AgentPushWorkflow, in)
+		if err := child.GetWorkflowError(); err != nil {
+			panic(err)
+		}
+	})
+	return &sent
 }

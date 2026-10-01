@@ -37,6 +37,10 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end -}}
 
 {{- define "turgon.commonEnv" -}}
+{{- with .Values.agents.pushAllow }}
+- name: TURGON_A2A_PUSH_ALLOW
+  value: {{ join "," . | quote }}
+{{- end }}
 - name: TURGON_DATABASE_URL
   valueFrom:
     secretKeyRef:

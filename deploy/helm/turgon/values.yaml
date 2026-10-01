@@ -211,6 +211,11 @@ agents:
   specs: []                # spec names to serve; empty serves every spec
   writes: []               # specs whose write tools are served (approval-gated)
   wait: 15s                # how long a write tool call waits for the result
+  streamLimit: 1h          # an A2A stream following a write ends after this; the agent resubscribes
+  # A2A push notifications go to public https URLs only. List the address
+  # ranges of agent platforms inside your network to allow them too (plain
+  # http is accepted for these). Workers send the notifications.
+  pushAllow: []            # e.g. [10.40.0.0/16]
   gateway:
     image:
       repository: ghcr.io/agentgateway/agentgateway
@@ -277,7 +282,8 @@ networkPolicy:
   # Egress. With allowAllEgress false, only DNS and egressRules are allowed:
   # list Temporal, the state database, every connected system and the secret
   # manager (OpenBao, the cloud's endpoint; on GKE also the metadata server,
-  # 169.254.169.254:80, which Workload Identity tokens come from).
+  # 169.254.169.254:80, which Workload Identity tokens come from), and, for
+  # A2A push notifications, the agents' receivers (443).
   allowAllEgress: true
   egressRules: []
 

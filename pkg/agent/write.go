@@ -78,7 +78,7 @@ func (s *Server) write(t compiler.Tool) mcp.ToolHandler {
 		if !ok {
 			return failure("not authenticated"), nil
 		}
-		w, err := s.submit(ctx, t, id, req.Params.Arguments, "")
+		w, err := s.submit(ctx, t, id, req.Params.Arguments, "", nil)
 		if err != nil {
 			return failure(err.Error()), nil
 		}
@@ -96,7 +96,7 @@ type writeCall struct {
 // the one already started for the same request. defaultRequestID is used
 // when the arguments carry no requestId (A2A messages have their own ID).
 // Its errors are messages for the agent.
-func (s *Server) submit(ctx context.Context, t compiler.Tool, id Identity, raw json.RawMessage, defaultRequestID string) (writeCall, error) {
+func (s *Server) submit(ctx context.Context, t compiler.Tool, id Identity, raw json.RawMessage, defaultRequestID string, push []engine.PushConfig) (writeCall, error) {
 	var args struct {
 		RequestID string         `json:"requestId"`
 		Record    map[string]any `json:"record"`
@@ -154,7 +154,7 @@ func (s *Server) submit(ctx context.Context, t compiler.Tool, id Identity, raw j
 		Payload:        payload, Entity: t.Entity, Amount: amount, Simulate: t.Simulate, Reason: reason,
 	}
 	w := writeCall{workflowID: writeID(t.Name, id.Agent, args.RequestID), requestID: args.RequestID}
-	w.status, err = s.writes.Submit(ctx, w.workflowID, engine.AgentWriteInput{SpecDigest: s.digest, Request: wreq, ApprovalTimeout: s.timeout})
+	w.status, err = s.writes.Submit(ctx, w.workflowID, engine.AgentWriteInput{SpecDigest: s.digest, Request: wreq, ApprovalTimeout: s.timeout, Push: push})
 	switch {
 	case errors.Is(err, engine.ErrRequestConflict):
 		return w, fmt.Errorf("requestId %q was already used for a different %s request; use a new requestId", args.RequestID, t.Name)

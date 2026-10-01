@@ -759,13 +759,49 @@ prose, because Turgon runs no language model at run time: a message carries a da
 - A read answers at once with a message holding the record.
 - A write becomes a task whose ID is its durable agent-write workflow, so it can wait days for
   approval and survive restarts: `working` while it waits, then `completed` with the result as
-  an artifact, or `rejected` / `failed` with the reason. Poll it with `tasks/get`; only the agent
-  that asked can see it, and a person, not the agent, decides it (`tasks/cancel` is refused).
+  an artifact, or `rejected` / `failed` with the reason. Only the agent that asked can see it,
+  and a person, not the agent, decides it (`tasks/cancel` is refused).
 - A write's `requestId` defaults to the message ID, so resending a message never writes twice.
 
-Streaming and push notifications are not offered. Behind agentgateway each spec's agent is at
-`/<spec>/a2a`, with the same token authentication and identity headers; the gateway rewrites
-the card's URL to its own.
+An agent follows a write in one of three ways:
+
+- **Polling** with `tasks/get`.
+- **Streaming.** With `message/stream` (or `tasks/resubscribe` later), the stream sends the task,
+  then a status update for each change.
+  - The outcome arrives the moment it happens: Temporal answers the wait as soon as the write
+    ends.
+  - On completion the result comes as an artifact before the final status.
+  - Keepalives every 15 seconds hold the stream open through proxies.
+  - A stream ends after `--a2a-stream-limit` (an hour) without a final event. The agent then
+    resubscribes.
+  - A read streams its reply as a single message.
+- **Push notifications.** The agent gives a URL in the message's `pushNotificationConfig`, or
+  later with `tasks/pushNotificationConfig/set`. Turgon then POSTs the task when the write waits
+  for approval and when it ends.
+  - Each POST carries the agent's `token` (`X-A2A-Notification-Token`), and its credentials as
+    `Authorization: Bearer` or `Basic` if it gave some.
+  - The write's workflow keeps the URLs (at most five), so they survive restarts and any MCP
+    replica sees them.
+  - `turgon run` workers send the notifications, and retry them for a few minutes.
+  - The outcome is sent from a separate workflow, so a receiver that is down never delays it
+    for agents that poll or stream.
+  - `get` and `list` never return the credentials. They are kept in the write's Temporal
+    history, encrypted when payload encryption is on (`TURGON_PAYLOAD_KEYS`).
+  - Writes started before this release still complete. They send no notifications: recorded
+    histories replay in the tests.
+
+**Where notifications may go.** Push URLs come from agents, but the requests leave from inside
+the customer's network.
+- Turgon only calls `https` URLs whose addresses are all public. It refuses loopback, private,
+  link-local (cloud metadata), CGNAT, NAT64/6to4 and reserved ranges. It checks when the URL is
+  set, and again on every connection, so a name that later resolves to an internal address is
+  still refused.
+- Redirects are not followed, and no egress proxy is used.
+- Agent platforms inside the network can be allowed by CIDR with `TURGON_A2A_PUSH_ALLOW` (Helm
+  `agents.pushAllow`). Plain `http` is accepted only for those ranges.
+
+Behind agentgateway each spec's agent is at `/<spec>/a2a`, with the same token authentication
+and identity headers; the gateway rewrites the card's URL to its own.
 
 ### Install on Kubernetes
 
@@ -1305,5 +1341,5 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 In rough roadmap order (§16, §19): Salesforce managed subscriptions (the Pub/Sub API keeping the replay position);
 an external Splink service; the metadata
-graph and discovery; A2A streaming and push notifications; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
+graph and discovery; the Wasm plugin host. The native Postgres, Salesforce and REST connectors run inside the Go
 worker for the prototype; production connectors run on the Camel/Java worker types in §7.1.

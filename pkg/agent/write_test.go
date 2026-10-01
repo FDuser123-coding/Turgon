@@ -6,6 +6,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -20,6 +21,68 @@ type fakeWrites struct {
 	inputs []engine.AgentWriteInput
 	status engine.AgentWriteStatus
 	err    error
+	// watch is what Watch reports, one call at a time; after that it
+	// waits and reports status.
+	watch []engine.AgentWriteStatus
+	push  map[string][]engine.PushConfig
+	ended bool // push changes find the write ended
+}
+
+func (f *fakeWrites) Watch(ctx context.Context, id string, wait time.Duration) (engine.AgentWriteStatus, error) {
+	f.mu.Lock()
+	if len(f.watch) > 0 {
+		f.status, f.watch = f.watch[0], f.watch[1:]
+		defer f.mu.Unlock()
+		return f.status, nil
+	}
+	f.mu.Unlock()
+	select {
+	case <-ctx.Done():
+		return engine.AgentWriteStatus{}, ctx.Err()
+	case <-time.After(wait):
+	}
+	return f.Status(ctx, id)
+}
+
+func (f *fakeWrites) SetPush(_ context.Context, id string, c engine.PushConfig) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ended {
+		return engine.ErrWriteFinished
+	}
+	if f.push == nil {
+		f.push = map[string][]engine.PushConfig{}
+	}
+	for i, o := range f.push[id] {
+		if o.ID == c.ID {
+			f.push[id][i] = c
+			return nil
+		}
+	}
+	f.push[id] = append(f.push[id], c)
+	return nil
+}
+
+func (f *fakeWrites) Push(_ context.Context, id string) ([]engine.PushConfig, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.push[id], nil
+}
+
+func (f *fakeWrites) DeletePush(_ context.Context, id, configID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.ended {
+		return engine.ErrWriteFinished
+	}
+	var keep []engine.PushConfig
+	for _, o := range f.push[id] {
+		if o.ID != configID {
+			keep = append(keep, o)
+		}
+	}
+	f.push[id] = keep
+	return nil
 }
 
 func (f *fakeWrites) Status(_ context.Context, id string) (engine.AgentWriteStatus, error) {
@@ -38,6 +101,12 @@ func (f *fakeWrites) Submit(_ context.Context, id string, in engine.AgentWriteIn
 	defer f.mu.Unlock()
 	f.ids = append(f.ids, id)
 	f.inputs = append(f.inputs, in)
+	if len(in.Push) > 0 {
+		if f.push == nil {
+			f.push = map[string][]engine.PushConfig{}
+		}
+		f.push[id] = append(f.push[id], in.Push...)
+	}
 	return f.status, f.err
 }
 

@@ -33,6 +33,8 @@ type AgentWriteInput struct {
 	SpecDigest      string             `json:"specDigest"`
 	Request         writeguard.Request `json:"request"`
 	ApprovalTimeout time.Duration      `json:"approvalTimeout,omitempty"`
+	// Push lists where to notify the agent when the write changes state.
+	Push []PushConfig `json:"push,omitempty"`
 }
 
 // PrepareAgentInput is the input of the PrepareAgentWrite activity.
@@ -59,6 +61,16 @@ func (x *Activities) PrepareAgentWrite(ctx context.Context, in PrepareAgentInput
 // AgentWriteWorkflow performs one agent write. Its result lists the write
 // like a recipe run's, so the console shows both alike.
 func AgentWriteWorkflow(ctx workflow.Context, in AgentWriteInput) (RunResult, error) {
+	push, err := startPushes(ctx, in.Push)
+	if err != nil {
+		return RunResult{}, err
+	}
+	res, err := agentWrite(ctx, in, push)
+	push.outcome(ctx, in.Request.Tool, statusOf(res, err))
+	return res, err
+}
+
+func agentWrite(ctx workflow.Context, in AgentWriteInput, push *pushes) (RunResult, error) {
 	ctx = workflow.WithActivityOptions(ctx, workflow.ActivityOptions{
 		StartToCloseTimeout: time.Minute,
 		RetryPolicy: &temporal.RetryPolicy{
@@ -96,6 +108,7 @@ func AgentWriteWorkflow(ctx workflow.Context, in AgentWriteInput) (RunResult, er
 		}
 		name := "agent/" + req.Tool
 		tell(ctx, name, approvalPending(*pending, pending.Since.Add(timeout)))
+		push.notify(ctx, req.Tool, AgentWriteStatus{State: AgentWritePending, Pending: pending})
 		approval = awaitApproval(ctx, workflow.GetSignalChannel(ctx, SignalApproval), *pending, timeout)
 		if approval.By == approvalTimeoutActor {
 			tell(ctx, name, approvalTimedOut(*pending))
@@ -167,6 +180,13 @@ func (w AgentWrites) Submit(ctx context.Context, id string, in AgentWriteInput) 
 		if !sameRequest(prior.Request, in.Request) {
 			return AgentWriteStatus{}, ErrRequestConflict
 		}
+		// Asked again with push settings: add them. A write that has
+		// ended reports its outcome below instead.
+		for _, c := range in.Push {
+			if err := w.SetPush(ctx, id, c); err != nil && !errors.Is(err, ErrWriteFinished) {
+				return AgentWriteStatus{}, err
+			}
+		}
 		run = w.Client.GetWorkflow(ctx, id, "")
 	} else if err != nil {
 		return AgentWriteStatus{}, err
@@ -219,15 +239,21 @@ func (w AgentWrites) await(ctx context.Context, id string, run client.WorkflowRu
 		// It finished just now: fetch how.
 		err = run.Get(ctx, &res)
 	}
-	switch {
-	case err == nil:
+	if err != nil && ctx.Err() != nil {
+		return AgentWriteStatus{}, ctx.Err()
+	}
+	return statusOf(res, err), nil
+}
+
+// statusOf reports how a write ended: its result, or the error it failed
+// with (seen by a client, or inside the workflow).
+func statusOf(res RunResult, err error) AgentWriteStatus {
+	if err == nil {
 		st := AgentWriteStatus{State: AgentWriteCommitted}
 		if len(res.Writes) > 0 {
 			st.Write = &res.Writes[0]
 		}
-		return st, nil
-	case ctx.Err() != nil:
-		return AgentWriteStatus{}, ctx.Err()
+		return st
 	}
 	st := AgentWriteStatus{State: AgentWriteFailed, Message: err.Error()}
 	var app *temporal.ApplicationError
@@ -242,7 +268,7 @@ func (w AgentWrites) await(ctx context.Context, id string, run client.WorkflowRu
 			st.State = AgentWriteInvalid
 		}
 	}
-	return st, nil
+	return st
 }
 
 // isRunFailure reports whether err is a run's own failure, as opposed to a
