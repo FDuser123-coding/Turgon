@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -78,7 +79,7 @@ type Server struct {
 	a2aURL    string
 	a2a       http.Handler
 	tools     []compiler.Tool
-	instances []connector.Instance
+	instances map[string]connector.Instance // by endpoint
 	handler   http.Handler
 }
 
@@ -90,7 +91,8 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Server
 	if opts.Policy == nil {
 		opts.Policy = policy.WritebackDefault{}
 	}
-	s := &Server{auth: opts.Auth, writes: opts.Writes, digest: spec.Metadata.Digest, timeout: opts.ApprovalTimeout, a2aURL: opts.A2AURL}
+	s := &Server{auth: opts.Auth, writes: opts.Writes, digest: spec.Metadata.Digest, timeout: opts.ApprovalTimeout, a2aURL: opts.A2AURL,
+		instances: map[string]connector.Instance{}}
 	needed := map[string]bool{}
 	for _, t := range spec.Spec.Tools {
 		switch {
@@ -117,7 +119,7 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Server
 			s.Close()
 			return nil, err
 		}
-		s.instances = append(s.instances, inst)
+		s.instances[c.Endpoint] = inst
 		targets[c.Endpoint] = writeguard.TargetConfig{Target: inst, Limits: c.Limits, Metered: c.Metered}
 	}
 	g, err := writeguard.New(writeguard.Config{Targets: targets, Policy: opts.Policy, Audit: opts.Audit})
@@ -281,7 +283,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 // Serve listens on addr. Dev authentication only listens on loopback.
 func (s *Server) Serve(addr string) error {
-	if _, dev := s.auth.(DevAuth); dev {
+	return ListenAndServe(addr, s.auth, s)
+}
+
+// ListenAndServe serves h (a Server, or a Live over servers using auth)
+// on addr. Dev authentication only listens on loopback.
+func ListenAndServe(addr string, auth Authenticator, h http.Handler) error {
+	if _, dev := auth.(DevAuth); dev {
 		host, _, err := net.SplitHostPort(addr)
 		if err != nil {
 			return err
@@ -290,8 +298,23 @@ func (s *Server) Serve(addr string) error {
 			return fmt.Errorf("dev authentication only listens on loopback addresses, not %s", addr)
 		}
 	}
-	srv := &http.Server{Addr: addr, Handler: s, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
+	srv := &http.Server{Addr: addr, Handler: h, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 30 * time.Second, IdleTimeout: 2 * time.Minute}
 	return srv.ListenAndServe()
+}
+
+// Verify runs the connection checks of the given endpoints' connectors
+// (all of them if none is given), to try new credentials before using them.
+func (s *Server) Verify(ctx context.Context, endpoints ...string) map[string][]connector.CheckResult {
+	out := map[string][]connector.CheckResult{}
+	for ep, inst := range s.instances {
+		if len(endpoints) > 0 && !slices.Contains(endpoints, ep) {
+			continue
+		}
+		if chk, ok := inst.(connector.Checker); ok {
+			out[ep] = chk.Check(ctx)
+		}
+	}
+	return out
 }
 
 // Close releases connector resources.

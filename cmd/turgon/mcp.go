@@ -1,11 +1,14 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/netip"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,7 +26,7 @@ func mcpCmd() *cobra.Command {
 	var trusted []string
 	var writes bool
 	var a2aURL string
-	var wait, approvalTimeout time.Duration
+	var wait, approvalTimeout, secretsRefresh time.Duration
 	var tf temporalFlags
 	cmd := &cobra.Command{
 		Use:   "mcp",
@@ -36,7 +39,9 @@ func mcpCmd() *cobra.Command {
 			"for the same spec. Agents need the integration-operator role to write, and high-risk\n" +
 			"writes wait for a person to approve them in the console.\n\n" +
 			"The same server is an A2A agent at /a2a (agent card at /a2a/.well-known/agent-card.json):\n" +
-			"skills are the tools, called with a data part {\"skill\": ..., \"arguments\": {...}}.",
+			"skills are the tools, called with a data part {\"skill\": ..., \"arguments\": {...}}.\n\n" +
+			"With OpenBao or a cloud secret manager, a rotated secret reconnects the read tools'\n" +
+			"connectors without dropping requests, and SIGHUP reconnects them at once.",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			spec, err := loadSpec(specPath)
 			if err != nil {
@@ -109,20 +114,55 @@ func mcpCmd() *cobra.Command {
 				}
 				opts.Writes = engine.AgentWrites{Client: c, TaskQueue: queue, Wait: wait}
 			}
+			out := cmd.ErrOrStderr()
+			rot, err := newRotation[*agent.Server](ctx, out, rec, spec, secretsFrom)
+			if err != nil {
+				return err
+			}
 			s, err := agent.New(ctx, spec, opts)
 			if err != nil {
 				return err
 			}
-			defer s.Close()
+			// The read tools' connectors are rebuilt when a secret rotates;
+			// requests in flight finish on the connections they started on.
+			live := agent.NewLive(s)
+			defer live.Close()
+			rot.connect = func() (*agent.Server, error) { return agent.New(ctx, spec, opts) }
+			rot.discard = (*agent.Server).Close
+			rot.regressions = func(ctx context.Context, next *agent.Server, endpoints []string) []string {
+				return regressions(ctx, live.Current(), next, endpoints)
+			}
+			rot.use = func(next *agent.Server) bool {
+				live.Swap(next)
+				return true
+			}
+			refresh, stopRefresh := rot.every(secretsRefresh)
+			defer stopRefresh()
+			hup := make(chan os.Signal, 1)
+			signal.Notify(hup, syscall.SIGHUP)
+			defer signal.Stop(hup)
+			go func() {
+				for {
+					select {
+					case <-ctx.Done():
+						return
+					case <-hup:
+						rot.hup(ctx)
+					case <-refresh:
+						rot.refresh(ctx)
+					}
+				}
+			}()
+
 			var names []string
 			for _, t := range s.Tools() {
 				names = append(names, t.Name)
 			}
-			fmt.Fprintf(cmd.ErrOrStderr(), "turgon mcp on http://%s (auth: %s), tools: %s\n", listen, authMode, strings.Join(names, ", "))
+			fmt.Fprintf(out, "turgon mcp on http://%s (auth: %s), tools: %s\n", listen, authMode, strings.Join(names, ", "))
 			if metricsAddr != "" {
-				go serveMetrics(cmd.Context(), metricsAddr, cmd.ErrOrStderr())
+				go serveMetrics(ctx, metricsAddr, out)
 			}
-			return s.Serve(listen)
+			return agent.ListenAndServe(listen, auth, live)
 		},
 	}
 	cmd.Flags().StringVarP(&specPath, "spec", "s", "runtime-spec.json", "compiled runtime spec")
@@ -139,6 +179,7 @@ func mcpCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&writes, "writes", false, "serve write tools, run as governed writes on Temporal")
 	cmd.Flags().DurationVar(&wait, "wait", 15*time.Second, "how long a write tool call waits for the write to finish")
 	cmd.Flags().DurationVar(&approvalTimeout, "approval-timeout", engine.DefaultApprovalTimeout, "reject agent writes nobody approves within this time")
+	cmd.Flags().DurationVar(&secretsRefresh, "secrets-refresh", 5*time.Minute, "with OpenBao or a cloud secret manager, how often secrets are read again; a changed one reconnects the connectors (0: never; SIGHUP reconnects at once)")
 	tf.register(cmd)
 	return cmd
 }

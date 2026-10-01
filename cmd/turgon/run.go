@@ -245,8 +245,7 @@ func runCmd() *cobra.Command {
 				}
 				return rt, err
 			}
-			refs := specSecretRefs(spec)
-			prints, err := secretsFrom.Fingerprints(ctx, refs)
+			rot, err := newRotation[*engine.Runtime](ctx, out, log, spec, secretsFrom)
 			if err != nil {
 				return err
 			}
@@ -327,40 +326,14 @@ func runCmd() *cobra.Command {
 			hup := make(chan os.Signal, 1)
 			signal.Notify(hup, syscall.SIGHUP)
 			defer signal.Stop(hup)
-			var refresh <-chan time.Time
-			if secretsRefresh > 0 && secretsFrom.Rotates() {
-				t := time.NewTicker(secretsRefresh)
-				defer t.Stop()
-				refresh = t.C
-				fmt.Fprintf(out, "turgon: checking %d secret(s) for rotation every %s\n", len(refs), secretsRefresh)
+			refresh, stopRefresh := rot.every(secretsRefresh)
+			defer stopRefresh()
+			rot.connect = newRuntime
+			rot.discard = (*engine.Runtime).Close
+			rot.regressions = func(ctx context.Context, next *engine.Runtime, endpoints []string) []string {
+				return regressions(ctx, gen.rt, next, endpoints)
 			}
-			// reconnect builds the next generation with the secrets as they
-			// are now, then retires the current one. If the new secrets do not
-			// work, the current connections are kept.
-			refused := "" // the last refusal reported, not repeated at every check
-			reconnect := func(why string, changed []string) bool {
-				next, err := newRuntime()
-				if err != nil {
-					fmt.Fprintf(out, "turgon: %s, but the new connections failed; keeping the current ones: %v\n", why, err)
-					return false
-				}
-				// Connectors may connect lazily: check the ones whose secrets
-				// changed (all of them on SIGHUP) before switching, so a wrong
-				// password in the secret manager does not stop a working worker.
-				msgs := regressions(ctx, gen.rt, next, endpointsUsing(spec, changed))
-				if len(msgs) > 0 {
-					next.Close()
-					key := why + "\x00" + strings.Join(msgs, "\x00")
-					if key == refused {
-						return false
-					}
-					refused = key
-					fmt.Fprintf(out, "turgon: %s, but the new connections failed their checks; keeping the current ones: %s\n", why, strings.Join(msgs, "; "))
-					if _, err := log.Record("turgon", "connections.reload-refused", map[string]any{"spec": spec.Metadata.Name, "reason": why, "secrets": changed, "failed": msgs}); err != nil {
-						fmt.Fprintf(out, "turgon: audit: %v\n", err)
-					}
-					return false
-				}
+			rot.use = func(next *engine.Runtime) bool {
 				gen.stop()
 				g, err := start(next)
 				if err != nil {
@@ -370,11 +343,7 @@ func runCmd() *cobra.Command {
 					stop()
 					return false
 				}
-				gen, refused = g, ""
-				fmt.Fprintf(out, "turgon: %s; reconnected\n", why)
-				if _, err := log.Record("turgon", "connections.reloaded", map[string]any{"spec": spec.Metadata.Name, "reason": why, "secrets": changed}); err != nil {
-					fmt.Fprintf(out, "turgon: audit: %v\n", err)
-				}
+				gen = g
 				return true
 			}
 
@@ -404,23 +373,9 @@ func runCmd() *cobra.Command {
 				case <-ticker.C:
 				case <-wake:
 				case <-hup:
-					p, err := secretsFrom.Fingerprints(ctx, refs)
-					if reconnect("reload requested (SIGHUP)", nil) && err == nil {
-						prints = p
-					}
+					rot.hup(ctx)
 				case <-refresh:
-					p, err := secretsFrom.Fingerprints(ctx, refs)
-					if err != nil {
-						// The secret manager is unreachable: keep going with
-						// what the connectors have.
-						fmt.Fprintf(out, "turgon: checking secrets for rotation: %v\n", err)
-						continue
-					}
-					// A refused change is tried again at the next check.
-					if changed := prints.changed(p); len(changed) > 0 &&
-						reconnect(fmt.Sprintf("secret %s changed", strings.Join(changed, ", ")), changed) {
-						prints = p
-					}
+					rot.refresh(ctx)
 				}
 			}
 		},
@@ -445,7 +400,7 @@ func runCmd() *cobra.Command {
 // wrong password in the secret manager. A check failing either way (a
 // missing permission), or one the current connections cannot even reach
 // (their password was revoked), does not hold the new connections back.
-func regressions(ctx context.Context, now, next *engine.Runtime, endpoints []string) []string {
+func regressions(ctx context.Context, now, next connChecker, endpoints []string) []string {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()
 	return regressionsOf(now.Verify(ctx, endpoints...), next.Verify(ctx, endpoints...))
@@ -462,6 +417,11 @@ func regressionsOf(before, after map[string][]connector.CheckResult) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// connChecker runs connection checks: an engine.Runtime or an agent.Server.
+type connChecker interface {
+	Verify(ctx context.Context, endpoints ...string) map[string][]connector.CheckResult
 }
 
 // endpointsUsing returns the endpoints whose connectors use one of the
