@@ -51,7 +51,7 @@ func (f *fakeProposer) Propose(_ context.Context, id string, req writeguard.Requ
 	return engine.AgentWriteCommitted, nil
 }
 
-func deployment(t *testing.T, name, file string, grants v1alpha1.EntityPermissions) compiler.PluginDeployment {
+func deployment(t *testing.T, name, file string, grants v1alpha1.EntityPermissions, publish ...string) compiler.PluginDeployment {
 	t.Helper()
 	mod, err := os.ReadFile(file)
 	if err != nil {
@@ -60,7 +60,7 @@ func deployment(t *testing.T, name, file string, grants v1alpha1.EntityPermissio
 	sum := sha256.Sum256(mod)
 	return compiler.PluginDeployment{
 		Name: name, Version: "1.2.0", Type: v1alpha1.PluginLogic, Runtime: v1alpha1.PluginRuntimeWasm,
-		Subscribes: []string{"model.SalesOrder.created"}, Grants: v1alpha1.PluginPermissions{Entities: &grants},
+		Subscribes: []string{"model.SalesOrder.created"}, Grants: v1alpha1.PluginPermissions{Entities: &grants, Events: &v1alpha1.EventPermissions{Publish: publish}},
 		Limits: &v1alpha1.PluginLimits{MemoryMB: 32, TimeoutMs: 2000}, Module: mod, ModuleSHA256: hex.EncodeToString(sum[:]),
 		Reads:     map[string]compiler.EntityOperation{"Customer": {Endpoint: "erp-db", Operation: "get-customer", Risk: "read", IDField: "id"}},
 		Proposals: map[string]compiler.EntityOperation{"SalesOrder": {Endpoint: "erp-db", Operation: "update-sales-order", Risk: "low", IDField: "externalId"}},
@@ -84,7 +84,7 @@ func TestCreditCheckProposesWithinItsGrants(t *testing.T) {
 	var log bytes.Buffer
 	prop := &fakeProposer{}
 	r, err := New(ctx, spec(deployment(t, "credit-check", "../../../examples/plugins/credit-check/credit-check.wasm",
-		v1alpha1.EntityPermissions{Read: []string{"Customer"}, Propose: []string{"SalesOrder.creditStatus"}})), prop, audit.New(&log))
+		v1alpha1.EntityPermissions{Read: []string{"Customer"}, Propose: []string{"SalesOrder.creditStatus"}}, "credit.checked")), prop, audit.New(&log), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +98,8 @@ func TestCreditCheckProposesWithinItsGrants(t *testing.T) {
 	if len(read.reqs) != 1 || read.reqs[0].Operation != "get-customer" || read.reqs[0].Subject.ID != "plugin:credit-check@1.2.0" || !read.reqs[0].Subject.Agent {
 		t.Fatalf("reads %+v", read.reqs)
 	}
-	// 1200 > 1000: review, written to the order the event names.
+	// 1200 > 1000: review, written to the order the event names. The risk
+	// service is not granted here: the limit decides alone.
 	if len(prop.reqs) != 1 {
 		t.Fatalf("proposals %+v", prop.reqs)
 	}
@@ -134,7 +135,7 @@ func TestHostEnforcesGrants(t *testing.T) {
 	prop := &fakeProposer{}
 	// The probe may read Customer and propose SalesOrder.creditStatus only.
 	r, err := New(ctx, spec(deployment(t, "probe", "../testdata/probe.wasm",
-		v1alpha1.EntityPermissions{Read: []string{"Customer"}, Propose: []string{"SalesOrder.creditStatus"}})), prop, audit.New(&bytes.Buffer{}))
+		v1alpha1.EntityPermissions{Read: []string{"Customer"}, Propose: []string{"SalesOrder.creditStatus"}})), prop, audit.New(&bytes.Buffer{}), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +157,7 @@ func TestHostEnforcesGrants(t *testing.T) {
 		`propose Customer C-1 {"creditStatus":"ok"}`:   "err denied",
 		`propose SalesOrder S-1 {"externalId":"S-2"}`:  "err invalid the patch cannot change externalId",
 		`propose SalesOrder S-1 [1,2]`:                 "err invalid the patch must be a JSON object",
-		"publish anything":                             "err invalid publishing events is not available",
+		"publish anything":                             "err denied", // no topic granted
 	} {
 		c := lastCapture
 		if err := run(cmd); err != nil {
@@ -176,7 +177,7 @@ func TestHostEnforcesGrants(t *testing.T) {
 	// A module that does not match the spec's digest is refused.
 	d := deployment(t, "probe", "../testdata/probe.wasm", v1alpha1.EntityPermissions{})
 	d.ModuleSHA256 = strings.Repeat("0", 64)
-	if _, err := New(ctx, spec(d), prop, audit.New(&bytes.Buffer{})); err == nil || !strings.Contains(err.Error(), "digest") {
+	if _, err := New(ctx, spec(d), prop, audit.New(&bytes.Buffer{}), Options{}); err == nil || !strings.Contains(err.Error(), "digest") {
 		t.Fatalf("tampered module: %v", err)
 	}
 }

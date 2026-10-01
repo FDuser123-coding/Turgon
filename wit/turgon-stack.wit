@@ -1,9 +1,20 @@
 // The stack host interface (architecture §18.4). Plugins may only propose
 // changes; writes still pass the write guard, approvals and audit.
-package turgon:stack@0.1.0;
+// Version 0.2.0 adds outbound HTTP to the hosts a plugin is granted, with
+// secrets the host inserts and the plugin never sees, and events plugins
+// publish to each other. Turgon also runs plugins built for 0.1.0
+// (wit/0.1.0/turgon-stack.wit).
+package turgon:stack@0.2.0;
 
 interface types {
-  variant error-code { denied, not-found, invalid(string) }
+  variant error-code {
+    denied,
+    not-found,
+    invalid(string),
+    // A service did not answer, or answered with an error: try later, or
+    // carry on without it.
+    unavailable(string),
+  }
   record entity-ref { kind: string, id: string }
 }
 
@@ -15,11 +26,33 @@ interface entities {
 
 interface events {
   use types.{error-code};
+  // Delivered to plugins subscribed to plugin.<this plugin>.<topic>.
   publish: func(topic: string, payload: list<u8>) -> result<_, error-code>;
+}
+
+interface http {
+  use types.{error-code};
+  record header { name: string, value: string }
+  // An https request to a host the plugin is granted. A header value may
+  // name a granted secret as {{secret:<handle>}}; the host puts the value
+  // in, so the plugin never holds it.
+  record request {
+    method: string,
+    url: string,
+    headers: list<header>,
+    body: list<u8>,
+  }
+  record response {
+    status: u16,
+    headers: list<header>,
+    body: list<u8>,
+  }
+  send: func(req: request) -> result<response, error-code>;
 }
 
 world logic-plugin {
   import entities;
   import events;
+  import http;
   export handle: func(event: list<u8>) -> result<_, string>;
 }

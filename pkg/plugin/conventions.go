@@ -56,3 +56,12 @@ func Camel(s string) string {
 	}
 	return strings.Join(parts, "")
 }
+
+// SecretRef is where a plugin's secret handle is read from, whichever
+// secret backend the deployment uses: acme-api-key of credit-check is
+// openbao://plugins/credit-check/acme-api-key (TURGON_SECRET_PLUGINS_CREDIT_CHECK_ACME_API_KEY
+// with environment variables, the field acme-api-key of the secret
+// plugins/credit-check in OpenBao or a cloud secret manager).
+func SecretRef(plugin, handle string) string {
+	return "openbao://plugins/" + plugin + "/" + handle
+}

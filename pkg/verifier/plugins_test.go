@@ -63,7 +63,9 @@ func TestLogicPluginModulesAreChecked(t *testing.T) {
 	}{
 		"a wit-bindgen module": {"../plugin/testdata/probe.wasm", "turgon:stack/logic-plugin@0.1.0", "imports entities.get, entities.propose-change, events.publish", true},
 		"a module using WASI":  {"../plugin/testdata/probe-wasi.wasm", "turgon:stack/logic-plugin@0.1.0", "imports WASI", false},
-		"another world":        {"../plugin/testdata/probe.wasm", "turgon:stack/logic-plugin@0.2.0", "runs logic plugins for turgon:stack/logic-plugin@0.1.0", false},
+		"world 0.2.0":          {"../plugin/testdata/probe2.wasm", "turgon:stack/logic-plugin@0.2.0", "imports entities.get, events.publish, http.send", true},
+		"the wrong world":      {"../plugin/testdata/probe.wasm", "turgon:stack/logic-plugin@0.2.0", "p.wasm is built for turgon:stack/logic-plugin@0.1.0, but the manifest says turgon:stack/logic-plugin@0.2.0", false},
+		"an unknown world":     {"../plugin/testdata/probe.wasm", "turgon:stack/logic-plugin@0.9.0", "runs logic plugins for turgon:stack/logic-plugin@0.1.0 or turgon:stack/logic-plugin@0.2.0", false},
 		"no module":            {"", "turgon:stack/logic-plugin@0.1.0", "no such file", false},
 	} {
 		cat, p := pluginCatalog(t, tc.module, tc.world, "logic")
@@ -71,8 +73,9 @@ func TestLogicPluginModulesAreChecked(t *testing.T) {
 		if got := messages(r); !strings.Contains(got, tc.want) || r.Deployable != tc.ok {
 			t.Errorf("%s: deployable %v\n%s", name, r.Deployable, got)
 		}
-		if tc.ok && !strings.Contains(messages(r), "offers no network access") {
-			t.Errorf("%s: unused network grant not reported", name)
+		// 0.1.0 has no network: the grant is unused. 0.2.0 uses it.
+		if unused := strings.Contains(messages(r), "offers no network access"); tc.ok && unused != strings.HasSuffix(tc.world, "0.1.0") {
+			t.Errorf("%s: unused network grant reported %v", name, unused)
 		}
 	}
 }

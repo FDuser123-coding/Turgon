@@ -1,18 +1,22 @@
 # Architecture §18.4: a Wasm logic plugin. Its permissions are the consent an
-# administrator approves at install time; it may only propose changes, which
-# pass the write guard, policies and approvals like any other write.
-# Source and build: credit-check/ (Rust, wit-bindgen). Network access and
-# secrets come with a later version of the world; 0.1.0 offers neither.
+# administrator approves at install time. It may only propose changes, which
+# pass the write guard, policies and approvals like any other write; call
+# the one host it is granted, with a secret Turgon puts in for it; and
+# publish credit.checked for other plugins.
+# Source and build: credit-check/ (Rust, wit-bindgen).
 apiVersion: turgon.dev/v1alpha1
 kind: Plugin
-metadata: { name: credit-check, publisher: acme-risk, version: 1.2.0 }
+metadata: { name: credit-check, publisher: acme-risk, version: 1.3.0 }
 spec:
   type: logic
   runtime: wasm
-  world: turgon:stack/logic-plugin@0.1.0
+  world: turgon:stack/logic-plugin@0.2.0
   module: credit-check/credit-check.wasm
   subscribes: [model.SalesOrder.created]
   permissions:
     entities: { read: [Customer], propose: [SalesOrder.creditStatus] }
-  limits: { memoryMB: 64, timeoutMs: 2000 }
+    network:  { allow: ["api.acme-risk.example"] }
+    secrets:  [acme-api-key]        # a handle, never the value
+    events:   { publish: [credit.checked] }
+  limits: { memoryMB: 64, timeoutMs: 5000 }
   ui: { panel: "ui://credit-check/panel" }

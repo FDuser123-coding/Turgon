@@ -1,9 +1,10 @@
 // Package plugin runs logic plugins (architecture §18.4): WebAssembly
-// modules built for the WIT world turgon:stack/logic-plugin@0.1.0
-// (wit/turgon-stack.wit). A plugin reacts to an event, may read entities
-// and propose changes through the host, and nothing else: it gets no WASI,
-// so no files, clock, randomness, environment or network, and every call
-// it makes is checked against the grants an administrator approved.
+// modules built for the WIT world turgon:stack/logic-plugin, version 0.2.0
+// (wit/turgon-stack.wit) or 0.1.0 (wit/0.1.0). A plugin reacts to an
+// event, may read entities, propose changes, publish events and (0.2.0)
+// call the HTTPS hosts it is granted, and nothing else: it gets no WASI, so
+// no files, clock, randomness or environment, and every call it makes is
+// checked against the grants an administrator approved.
 //
 // Modules are what wit-bindgen produces for the world (a core module using
 // the Canonical ABI, e.g. Rust built for wasm32-unknown-unknown), or a
@@ -18,7 +19,9 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -26,13 +29,14 @@ import (
 	"github.com/tetratelabs/wazero/api"
 )
 
-// World is the only WIT world this host implements.
-const World = "turgon:stack/logic-plugin@0.1.0"
+// World is the newest WIT world this host implements; Worlds lists them all.
+const World = "turgon:stack/logic-plugin@0.2.0"
+
+var Worlds = []string{"turgon:stack/logic-plugin@0.1.0", World}
 
 const (
-	entitiesModule = "turgon:stack/entities@0.1.0"
-	eventsModule   = "turgon:stack/events@0.1.0"
-	maxModuleSize  = 8 << 20
+	worldPrefix   = "turgon:stack/logic-plugin@"
+	maxModuleSize = 8 << 20
 	// Per invocation.
 	maxHostCalls = 64
 	maxString    = 1 << 20 // a string or list a plugin passes the host
@@ -44,21 +48,36 @@ var (
 	// The world's imports, lowered by the Canonical ABI: strings are
 	// (pointer, length) pairs, and a result too large for one value is
 	// written to a pointer the caller passes last.
-	allowedImports = map[string]map[string][]api.ValueType{
-		entitiesModule: {
-			"get":            {i32, i32, i32, i32, i32},
-			"propose-change": {i32, i32, i32, i32, i32, i32, i32},
-		},
-		eventsModule: {
-			"publish": {i32, i32, i32, i32, i32},
-		},
+	signatures = map[string][]api.ValueType{
+		"entities.get":            {i32, i32, i32, i32, i32},
+		"entities.propose-change": {i32, i32, i32, i32, i32, i32, i32},
+		"events.publish":          {i32, i32, i32, i32, i32},
+		// method, url, headers, body: (pointer, length) each; the result.
+		"http.send": {i32, i32, i32, i32, i32, i32, i32, i32, i32},
+	}
+	// What each version of the world imports.
+	versions = map[string][]string{
+		"0.1.0": {"entities.get", "entities.propose-change", "events.publish"},
+		"0.2.0": {"entities.get", "entities.propose-change", "events.publish", "http.send"},
 	}
 )
+
+// importOf splits a host import such as turgon:stack/entities@0.2.0.get
+// into "entities.get" and "0.2.0".
+func importOf(module, name string) (fn, version string, ok bool) {
+	iface, ok := strings.CutPrefix(module, "turgon:stack/")
+	if !ok {
+		return "", "", false
+	}
+	iface, version, ok = strings.Cut(iface, "@")
+	fn = iface + "." + name
+	return fn, version, ok && slices.Contains(versions[version], fn)
+}
 
 // ErrorCode is the world's error-code variant.
 type ErrorCode struct {
 	Kind    ErrorKind
-	Message string // for Invalid
+	Message string // for Invalid and Unavailable
 }
 
 type ErrorKind uint8
@@ -67,6 +86,9 @@ const (
 	Denied ErrorKind = iota
 	NotFound
 	Invalid
+	// Unavailable (0.2.0): a service did not answer, or answered with an
+	// error. Plugins built for 0.1.0 see it as Invalid.
+	Unavailable
 )
 
 func (e *ErrorCode) Error() string {
@@ -75,6 +97,8 @@ func (e *ErrorCode) Error() string {
 		return "denied"
 	case NotFound:
 		return "not found"
+	case Unavailable:
+		return "unavailable: " + e.Message
 	}
 	return "invalid: " + e.Message
 }
@@ -86,6 +110,23 @@ type Host interface {
 	Get(ctx context.Context, kind, id string) (string, error)
 	ProposeChange(ctx context.Context, kind, id, patch string) (string, error)
 	Publish(ctx context.Context, topic string, payload []byte) error
+	Send(ctx context.Context, req HTTPRequest) (*HTTPResponse, error)
+}
+
+// Header is an HTTP header, in the order the plugin or the server gave it.
+type Header struct{ Name, Value string }
+
+// HTTPRequest and HTTPResponse are the world's http records.
+type HTTPRequest struct {
+	Method, URL string
+	Headers     []Header
+	Body        []byte
+}
+
+type HTTPResponse struct {
+	Status  uint16
+	Headers []Header
+	Body    []byte
 }
 
 // Limits bound one invocation.
@@ -100,8 +141,10 @@ type Module struct {
 	compiled wazero.CompiledModule
 	limits   Limits
 	// Imports lists the world functions the module uses, e.g.
-	// "entities.get".
+	// "entities.get"; World is the world they come from, empty if it
+	// imports nothing.
 	Imports []string
+	World   string
 	hasPost bool
 }
 
@@ -151,22 +194,29 @@ func Load(ctx context.Context, wasm []byte, limits Limits) (*Module, error) {
 		compiled = c
 	}
 	if compiled == nil {
-		return nil, fmt.Errorf("no module in the component exports handle as %s defines it", World)
+		return nil, errors.New("no module in the component exports handle as turgon:stack/logic-plugin defines it")
 	}
+	version := ""
 	for _, f := range compiled.ImportedFunctions() {
 		mod, name, _ := f.Import()
-		want, known := allowedImports[mod][name]
+		fn, v, known := importOf(mod, name)
 		if !known {
 			if mod == "wasi_snapshot_preview1" || mod == "wasi_unstable" {
-				return nil, fmt.Errorf("the module imports WASI (%s.%s): plugins get no files, clock, randomness or network; build for wasm32-unknown-unknown", mod, name)
+				return nil, fmt.Errorf("the module imports WASI (%s.%s): plugins get no files, clock, randomness or environment; build for wasm32-unknown-unknown", mod, name)
 			}
-			return nil, fmt.Errorf("the module imports %s.%s, which %s does not offer", mod, name, World)
+			return nil, fmt.Errorf("the module imports %s.%s, which no version of turgon:stack/logic-plugin (%s) offers", mod, name, strings.Join(Worlds, ", "))
 		}
-		if !sameTypes(f.ParamTypes(), want) || len(f.ResultTypes()) != 0 {
-			return nil, fmt.Errorf("%s.%s has the wrong signature for %s", mod, name, World)
+		if version != "" && v != version {
+			return nil, fmt.Errorf("the module mixes versions %s and %s of turgon:stack", version, v)
 		}
-		short := map[string]string{entitiesModule: "entities", eventsModule: "events"}[mod]
-		m.Imports = append(m.Imports, short+"."+name)
+		version = v
+		if !sameTypes(f.ParamTypes(), signatures[fn]) || len(f.ResultTypes()) != 0 {
+			return nil, fmt.Errorf("%s.%s has the wrong signature for %s%s", mod, name, worldPrefix, v)
+		}
+		m.Imports = append(m.Imports, fn)
+	}
+	if version != "" {
+		m.World = worldPrefix + version
 	}
 	sort.Strings(m.Imports)
 	for _, mem := range compiled.ImportedMemories() {
@@ -175,7 +225,7 @@ func Load(ctx context.Context, wasm []byte, limits Limits) (*Module, error) {
 	}
 	exports := compiled.ExportedFunctions()
 	if f, ok := exports["handle"]; !ok || !sameTypes(f.ParamTypes(), []api.ValueType{i32, i32}) || !sameTypes(f.ResultTypes(), []api.ValueType{i32}) {
-		return nil, fmt.Errorf("the module does not export handle as %s defines it", World)
+		return nil, errors.New("the module does not export handle as turgon:stack/logic-plugin defines it")
 	}
 	if f, ok := exports["cabi_realloc"]; !ok || !sameTypes(f.ParamTypes(), []api.ValueType{i32, i32, i32, i32}) || !sameTypes(f.ResultTypes(), []api.ValueType{i32}) {
 		return nil, errors.New("the module does not export cabi_realloc")
@@ -329,87 +379,203 @@ func stop(ctx context.Context, err error) {
 }
 
 func (m *Module) hostModules(ctx context.Context) error {
-	str := func(ctx context.Context, mod api.Module, ptr, n uint32) string {
-		b, err := readBytes(mod, ptr, n, maxString)
-		if err != nil || !utf8.Valid(b) {
-			stop(ctx, fmt.Errorf("%w: an argument is not a valid string", ErrPlugin))
-		}
-		return string(b)
-	}
-	begin := func(ctx context.Context) *call {
-		c, _ := ctx.Value(callKey{}).(*call)
-		if c == nil {
-			panic(errors.New("host call outside an invocation"))
-		}
-		c.calls++
-		if c.calls > maxHostCalls {
-			stop(ctx, fmt.Errorf("%w: more than %d host calls", ErrPlugin, maxHostCalls))
-		}
-		return c
-	}
-	// writeResult writes result<string, error-code> or result<_, error-code>
-	// at ret: discriminant at 0, payload at 4.
-	writeResult := func(ctx context.Context, mod api.Module, c *call, ret uint32, ok *string, err error) {
-		mem := mod.Memory()
-		var buf [16]byte
-		var ec *ErrorCode
-		switch {
-		case err == nil:
-			if ok != nil {
-				p, perr := put(ctx, mod, []byte(*ok))
-				if perr != nil {
-					stop(ctx, fmt.Errorf("%w: could not take a result: %v", ErrPlugin, perr))
-				}
-				binary.LittleEndian.PutUint32(buf[4:], p)
-				binary.LittleEndian.PutUint32(buf[8:], uint32(len(*ok)))
+	for version, fns := range versions {
+		v1 := version == "0.1.0"
+		builders := map[string]wazero.HostModuleBuilder{}
+		for _, fn := range fns {
+			iface, name, _ := strings.Cut(fn, ".")
+			b, ok := builders[iface]
+			if !ok {
+				b = m.rt.NewHostModuleBuilder("turgon:stack/" + iface + "@" + version)
+				builders[iface] = b
 			}
-		case errors.As(err, &ec):
-			buf[0] = 1
-			buf[4] = byte(ec.Kind)
-			if ec.Kind == Invalid {
-				p, perr := put(ctx, mod, []byte(ec.Message))
-				if perr != nil {
-					stop(ctx, fmt.Errorf("%w: could not take a result: %v", ErrPlugin, perr))
-				}
-				binary.LittleEndian.PutUint32(buf[8:], p)
-				binary.LittleEndian.PutUint32(buf[12:], uint32(len(ec.Message)))
-			}
-		default:
-			c.err = err
-			panic(err)
+			b.NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(hostFunc(fn, v1)), signatures[fn], nil).Export(name)
 		}
-		if !mem.Write(ret, buf[:]) {
-			stop(ctx, fmt.Errorf("%w: invalid return pointer", ErrPlugin))
+		for _, b := range builders {
+			if _, err := b.Instantiate(ctx); err != nil {
+				return err
+			}
 		}
 	}
+	return nil
+}
+
+// hostFunc implements one world function over the Canonical ABI.
+func hostFunc(fn string, v1 bool) func(ctx context.Context, mod api.Module, s []uint64) {
 	u := func(v uint64) uint32 { return uint32(v) }
-	_, err := m.rt.NewHostModuleBuilder(entitiesModule).
-		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, s []uint64) {
-		c := begin(ctx)
-		kind, id := str(ctx, mod, u(s[0]), u(s[1])), str(ctx, mod, u(s[2]), u(s[3]))
-		v, err := c.host.Get(ctx, kind, id)
-		writeResult(ctx, mod, c, u(s[4]), &v, err)
-	}), allowedImports[entitiesModule]["get"], nil).Export("get").
-		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, s []uint64) {
-		c := begin(ctx)
-		kind, id, patch := str(ctx, mod, u(s[0]), u(s[1])), str(ctx, mod, u(s[2]), u(s[3])), str(ctx, mod, u(s[4]), u(s[5]))
-		v, err := c.host.ProposeChange(ctx, kind, id, patch)
-		writeResult(ctx, mod, c, u(s[6]), &v, err)
-	}), allowedImports[entitiesModule]["propose-change"], nil).Export("propose-change").
-		Instantiate(ctx)
-	if err != nil {
-		return err
-	}
-	_, err = m.rt.NewHostModuleBuilder(eventsModule).
-		NewFunctionBuilder().WithGoModuleFunction(api.GoModuleFunc(func(ctx context.Context, mod api.Module, s []uint64) {
-		c := begin(ctx)
-		topic := str(ctx, mod, u(s[0]), u(s[1]))
-		payload, err := readBytes(mod, u(s[2]), u(s[3]), maxString)
-		if err != nil {
-			stop(ctx, fmt.Errorf("%w: the payload: %v", ErrPlugin, err))
+	switch fn {
+	case "entities.get":
+		return func(ctx context.Context, mod api.Module, s []uint64) {
+			c := begin(ctx)
+			kind, id := str(ctx, mod, u(s[0]), u(s[1])), str(ctx, mod, u(s[2]), u(s[3]))
+			v, err := c.host.Get(ctx, kind, id)
+			writeResult(ctx, mod, c, u(s[4]), v1, smallResult, stringAt4(ctx, mod, v), err)
 		}
-		writeResult(ctx, mod, c, u(s[4]), nil, c.host.Publish(ctx, topic, payload))
-	}), allowedImports[eventsModule]["publish"], nil).Export("publish").
-		Instantiate(ctx)
-	return err
+	case "entities.propose-change":
+		return func(ctx context.Context, mod api.Module, s []uint64) {
+			c := begin(ctx)
+			kind, id, patch := str(ctx, mod, u(s[0]), u(s[1])), str(ctx, mod, u(s[2]), u(s[3])), str(ctx, mod, u(s[4]), u(s[5]))
+			v, err := c.host.ProposeChange(ctx, kind, id, patch)
+			writeResult(ctx, mod, c, u(s[6]), v1, smallResult, stringAt4(ctx, mod, v), err)
+		}
+	case "events.publish":
+		return func(ctx context.Context, mod api.Module, s []uint64) {
+			c := begin(ctx)
+			topic := str(ctx, mod, u(s[0]), u(s[1]))
+			payload, err := readBytes(mod, u(s[2]), u(s[3]), maxString)
+			if err != nil {
+				stop(ctx, fmt.Errorf("%w: the payload: %v", ErrPlugin, err))
+			}
+			writeResult(ctx, mod, c, u(s[4]), v1, smallResult, nil, c.host.Publish(ctx, topic, payload))
+		}
+	case "http.send":
+		return func(ctx context.Context, mod api.Module, s []uint64) {
+			c := begin(ctx)
+			req := HTTPRequest{Method: str(ctx, mod, u(s[0]), u(s[1])), URL: str(ctx, mod, u(s[2]), u(s[3])),
+				Headers: readHeaders(ctx, mod, u(s[4]), u(s[5]))}
+			body, err := readBytes(mod, u(s[6]), u(s[7]), maxString)
+			if err != nil {
+				stop(ctx, fmt.Errorf("%w: the request body: %v", ErrPlugin, err))
+			}
+			req.Body = body
+			resp, err := c.host.Send(ctx, req)
+			var ok func([]byte)
+			if err == nil {
+				ok = func(buf []byte) {
+					binary.LittleEndian.PutUint16(buf[4:], resp.Status)
+					hp, hn := writeHeaders(ctx, mod, resp.Headers)
+					binary.LittleEndian.PutUint32(buf[8:], hp)
+					binary.LittleEndian.PutUint32(buf[12:], hn)
+					bp := alloc(ctx, mod, resp.Body)
+					binary.LittleEndian.PutUint32(buf[16:], bp)
+					binary.LittleEndian.PutUint32(buf[20:], uint32(len(resp.Body)))
+				}
+			}
+			writeResult(ctx, mod, c, u(s[8]), v1, responseResult, ok, err)
+		}
+	}
+	panic("unknown world function " + fn)
+}
+
+const maxHeaders = 64
+
+// stringAt4 writes a string result's payload.
+func stringAt4(ctx context.Context, mod api.Module, v string) func([]byte) {
+	return func(buf []byte) {
+		binary.LittleEndian.PutUint32(buf[4:], alloc(ctx, mod, []byte(v)))
+		binary.LittleEndian.PutUint32(buf[8:], uint32(len(v)))
+	}
+}
+
+func str(ctx context.Context, mod api.Module, ptr, n uint32) string {
+	b, err := readBytes(mod, ptr, n, maxString)
+	if err != nil || !utf8.Valid(b) {
+		stop(ctx, fmt.Errorf("%w: an argument is not a valid string", ErrPlugin))
+	}
+	return string(b)
+}
+
+func begin(ctx context.Context) *call {
+	c, _ := ctx.Value(callKey{}).(*call)
+	if c == nil {
+		panic(errors.New("host call outside an invocation"))
+	}
+	c.calls++
+	if c.calls > maxHostCalls {
+		stop(ctx, fmt.Errorf("%w: more than %d host calls", ErrPlugin, maxHostCalls))
+	}
+	return c
+}
+
+// alloc copies bytes into guest memory for a result.
+func alloc(ctx context.Context, mod api.Module, b []byte) uint32 {
+	p, err := put(ctx, mod, b)
+	if err != nil {
+		stop(ctx, fmt.Errorf("%w: could not take a result: %v", ErrPlugin, err))
+	}
+	return p
+}
+
+// readHeaders reads a list<header>: records of two strings, 16 bytes each.
+func readHeaders(ctx context.Context, mod api.Module, ptr, n uint32) []Header {
+	if n > maxHeaders {
+		stop(ctx, fmt.Errorf("%w: more than %d headers", ErrPlugin, maxHeaders))
+	}
+	out := make([]Header, 0, n)
+	for i := uint32(0); i < n; i++ {
+		at := ptr + 16*i
+		mem := mod.Memory()
+		np, ok1 := mem.ReadUint32Le(at)
+		nn, ok2 := mem.ReadUint32Le(at + 4)
+		vp, ok3 := mem.ReadUint32Le(at + 8)
+		vn, ok4 := mem.ReadUint32Le(at + 12)
+		if !ok1 || !ok2 || !ok3 || !ok4 {
+			stop(ctx, fmt.Errorf("%w: a header is out of bounds", ErrPlugin))
+		}
+		out = append(out, Header{Name: str(ctx, mod, np, nn), Value: str(ctx, mod, vp, vn)})
+	}
+	return out
+}
+
+// writeHeaders writes a list<header> into guest memory.
+func writeHeaders(ctx context.Context, mod api.Module, hs []Header) (uint32, uint32) {
+	if len(hs) > maxHeaders {
+		hs = hs[:maxHeaders]
+	}
+	if len(hs) == 0 {
+		return 4, 0
+	}
+	res, err := mod.ExportedFunction("cabi_realloc").Call(ctx, 0, 0, 4, uint64(16*len(hs)))
+	if err != nil {
+		stop(ctx, fmt.Errorf("%w: could not take a result: %v", ErrPlugin, err))
+	}
+	list := uint32(res[0])
+	var rec [16]byte
+	for i, h := range hs {
+		binary.LittleEndian.PutUint32(rec[0:], alloc(ctx, mod, []byte(h.Name)))
+		binary.LittleEndian.PutUint32(rec[4:], uint32(len(h.Name)))
+		binary.LittleEndian.PutUint32(rec[8:], alloc(ctx, mod, []byte(h.Value)))
+		binary.LittleEndian.PutUint32(rec[12:], uint32(len(h.Value)))
+		if !mod.Memory().Write(list+16*uint32(i), rec[:]) {
+			stop(ctx, fmt.Errorf("%w: cabi_realloc returned an invalid pointer", ErrPlugin))
+		}
+	}
+	return list, uint32(len(hs))
+}
+
+// Result sizes: result<string, error-code> and result<_, error-code> take
+// 16 bytes (an error-code is a discriminant and a string); result<response,
+// error-code> 24.
+const (
+	smallResult    = 16
+	responseResult = 24
+)
+
+// writeResult writes a result<T, error-code> of size bytes at ret: the
+// discriminant at 0, the payload at 4 (ok writes T's).
+func writeResult(ctx context.Context, mod api.Module, c *call, ret uint32, v1 bool, size int, ok func([]byte), err error) {
+	buf := make([]byte, size)
+	var ec *ErrorCode
+	switch {
+	case err == nil:
+		if ok != nil {
+			ok(buf)
+		}
+	case errors.As(err, &ec):
+		kind, msg := ec.Kind, ec.Message
+		if kind == Unavailable && v1 {
+			kind, msg = Invalid, "unavailable: "+msg
+		}
+		buf[0], buf[4] = 1, byte(kind)
+		if kind == Invalid || kind == Unavailable {
+			binary.LittleEndian.PutUint32(buf[8:], alloc(ctx, mod, []byte(msg)))
+			binary.LittleEndian.PutUint32(buf[12:], uint32(len(msg)))
+		}
+	default:
+		c.err = err
+		panic(err)
+	}
+	if !mod.Memory().Write(ret, buf) {
+		stop(ctx, fmt.Errorf("%w: invalid return pointer", ErrPlugin))
+	}
 }

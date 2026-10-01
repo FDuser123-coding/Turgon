@@ -1,6 +1,7 @@
 #!/bin/sh
 # Rebuilds the Wasm plugins committed to the repository from their sources:
-# the credit-check example and the probe the host tests run. With the
+# the credit-check example and the probes the host tests run (worlds 0.1.0
+# and 0.2.0). With the
 # pinned toolchain (rust-toolchain.toml) and paths remapped, the output is
 # the same on any machine; CI checks the committed files match.
 #   scripts/build-plugins.sh            rebuild in place
@@ -36,6 +37,7 @@ place() { # destination
 build examples/plugins/credit-check wasm32-unknown-unknown credit_check.wasm examples/plugins/credit-check/credit-check.wasm
 build pkg/plugin/testdata/probe wasm32-unknown-unknown probe.wasm pkg/plugin/testdata/probe.wasm
 build pkg/plugin/testdata/probe wasm32-wasip1 probe.wasm pkg/plugin/testdata/probe-wasi.wasm
+build pkg/plugin/testdata/probe2 wasm32-unknown-unknown probe2.wasm pkg/plugin/testdata/probe2.wasm
 wasm-tools component new "$out/probe.wasm" -o "$out/probe.component.wasm"
 place pkg/plugin/testdata/probe.component.wasm
 if [ "$check" = "--check" ]; then echo "plugins match their sources"; else echo "plugins built"; fi

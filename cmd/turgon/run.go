@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
@@ -41,6 +42,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/engine"
 	"github.com/fduser123-coding/turgon/pkg/identity"
 	"github.com/fduser123-coding/turgon/pkg/metrics"
+	"github.com/fduser123-coding/turgon/pkg/netguard"
 	"github.com/fduser123-coding/turgon/pkg/notify"
 	"github.com/fduser123-coding/turgon/pkg/plugin/runner"
 	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
@@ -238,10 +240,14 @@ func runCmd() *cobra.Command {
 			// (or on SIGHUP) so rotated credentials are used without a restart.
 			// Logic plugins are compiled once; each generation binds them to
 			// its connections.
+			pluginNet, err := netguard.ParseAllow(os.Getenv("TURGON_PLUGIN_NETWORK_ALLOW"))
+			if err != nil {
+				return fmt.Errorf("TURGON_PLUGIN_NETWORK_ALLOW: %w", err)
+			}
 			plugins, err := runner.New(ctx, spec, runner.TemporalProposer{
 				Writes:     engine.AgentWrites{Client: c, TaskQueue: tf.taskQueue},
 				SpecDigest: spec.Metadata.Digest, ApprovalTimeout: approvalTimeout,
-			}, log)
+			}, log, runner.Options{Network: netguard.Guard{Allow: pluginNet}, Secrets: secretsFrom})
 			if err != nil {
 				return err
 			}
@@ -716,6 +722,11 @@ func secretsCmd() *cobra.Command {
 					if ref != "" {
 						fmt.Fprintf(cmd.OutOrStdout(), "%-14s %-44s %s\n", c.Endpoint, ref, b.Where(ref))
 					}
+				}
+			}
+			for _, p := range spec.Spec.Plugins {
+				for _, h := range slices.Sorted(maps.Keys(p.Secrets)) {
+					fmt.Fprintf(cmd.OutOrStdout(), "%-14s %-44s %s\n", "plugin "+p.Name, p.Secrets[h], b.Where(p.Secrets[h]))
 				}
 			}
 			return nil
