@@ -1,0 +1,23 @@
+# The credit-check logic plugin (architecture §18.4), in Rust with wit-bindgen.
+# Rebuild the committed module with scripts/build-plugins.sh (CI checks it
+# matches these sources).
+[package]
+name = "credit-check"
+version = "1.2.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+wit-bindgen = "=0.46.0"
+serde_json = "1"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"
+
+[workspace]

@@ -192,4 +192,5 @@ export interface FlowStep {
   approval?: string;
   simulation?: string;
   compensation?: string;
+  plugins?: string[];
 }

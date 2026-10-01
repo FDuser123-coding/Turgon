@@ -13,6 +13,7 @@ spec:
     - { name: cancel-sales-order, entity: SalesOrder, direction: write, interface: jdbc, risk: high }
     - { name: get-customer, entity: Customer, direction: read, interface: jdbc, risk: read }
     - { name: get-sales-order, entity: SalesOrder, direction: read, interface: jdbc, risk: read }
+    - { name: update-sales-order, entity: SalesOrder, direction: write, interface: jdbc, risk: low }
     - { name: record-payment, entity: Payment, direction: write, interface: jdbc, risk: low, compensation: void-payment }
     - { name: void-payment, entity: Payment, direction: write, interface: jdbc, risk: low }
     - { name: get-payment, entity: Payment, direction: read, interface: jdbc, risk: read }
@@ -36,7 +37,13 @@ spec:
         table: erp.sales_orders
         action: select
         key: external_id
-        columns: [external_id, customer_id, order_date, net_value, currency, lines, status]
+        columns: [external_id, customer_id, order_date, net_value, currency, lines, status, credit_status]
+      # Changes logic plugins propose (credit-check sets credit_status).
+      update-sales-order:
+        table: erp.sales_orders
+        action: update
+        key: external_id
+        columns: [credit_status]
       record-payment:
         table: erp.payments
         action: insert

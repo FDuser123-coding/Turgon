@@ -6,7 +6,10 @@ package catalog
 import (
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"github.com/fduser123-coding/turgon/apis/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/semver"
@@ -195,4 +198,31 @@ func (c *Catalog) All() []v1alpha1.Object {
 		}
 	}
 	return out
+}
+
+// PluginModule reads a logic plugin's Wasm module, which its manifest
+// names relative to the manifest's own file.
+func (c *Catalog) PluginModule(p *v1alpha1.Plugin) ([]byte, error) {
+	if p.Spec.Module == "" {
+		return nil, fmt.Errorf("plugin %s names no module", p.Metadata.Name)
+	}
+	for _, e := range c.objects[v1alpha1.KindPlugin][p.Metadata.Name] {
+		if e.obj != v1alpha1.Object(p) {
+			continue
+		}
+		if e.source == "" {
+			return nil, fmt.Errorf("plugin %s was not loaded from a file, so its module %s cannot be found", p.Metadata.Name, p.Spec.Module)
+		}
+		dir := filepath.Dir(e.source)
+		path := filepath.Join(dir, filepath.FromSlash(p.Spec.Module))
+		if rel, err := filepath.Rel(dir, path); err != nil || strings.HasPrefix(rel, "..") {
+			return nil, fmt.Errorf("plugin %s: module %s is outside its manifest's directory", p.Metadata.Name, p.Spec.Module)
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			return nil, fmt.Errorf("plugin %s: %w", p.Metadata.Name, err)
+		}
+		return b, nil
+	}
+	return nil, fmt.Errorf("plugin %s is not in the catalog", p.Metadata.Name)
 }

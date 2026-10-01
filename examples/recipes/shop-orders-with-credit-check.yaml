@@ -1,0 +1,33 @@
+# shop-orders-to-erp with the credit-check logic plugin installed: once a
+# sales order is committed, the plugin reads the customer's credit limit
+# and proposes the order's credit status, a low-risk write that the write
+# guard and policies check and the audit log records as the plugin's.
+apiVersion: turgon.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: shop-orders-with-credit-check
+  version: 1.0.0
+  description: "Web-shop orders become ERP sales orders, and a sandboxed plugin proposes each order's credit status."
+spec:
+  trigger:
+    source: shop-db
+    event: Order.Created
+  steps:
+    - map:
+        from: shop-db.Order
+        to: model.SalesOrder
+        mapping: shop-order-to-sales-order@1
+    - resolve:
+        entity: model.Customer
+        strategy: exact
+        match:
+          - { field: customerRef, kind: email }
+          - { field: customerRef, kind: domain }
+        autoMatchAbove: 1.0
+    - write:
+        target: erp-db
+        operation: create-sales-order
+        idempotencyKey: "SHOP-{{ source.order_number }}"
+        simulate: true
+  extensions: [credit-check@1.2]
+  policies: [writeback-default]

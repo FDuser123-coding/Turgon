@@ -84,6 +84,8 @@ type FlowStep struct {
 	Approval     string `json:"approval,omitempty"`
 	Simulation   string `json:"simulation,omitempty"`
 	Compensation string `json:"compensation,omitempty"`
+	// Plugins react to the write once it commits (logic plugins, sandboxed).
+	Plugins []string `json:"plugins,omitempty"`
 }
 
 func (s *Server) integrations(w http.ResponseWriter, r *http.Request) {
@@ -162,7 +164,7 @@ func BuildIntegrations(cat *catalog.Catalog, opts verifier.Options) Integrations
 				case st.Write != nil:
 					wr := st.Write
 					f.Steps = append(f.Steps, FlowStep{Kind: "write", System: wr.Endpoint, Operation: wr.Operation, Risk: wr.Risk,
-						Approval: wr.Approval, Simulation: wr.Simulation, Compensation: wr.Compensation, Entity: wr.Entity})
+						Approval: wr.Approval, Simulation: wr.Simulation, Compensation: wr.Compensation, Entity: wr.Entity, Plugins: wr.Plugins})
 				}
 			}
 		} else {

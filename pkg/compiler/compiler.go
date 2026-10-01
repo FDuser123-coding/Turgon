@@ -19,6 +19,7 @@ import (
 
 	"github.com/fduser123-coding/turgon/apis/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/catalog"
+	"github.com/fduser123-coding/turgon/pkg/plugin"
 	"github.com/fduser123-coding/turgon/pkg/verifier"
 )
 
@@ -141,6 +142,10 @@ type WriteConfig struct {
 	Compensation string `json:"compensation"`
 	Metered      bool   `json:"metered,omitempty"`
 	Output       string `json:"output,omitempty"`
+	// Event is the model lifecycle event the write causes, and Plugins the
+	// logic plugins subscribed to it, which run after the write commits.
+	Event   string   `json:"event,omitempty"`
+	Plugins []string `json:"plugins,omitempty"`
 }
 
 // PluginDeployment is a plugin with the capabilities granted to it.
@@ -156,6 +161,23 @@ type PluginDeployment struct {
 	Grants     v1alpha1.PluginPermissions `json:"grants"`
 	Limits     *v1alpha1.PluginLimits     `json:"limits,omitempty"`
 	UIPanel    string                     `json:"uiPanel,omitempty"`
+	// Module is a logic plugin's Wasm module, embedded so the spec's digest
+	// and signature cover the plugin's code.
+	Module       []byte `json:"module,omitempty"`
+	ModuleSHA256 string `json:"moduleSha256,omitempty"`
+	// Reads and Proposals name the operations that serve the plugin's get
+	// and propose-change calls, by entity.
+	Reads     map[string]EntityOperation `json:"reads,omitempty"`
+	Proposals map[string]EntityOperation `json:"proposals,omitempty"`
+}
+
+// EntityOperation is an operation serving one entity for plugins. IDField
+// is the payload field a proposal's entity ID goes in.
+type EntityOperation struct {
+	Endpoint  string `json:"endpoint"`
+	Operation string `json:"operation"`
+	Risk      string `json:"risk"`
+	IDField   string `json:"idField,omitempty"`
 }
 
 // Tool is an MCP tool descriptor for the agent gateway, named in business
@@ -203,17 +225,19 @@ func Compile(cat *catalog.Catalog, obj v1alpha1.Object, opts verifier.Options) (
 		if !rep.Deployable {
 			return nil, rep, notDeployable(rep)
 		}
-		b := newBuilder()
+		b := newBuilder(cat)
 		b.recipe(o, rep)
-		return b.finish(o.Metadata.Name, "Recipe/"+ref(o.Metadata), rep.Level), rep, nil
+		spec := b.finish(o.Metadata.Name, "Recipe/"+ref(o.Metadata), rep.Level)
+		return spec, rep, b.err
 	case *v1alpha1.StackBlueprint:
 		rep := v.Blueprint(o)
 		if !rep.Deployable {
 			return nil, rep, notDeployable(rep)
 		}
-		b := newBuilder()
+		b := newBuilder(cat)
 		b.blueprint(rep)
-		return b.finish(o.Metadata.Name, "StackBlueprint/"+ref(o.Metadata), rep.Level), rep, nil
+		spec := b.finish(o.Metadata.Name, "StackBlueprint/"+ref(o.Metadata), rep.Level)
+		return spec, rep, b.err
 	default:
 		return nil, nil, fmt.Errorf("cannot compile a %s; compile a Recipe or StackBlueprint", obj.GetTypeMeta().Kind)
 	}
@@ -251,10 +275,22 @@ type builder struct {
 	// alias maps a connector name to the slot it fills, so recipes that
 	// name a tool directly share the slot's connector deployment.
 	alias map[string]string
+	cat   *catalog.Catalog
+	// entityOps lists the operations each endpoint offers per entity, for
+	// plugins.
+	entityOps map[string][]entityOp
+	err       error
 }
 
-func newBuilder() *builder {
+type entityOp struct {
+	endpoint string
+	op       v1alpha1.Operation
+}
+
+func newBuilder(cat *catalog.Catalog) *builder {
 	return &builder{
+		cat:        cat,
+		entityOps:  map[string][]entityOp{},
 		connectors: map[string]*ConnectorConfig{},
 		topics:     map[string]Topic{},
 		tools:      map[string]Tool{},
@@ -366,6 +402,12 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 		}
 		wf.Steps = append(wf.Steps, step)
 	}
+	for ep, m := range conns {
+		b.offers(ep, m)
+	}
+	for _, p := range rep.Resolution.Extensions {
+		b.extension(p)
+	}
 	// Every read operation of an endpoint the recipe uses becomes a
 	// read-only agent tool, named in business terms (architecture §7.7).
 	for ep, m := range conns {
@@ -412,10 +454,11 @@ func (b *builder) blueprint(rep *verifier.Report) {
 		// Every slot's connector is deployed, even if no recipe uses it yet:
 		// agents and extensions reach it through the slot.
 		b.connector(slot, m, "")
+		b.offers(slot, m)
 	}
 	for _, slot := range slots {
 		p := rep.Resolution.Slots[slot]
-		b.body.Plugins = append(b.body.Plugins, deployment(p, slot))
+		b.body.Plugins = append(b.body.Plugins, b.deployment(p, slot))
 		// Agent tools are generated from slot contracts, so they keep their
 		// names and meaning when the tool behind a slot is swapped.
 		for _, a := range rep.Resolution.Contracts[slot].Spec.Actions {
@@ -423,7 +466,7 @@ func (b *builder) blueprint(rep *verifier.Report) {
 		}
 	}
 	for _, p := range rep.Resolution.Extensions {
-		b.body.Plugins = append(b.body.Plugins, deployment(p, ""))
+		b.extension(p)
 	}
 	for _, child := range rep.Children {
 		if r := child.Resolution.Recipe; r != nil {
@@ -433,6 +476,47 @@ func (b *builder) blueprint(rep *verifier.Report) {
 	for _, p := range rep.Resolution.Policies {
 		b.policies[p.Metadata.Name] = PolicyRef{Name: p.Metadata.Name, Version: p.Metadata.Version, Rego: p.Spec.Rego}
 	}
+}
+
+// offers records the operations an endpoint offers per entity.
+func (b *builder) offers(endpoint string, m *v1alpha1.ConnectorManifest) {
+	endpoint = b.endpoint(endpoint)
+	for _, op := range m.Spec.Operations {
+		if op.Entity == "" {
+			continue
+		}
+		dup := false
+		for _, o := range b.entityOps[op.Entity] {
+			dup = dup || (o.endpoint == endpoint && o.op.Name == op.Name)
+		}
+		if !dup {
+			b.entityOps[op.Entity] = append(b.entityOps[op.Entity], entityOp{endpoint, op})
+		}
+	}
+}
+
+// extension deploys an extension plugin once, however many recipes of a
+// stack install it.
+func (b *builder) extension(p *v1alpha1.Plugin) {
+	for _, d := range b.body.Plugins {
+		if d.Name == p.Metadata.Name && d.Slot == "" {
+			return
+		}
+	}
+	b.body.Plugins = append(b.body.Plugins, b.deployment(p, ""))
+}
+
+func (b *builder) deployment(p *v1alpha1.Plugin, slot string) PluginDeployment {
+	d := deployment(p, slot)
+	if p.Spec.Type == v1alpha1.PluginLogic && p.Spec.Runtime == v1alpha1.PluginRuntimeWasm {
+		mod, err := b.cat.PluginModule(p)
+		if err != nil && b.err == nil {
+			b.err = err
+		}
+		sum := sha256.Sum256(mod)
+		d.Module, d.ModuleSHA256 = mod, hex.EncodeToString(sum[:])
+	}
+	return d
 }
 
 func deployment(p *v1alpha1.Plugin, slot string) PluginDeployment {
@@ -486,6 +570,7 @@ func lowerFirst(s string) string {
 }
 
 func (b *builder) finish(name, source, level string) *RuntimeSpec {
+	b.wirePlugins()
 	for _, c := range b.connectors {
 		b.body.Connectors = append(b.body.Connectors, *c)
 	}
@@ -595,9 +680,85 @@ func ConnectionConfig(cat *catalog.Catalog, name string) (ConnectorConfig, error
 	if errs := conn.ValidateEffective(m); len(errs) > 0 {
 		return ConnectorConfig{}, fmt.Errorf("connection %s: %s: %s", name, errs[0].Path, errs[0].Message)
 	}
-	b := newBuilder()
+	b := newBuilder(cat)
 	b.connector(name, conn.Effective(m), "")
 	c := b.connectors[name]
 	c.Connection, c.Config = conn.Metadata.Name, conn.Spec.Config
 	return *c, nil
+}
+
+// wirePlugins gives each logic plugin the operations its grants need, and
+// each write step the plugins subscribed to the event it causes.
+func (b *builder) wirePlugins() {
+	pick := func(entity, opName, dir string) (EntityOperation, bool) {
+		ops := b.entityOps[entity]
+		sort.Slice(ops, func(i, j int) bool { return ops[i].endpoint < ops[j].endpoint })
+		for _, o := range ops {
+			if o.op.Name != opName || o.op.Direction != dir {
+				continue
+			}
+			eo := EntityOperation{Endpoint: o.endpoint, Operation: o.op.Name, Risk: o.op.Risk}
+			if c := b.connectors[o.endpoint]; c != nil {
+				eo.IDField = keyField(c.Config, o.op.Name)
+			}
+			return eo, true
+		}
+		return EntityOperation{}, false
+	}
+	entity := func(ref string) string { e, _, _ := strings.Cut(ref, "."); return e }
+	for i := range b.body.Plugins {
+		d := &b.body.Plugins[i]
+		if d.Type != v1alpha1.PluginLogic || d.Grants.Entities == nil {
+			continue
+		}
+		for _, ref := range d.Grants.Entities.Read {
+			if eo, ok := pick(entity(ref), plugin.ReadOperation(entity(ref)), v1alpha1.DirectionRead); ok {
+				if d.Reads == nil {
+					d.Reads = map[string]EntityOperation{}
+				}
+				d.Reads[entity(ref)] = eo
+			}
+		}
+		for _, ref := range d.Grants.Entities.Propose {
+			if eo, ok := pick(entity(ref), plugin.ProposeOperation(entity(ref)), v1alpha1.DirectionWrite); ok {
+				if d.Proposals == nil {
+					d.Proposals = map[string]EntityOperation{}
+				}
+				d.Proposals[entity(ref)] = eo
+			}
+		}
+	}
+	for wi := range b.body.Workflows {
+		for si := range b.body.Workflows[wi].Steps {
+			w := b.body.Workflows[wi].Steps[si].Write
+			if w == nil || w.Entity == "" {
+				continue
+			}
+			ev := plugin.ModelEvent(w.Entity, w.Operation)
+			for _, d := range b.body.Plugins {
+				if d.Type == v1alpha1.PluginLogic && contains(d.Subscribes, ev) && !contains(w.Plugins, d.Name) {
+					w.Plugins = append(w.Plugins, d.Name)
+				}
+			}
+			if len(w.Plugins) > 0 {
+				sort.Strings(w.Plugins)
+				w.Event = ev
+			}
+		}
+	}
+}
+
+// keyField reads the payload field an operation keys on from a connection's
+// configuration (operations.<op>.key, in snake_case as columns are), or
+// returns "id".
+func keyField(config json.RawMessage, op string) string {
+	var c struct {
+		Operations map[string]struct {
+			Key string `json:"key"`
+		} `json:"operations"`
+	}
+	if json.Unmarshal(config, &c) == nil && c.Operations[op].Key != "" {
+		return plugin.Camel(c.Operations[op].Key)
+	}
+	return "id"
 }

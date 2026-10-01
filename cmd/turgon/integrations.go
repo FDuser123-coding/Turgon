@@ -99,6 +99,9 @@ func stepText(st console.FlowStep) string {
 		if len(guards) > 0 {
 			s += " [" + strings.Join(guards, "; ") + "]"
 		}
+		if len(st.Plugins) > 0 {
+			s += ", then plugin " + strings.Join(st.Plugins, ", ")
+		}
 		return s
 	}
 	return st.Kind

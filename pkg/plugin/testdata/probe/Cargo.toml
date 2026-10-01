@@ -1,0 +1,23 @@
+# A test plugin that exercises every host function and limit.
+# Rebuild the committed module with scripts/build-plugins.sh (CI checks it
+# matches these sources).
+[package]
+name = "probe"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+path = "src/lib.rs"
+
+[dependencies]
+wit-bindgen = "=0.46.0"
+
+[profile.release]
+opt-level = "s"
+lto = true
+strip = true
+panic = "abort"
+
+[workspace]

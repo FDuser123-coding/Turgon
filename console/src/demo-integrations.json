@@ -33,6 +33,7 @@
         "salesforce-won-deals-to-erp-cdc",
         "shop-order-rows-to-erp",
         "shop-orders-to-erp",
+        "shop-orders-with-credit-check",
         "shopify-store-orders-to-erp",
         "stripe-payments-to-erp"
       ]
@@ -184,7 +185,8 @@
       "operations": [],
       "flows": [
         "shop-order-rows-to-erp",
-        "shop-orders-to-erp"
+        "shop-orders-to-erp",
+        "shop-orders-with-credit-check"
       ]
     },
     {
@@ -676,6 +678,48 @@
         "erp-db"
       ],
       "slo": "p95 2s"
+    },
+    {
+      "name": "shop-orders-with-credit-check",
+      "version": "1.0.0",
+      "description": "Web-shop orders become ERP sales orders, and a sandboxed plugin proposes each order's credit status.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "shop-db",
+        "event": "Order.Created",
+        "delivery": "outbox"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "shop-order-to-sales-order@1.0.0",
+          "from": "shop-db.Order",
+          "to": "model.SalesOrder",
+          "fields": 6
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "exact"
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "erp-db",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "rollback",
+          "compensation": "cancel-sales-order",
+          "plugins": [
+            "credit-check"
+          ]
+        }
+      ],
+      "targets": [
+        "erp-db"
+      ]
     },
     {
       "name": "shopify-orders-to-sap",
