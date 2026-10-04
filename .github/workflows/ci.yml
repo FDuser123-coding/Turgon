@@ -153,6 +153,15 @@ jobs:
             --set splink.existingSecret=turgon-splink --set splink.database.existingSecret=turgon-splink-db > /tmp/rendered-splink.yaml
           grep -A1 'name: TURGON_SPLINK_URL' /tmp/rendered-splink.yaml | grep -q 'http://turgon-splink:8080'
           grep -q 'name: turgon-splink-db' /tmp/rendered-splink.yaml
+          # A Camel/Java connector in a sidecar, reached over a Unix socket; with the operator too.
+          sidecar=(--set 'connectors.sidecars[0].name=sap-ecc' --set 'connectors.sidecars[0].image.repository=ghcr.io/x/turgon-connector-sap-ecc'
+                   --set 'connectors.sidecars[0].volumes[0].name=sapjco' --set 'connectors.sidecars[0].volumes[0].persistentVolumeClaim.claimName=sapjco'
+                   --set 'connectors.sidecars[0].volumeMounts[0].name=sapjco' --set 'connectors.sidecars[0].volumeMounts[0].mountPath=/opt/turgon/lib')
+          helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" "${sidecar[@]}" > /tmp/rendered-connectors.yaml
+          grep -A1 'name: TURGON_CONNECTORS' /tmp/rendered-connectors.yaml | grep -q 'sap-ecc=unix:///var/run/turgon/connectors/sap-ecc.sock'
+          grep -q 'name: connector-sap-ecc' /tmp/rendered-connectors.yaml
+          helm template turgon deploy/helm/turgon -n turgon --kube-version 1.31.0 "${args[@]}" "${sidecar[@]}" --set operator.enabled=true > /tmp/rendered-connectors-operator.yaml
+          go run ./cmd/turgon-operator --validate /tmp/rendered-connectors-operator.yaml
           # The console signing people in itself, instead of behind a proxy.
           helm template turgon deploy/helm/turgon --kube-version 1.31.0 "${args[@]}" --set console.auth.mode=oidc \
             --set console.auth.oidc.issuer=https://login.example.com --set console.auth.oidc.clientID=turgon \
@@ -232,9 +241,40 @@ jobs:
             -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
             /tmp/rendered.yaml /tmp/rendered-oidc.yaml /tmp/rendered-tls.yaml /tmp/rendered-monitoring.yaml \
             /tmp/rendered-backup.yaml /tmp/rendered-restore.yaml /tmp/rendered-signed.yaml /tmp/rendered-operator.yaml \
-            /tmp/rendered-operator-unsigned.yaml /tmp/rendered-openbao.yaml /tmp/rendered-openbao-operator.yaml /tmp/rendered-aws.yaml /tmp/rendered-azure.yaml /tmp/rendered-gcp.yaml /tmp/rendered-splink.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
+            /tmp/rendered-operator-unsigned.yaml /tmp/rendered-openbao.yaml /tmp/rendered-openbao-operator.yaml /tmp/rendered-aws.yaml /tmp/rendered-azure.yaml /tmp/rendered-gcp.yaml /tmp/rendered-splink.yaml /tmp/rendered-connectors.yaml /tmp/rendered-connectors-operator.yaml deploy/flux/turgon.yaml deploy/kyverno/verify-turgon-images.yaml
       - name: Lint the Dockerfiles
-        run: hadolint Dockerfile deploy/splink/Dockerfile
+        run: hadolint Dockerfile deploy/splink/Dockerfile connectors/Dockerfile
+
+  connectors:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.14.3"
+      - name: The protocol's Go code is up to date
+        run: |
+          curl -sSfL -o /usr/local/bin/protoc https://repo1.maven.org/maven2/com/google/protobuf/protoc/4.32.1/protoc-4.32.1-linux-x86_64.exe
+          chmod +x /usr/local/bin/protoc
+          GOBIN=/usr/local/bin go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.11
+          GOBIN=/usr/local/bin go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.6.0
+          scripts/gen-proto.sh
+          git diff --exit-code pkg/connector/remote/connectorpb
+      - name: Build and test the Java connectors
+        run: gradle -p connectors build :sap-ecc-fake:installDist
+      - name: Drive the Java sidecar from Go over the protocol
+        run: |
+          TURGON_TEST_CONNECTOR_SAP_ECC=$PWD/connectors/sap-ecc-fake/build/install/turgon-connector-sap-ecc-demo/bin/turgon-connector-sap-ecc-demo \
+            go test -race -count=1 -run TestJavaSidecar -v ./pkg/connector/remote/
+      - name: Build the SAP ECC connector image
+        run: docker build -f connectors/Dockerfile --build-arg CONNECTOR=sap-ecc -t turgon-connector-sap-ecc:ci .
 
   splink:
     runs-on: ubuntu-latest

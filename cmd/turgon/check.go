@@ -96,13 +96,21 @@ func checkCmd() *cobra.Command {
 				report("turgon", r)
 			}
 
-			registry := connectorRegistry()
+			registry, err := connectorRegistry()
+			if err != nil {
+				report("turgon", connector.Fail("connectors", err.Error(), "Set TURGON_CONNECTORS to name=unix:///path.sock pairs, one per sidecar."))
+				registry = connector.Registry{}
+			}
 			conns := spec.Spec.Connectors
 			sort.Slice(conns, func(i, j int) bool { return conns[i].Endpoint < conns[j].Endpoint })
 			for _, c := range conns {
 				factory, ok := registry[c.Name]
 				if !ok {
-					report(c.Endpoint, connector.Fail("runtime", "no runtime for connector "+c.Name+" in this worker", "This connector runs on another worker type; check it there."))
+					fix := "This connector runs on another worker type; check it there."
+					if c.Runtime != v1alpha1.RuntimeNative {
+						fix = "This " + c.Runtime + " connector runs in a sidecar: start it (connectors/, or the Helm chart's connectors list) and set TURGON_CONNECTORS=" + c.Name + "=unix:///var/run/turgon/connectors/" + c.Name + ".sock."
+					}
+					report(c.Endpoint, connector.Fail("runtime", "no runtime for connector "+c.Name+" in this worker", fix))
 					continue
 				}
 				inst, err := factory(ctx, c, secretsFrom)

@@ -80,6 +80,9 @@ func New(ctx context.Context, spec *compiler.RuntimeSpec, opts Options) (*Runtim
 		}
 		if !ok {
 			rt.Close()
+			if c.Runtime != v1alpha1.RuntimeNative {
+				return nil, fmt.Errorf("endpoint %s: connector %s (runtime %s) runs in a sidecar: set TURGON_CONNECTORS=%s=unix:///var/run/turgon/connectors/%s.sock", c.Endpoint, c.Name, c.Runtime, c.Name, c.Name)
+			}
 			return nil, fmt.Errorf("endpoint %s: no runtime for connector %s (runtime %s) in this worker", c.Endpoint, c.Name, c.Runtime)
 		}
 		inst, err := factory(ctx, c, opts.Secrets)

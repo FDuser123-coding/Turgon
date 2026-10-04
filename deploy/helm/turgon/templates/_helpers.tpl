@@ -336,6 +336,7 @@ spec:
       imagePullPolicy: {{ .Values.image.pullPolicy }}
       env:
         {{- include "turgon.commonEnv" . | nindent 8 }}
+        {{- include "turgon.connectorEnv" . | nindent 8 }}
         {{- with .Values.workers.consoleURL }}
         - name: TURGON_CONSOLE_URL
           value: {{ . | quote }}
@@ -354,8 +355,78 @@ spec:
       volumeMounts:
         - { name: tmp, mountPath: /tmp }
         {{- include "turgon.sharedMounts" . | nindent 8 }}
+        {{- include "turgon.connectorMounts" . | nindent 8 }}
+    {{- include "turgon.connectorSidecars" . | nindent 4 }}
   volumes:
     {{- include "turgon.sharedVolumes" . | nindent 4 }}
+    {{- include "turgon.connectorVolumes" . | nindent 4 }}
     - name: tmp
       emptyDir: { sizeLimit: 64Mi }
+{{- end -}}
+
+{{/* Connectors in sidecars (connectors.sidecars): the worker's environment. */}}
+{{- define "turgon.connectorEnv" -}}
+{{- with .Values.connectors.sidecars }}
+{{- $pairs := list }}
+{{- range . }}
+{{- $pairs = append $pairs (printf "%s=unix:///var/run/turgon/connectors/%s.sock" .name .name) }}
+{{- end }}
+- name: TURGON_CONNECTORS
+  value: {{ join "," $pairs | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "turgon.connectorMounts" -}}
+{{- if .Values.connectors.sidecars }}
+- { name: connectors, mountPath: /var/run/turgon/connectors }
+{{- end }}
+{{- end -}}
+
+{{/* The sidecar containers. Each listens on a Unix socket in a volume only
+     its pod mounts; the worker keeps policy, approval, idempotency and audit. */}}
+{{- define "turgon.connectorSidecars" -}}
+{{- $seen := dict }}
+{{- range .Values.connectors.sidecars }}
+{{- if hasKey $seen .name }}
+{{- fail (printf "connectors.sidecars: %s is listed twice" .name) }}
+{{- end }}
+{{- $_ := set $seen .name true }}
+- name: connector-{{ .name }}
+  image: "{{ required "connectors.sidecars[].image.repository is required" .image.repository }}:{{ .image.tag | default $.Chart.AppVersion }}"
+  imagePullPolicy: {{ .image.pullPolicy | default "IfNotPresent" }}
+  env:
+    - name: TURGON_CONNECTOR_LISTEN
+      value: unix:///var/run/turgon/connectors/{{ .name }}.sock
+    - name: TURGON_CONNECTOR
+      value: {{ .name | quote }}
+    - name: JAVA_TOOL_OPTIONS
+      value: "-XX:MaxRAMPercentage=75 -Djava.io.tmpdir=/tmp"
+    {{- with .env }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+  securityContext:
+    {{- toYaml $.Values.securityContext | nindent 4 }}
+  resources:
+    {{- toYaml (.resources | default $.Values.connectors.resources) | nindent 4 }}
+  volumeMounts:
+    - { name: connectors, mountPath: /var/run/turgon/connectors }
+    - { name: connector-tmp-{{ .name }}, mountPath: /tmp }
+    {{- with .volumeMounts }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+{{- end }}
+{{- end -}}
+
+{{- define "turgon.connectorVolumes" -}}
+{{- if .Values.connectors.sidecars }}
+- name: connectors
+  emptyDir: { medium: Memory, sizeLimit: 1Mi }
+{{- range .Values.connectors.sidecars }}
+- name: connector-tmp-{{ .name }}
+  emptyDir: { sizeLimit: 256Mi }
+{{- with .volumes }}
+{{- toYaml . | nindent 0 }}
+{{- end }}
+{{- end }}
+{{- end }}
 {{- end -}}

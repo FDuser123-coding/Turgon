@@ -15,6 +15,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce/sftest"
@@ -26,6 +27,16 @@ func main() {
 	sf := sftest.New()
 	defer sf.Close()
 	sf.PubSubAddr = *pubsubAddr
+	var mu sync.Mutex
+	rejected := map[string]bool{}
+	sf.FailPatch = func(sobject, id string, _ map[string]any) (int, string, string) {
+		mu.Lock()
+		defer mu.Unlock()
+		if rejected[id] {
+			return 400, "FIELD_CUSTOM_VALIDATION_EXCEPTION", "Closed opportunities cannot be changed"
+		}
+		return 0, "", ""
+	}
 	fmt.Fprintf(os.Stderr, "fake Salesforce at %s, Pub/Sub API at %s\n", sf.URL, sf.PubSub())
 	fmt.Println(sf.Credentials())
 	n := 0
@@ -35,6 +46,13 @@ func main() {
 		if len(f) >= 4 && f[0] == "account" {
 			sf.Put("Account", f[1], map[string]any{"ERP_Customer_Number__c": f[2], "Name": strings.Join(f[3:], " ")}, time.Now())
 			fmt.Fprintf(os.Stderr, "account %s: ERP customer %s\n", f[1], f[2])
+			continue
+		}
+		if len(f) == 2 && f[0] == "reject" {
+			mu.Lock()
+			rejected[f[1]] = true
+			mu.Unlock()
+			fmt.Fprintf(os.Stderr, "updates to %s are rejected by a validation rule\n", f[1])
 			continue
 		}
 		if len(f) == 2 && f[0] == "accounts" {
@@ -47,7 +65,7 @@ func main() {
 			continue
 		}
 		if len(f) != 2 {
-			fmt.Fprintln(os.Stderr, "usage: <AccountId> <Amount> | account <AccountId> <ERP number> <name> | accounts <n>")
+			fmt.Fprintln(os.Stderr, "usage: <AccountId> <Amount> | account <AccountId> <ERP number> <name> | accounts <n> | reject <RecordId>")
 			continue
 		}
 		amount, _ := strconv.ParseFloat(f[1], 64)
