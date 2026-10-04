@@ -29,4 +29,9 @@ public final class JcoProvider implements RfcProvider {
     public Rfc open(EndpointConfig endpoint, EccConfig config) throws Exception {
         return JcoRfc.open(endpoint.endpoint(), config);
     }
+
+    @Override
+    public AutoCloseable serve(EndpointConfig endpoint, EccConfig config, Rfc rfc, IdocReceiver receiver) throws Exception {
+        return JcoIdocServer.start(endpoint.endpoint(), config, (JcoRfc) rfc, receiver);
+    }
 }

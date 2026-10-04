@@ -17,4 +17,13 @@ public interface RfcProvider {
     String unavailableFix();
 
     Rfc open(EndpointConfig endpoint, EccConfig config) throws Exception;
+
+    /**
+     * Registers a server program at the SAP gateway (config.idoc()) and
+     * hands the IDocs SAP sends it to receiver, until closed. rfc is the
+     * client connection, whose repository describes the functions.
+     */
+    default AutoCloseable serve(EndpointConfig endpoint, EccConfig config, Rfc rfc, IdocReceiver receiver) throws Exception {
+        throw new UnsupportedOperationException("RFC provider " + name() + " cannot receive IDocs");
+    }
 }

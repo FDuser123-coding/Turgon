@@ -41,11 +41,53 @@ final class EccEndpoint extends CamelEndpoint {
 
     private final EccConfig cfg;
     private final Rfc rfc;
+    private final Idocs idocs;
+    private final IdocServerStarter starter;
+    private AutoCloseable server; // the registered server program, while a stream is open
 
-    EccEndpoint(String name, EccConfig cfg, Rfc rfc) throws Exception {
+    /** Registers the server program at the gateway (RfcProvider.serve). */
+    @FunctionalInterface
+    interface IdocServerStarter {
+        AutoCloseable start(IdocReceiver receiver) throws Exception;
+    }
+
+    EccEndpoint(String name, EccConfig cfg, Rfc rfc, IdocServerStarter starter) throws Exception {
         super(name, routes(cfg, rfc));
         this.cfg = cfg;
         this.rfc = rfc;
+        this.starter = starter;
+        this.idocs = new Idocs(rfc, cfg.idocEvents());
+    }
+
+    @Override
+    public java.util.Set<String> streams() {
+        return cfg.idocEvents().keySet();
+    }
+
+    /**
+     * The server program is registered while a worker listens, so SAP sends
+     * IDocs only to a sidecar whose worker holds the subscription.
+     */
+    @Override
+    public synchronized AutoCloseable stream(String event, byte[] resume, dev.turgon.connector.sdk.StreamSink sink) throws Exception {
+        idocs.open(event, sink);
+        if (server == null) {
+            try {
+                server = starter.start(idocs);
+            } catch (Exception e) {
+                idocs.close(event, sink);
+                throw e;
+            }
+        }
+        return () -> {
+            synchronized (this) {
+                idocs.close(event, sink);
+                if (idocs.idle() && server != null) {
+                    server.close();
+                    server = null;
+                }
+            }
+        };
     }
 
     private static RouteBuilder routes(EccConfig cfg, Rfc rfc) {
@@ -104,12 +146,33 @@ final class EccEndpoint extends CamelEndpoint {
         }
         out.add(CheckResult.pass("sales area", cfg.salesOrg() + "/" + cfg.distributionChannel() + "/" + cfg.division()
                 + ", order type " + cfg.orderType()));
+        if (!cfg.idocEvents().isEmpty()) {
+            String program = cfg.server().get("jco.server.progid") + " at " + cfg.server().get("jco.server.gwhost") + " "
+                    + cfg.server().get("jco.server.gwserv");
+            try {
+                if (!rfc.exists("IDOCTYPE_READ_COMPLETE")) {
+                    out.add(CheckResult.fail("IDOCTYPE_READ_COMPLETE", "not found", "The connector reads IDoc segment definitions with it."));
+                } else {
+                    out.add(CheckResult.pass("idoc", "events " + String.join(", ", cfg.idocEvents().keySet()) + " from server program " + program
+                            + (server != null ? ", registered" : ", registered while a worker listens")));
+                }
+            } catch (Exception e) {
+                out.add(CheckResult.fail("IDOCTYPE_READ_COMPLETE", e.getClass().getSimpleName() + ": " + e.getMessage(),
+                        "Grant the RFC user S_RFC for function group EDIMEXT (IDoc type metadata)."));
+            }
+        }
         return out;
     }
 
     @Override
     public void close() throws Exception {
         try {
+            synchronized (this) {
+                if (server != null) {
+                    server.close();
+                    server = null;
+                }
+            }
             super.close();
         } finally {
             rfc.close();

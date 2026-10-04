@@ -43,6 +43,7 @@ const (
 	CapPoll     = "poll"
 	CapExport   = "export"
 	CapCheck    = "check"
+	CapStream   = "stream"
 )
 
 // StartTimeout is how long configuring an instance waits for its sidecar.
@@ -177,13 +178,18 @@ func (p *Pool) configure(ctx context.Context, addr Address, cfg compiler.Connect
 	_, _ = rand.Read(id[:])
 	req.Instance = cfg.Endpoint + "-" + hex.EncodeToString(id[:])
 	base.id, base.configure = req.Instance, req
-	if _, err := base.client.Configure(base.out(ctx), req); err != nil {
+	resp, err := base.client.Configure(base.out(ctx), req)
+	if err != nil {
 		if st, ok := status.FromError(err); ok && st.Code() == codes.InvalidArgument {
 			return nil, fmt.Errorf("endpoint %s: connector %s refused its configuration: %s", cfg.Endpoint, cfg.Name, st.Message())
 		}
 		return nil, base.wrap("configure", err)
 	}
-	if base.caps[CapPoll] {
+	base.streamed = map[string]bool{}
+	for _, e := range resp.GetStreamedEvents() {
+		base.streamed[e] = true
+	}
+	if base.caps[CapPoll] || (base.caps[CapStream] && len(base.streamed) > 0) {
 		return &pollingInstance{base}, nil
 	}
 	return base, nil
@@ -225,9 +231,12 @@ type instance struct {
 	// configure is the request that made the instance; a restarted
 	// sidecar is configured again with it.
 	configure *pb.ConfigureRequest
+	// streamed are the events the system pushes (Stream, not Poll).
+	streamed map[string]bool
 }
 
-// pollingInstance is an instance whose connector emits events.
+// pollingInstance is an instance whose connector emits events: polled,
+// or pushed over Stream.
 type pollingInstance struct{ *instance }
 
 var (
@@ -237,6 +246,7 @@ var (
 	_ writeguard.Reader    = (*instance)(nil)
 	_ writeguard.Confirmer = (*instance)(nil)
 	_ connector.Source     = (*pollingInstance)(nil)
+	_ connector.Streamer   = (*pollingInstance)(nil)
 )
 
 func (x *instance) out(ctx context.Context) context.Context {
@@ -334,6 +344,9 @@ func (x *instance) Read(ctx context.Context, op, id string) (json.RawMessage, er
 }
 
 func (p *pollingInstance) Poll(ctx context.Context, event string, after int64, limit int) ([]connector.Event, error) {
+	if !p.caps[CapPoll] {
+		return nil, fmt.Errorf("%w: %s polls no events (%s arrives by stream)", ErrUnsupported, p.connector, event)
+	}
 	r, err := call(ctx, p.instance, func(ctx context.Context) (*pb.PollResponse, error) {
 		return p.client.Poll(ctx, &pb.PollRequest{Instance: p.id, Event: event, After: after, Limit: int32(limit)})
 	})
@@ -414,4 +427,55 @@ func (x *instance) Close() {
 		defer cancel()
 		_, _ = x.client.Release(x.out(ctx), &pb.InstanceRequest{Instance: x.id})
 	})
+}
+
+// Streams reports whether event arrives over Stream.
+func (p *pollingInstance) Streams(event string) bool { return p.caps[CapStream] && p.streamed[event] }
+
+// Stream subscribes to a pushed event. Each batch is delivered (the
+// runtime stores it in its inbox) before it is acknowledged; only then
+// does the connector confirm it to the system.
+func (p *pollingInstance) Stream(ctx context.Context, event string, resume []byte, deliver func([]connector.Event, []byte) error) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	open := func(ctx context.Context) (grpc.BidiStreamingClient[pb.StreamRequest, pb.StreamBatch], *pb.StreamBatch, error) {
+		st, err := p.client.Stream(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := st.Send(&pb.StreamRequest{Request: &pb.StreamRequest_Open{Open: &pb.StreamOpen{Instance: p.id, Event: event, Resume: resume}}}); err != nil {
+			return nil, nil, err
+		}
+		first, err := st.Recv()
+		return st, first, err
+	}
+	st, batch, err := open(p.out(ctx))
+	if status.Code(err) == codes.Aborted { // the sidecar restarted: configure again
+		if _, cerr := p.client.Configure(p.out(ctx), p.configure); cerr != nil {
+			return p.wrap("stream", cerr)
+		}
+		st, batch, err = open(p.out(ctx))
+	}
+	for {
+		if errors.Is(err, io.EOF) {
+			return fmt.Errorf("connector %s: the stream of %s ended", p.connector, event)
+		}
+		if err != nil {
+			return p.wrap("stream", err)
+		}
+		events := make([]connector.Event, 0, len(batch.GetEvents()))
+		for _, e := range batch.GetEvents() {
+			if e.GetId() == "" {
+				return fmt.Errorf("connector %s: a streamed %s has no ID", p.connector, event)
+			}
+			events = append(events, connector.Event{ID: e.GetId(), Position: e.GetPosition(), Name: e.GetName(), Payload: e.GetPayload()})
+		}
+		if err := deliver(events, batch.GetResume()); err != nil {
+			return err // not acknowledged: the system delivers it again
+		}
+		if err := st.Send(&pb.StreamRequest{Request: &pb.StreamRequest_Ack{Ack: &pb.StreamAck{Batch: batch.GetBatch()}}}); err != nil {
+			return p.wrap("stream", err)
+		}
+		batch, err = st.Recv()
+	}
 }

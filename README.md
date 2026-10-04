@@ -446,7 +446,8 @@ The protocol mirrors the worker's connector interfaces:
 | `Describe` | Names the connector, its version and capabilities |
 | `Configure` | Binds an endpoint's compiled configuration and resolved secrets to an instance. A rotated secret configures a new one. |
 | `Simulate`, `Commit`, `Confirm` | The write's dry run, the write, and reading it back |
-| `Read`, `Poll`, `Export`, `Check` | Reads, events, exports and connection checks |
+| `Read`, `Poll`, `Export`, `Check` | Reads, polled events, exports and connection checks |
+| `Stream` | Events the system pushes. The worker acknowledges each batch once its inbox holds it, and only then does the connector confirm the batch to the system |
 
 Errors are status codes:
 
@@ -472,11 +473,13 @@ Errors are status codes:
   - **cancel-sales-order** is its compensation. It deletes the order through
     `BAPI_SALESORDER_CHANGE`, which SAP refuses once there is a delivery.
   - **get-customer** calls `BAPI_CUSTOMER_GETDETAIL2`.
+  - **Events** are the IDocs ECC sends (see below).
   - **Messages:** SAP's `RETURN` messages become the rejection's reason, such as
     `V1 462: Sold-to party 0000001002 is blocked for sales`.
 - `sap-ecc-fake` is an in-memory ECC for tests and demos. It follows SAP's rules where they matter:
-  an order is kept only if committed in the same session, and a test run saves nothing. It is never
-  part of the production image.
+  an order is kept only if committed in the same session, and a test run saves nothing. A saved
+  order is confirmed with an ORDRSP IDoc, which is sent again until accepted, as SM58 does. It is
+  never part of the production image.
 
 JCo is SAP's to license, so the connector calls it by reflection and the image does not carry it.
 Download SAP Java Connector 3.1 from the SAP Support Portal and mount `sapjco3.jar` and
@@ -500,6 +503,59 @@ echo "001000000000001AAA 7800" >> sf.cmds       # approve: an ECC order, its num
 echo "reject 006000000000002AAA" >> sf.cmds     # the next deal's write-back fails...
 echo "001000000000001AAA 900" >> sf.cmds        # ...and the saga deletes its ECC order
 ```
+
+#### ECC events: IDocs over tRFC
+
+ECC pushes events the standard way, as outbound IDocs. For example, output BA00 sends an order
+confirmation (ORDRSP, basic type ORDERS05) when an order is saved. The connector receives them
+as a server program registered at the SAP gateway.
+
+On the ECC side:
+1. In SM59, create an RFC destination of type T with *Registered Server Program* set to the
+   connection's `progid`.
+2. In WE21, create a tRFC port on that destination.
+3. In WE20, create a partner profile for the receiving logical system, with outbound parameters for
+   the message types.
+4. Allow the program in the gateway's `reginfo`.
+
+On the Turgon side, the connection maps message types to events:
+
+```yaml
+config:
+  idoc:
+    server: { gwhost: ecc.acme.internal, gwserv: sapgw00, progid: TURGON_IDOC, connectionCount: 2 }
+    events:
+      SalesOrder.Created: { messageTypes: [ORDRSP], idocTypes: [ORDERS05] }
+```
+
+The program is registered only while a worker holds the event's subscription; one worker holds it
+at a time. Each IDoc travels like this:
+
+1. SAP sends it over tRFC.
+2. The sidecar passes it to the worker over `Stream`.
+3. The worker stores it in its Postgres inbox and acknowledges.
+4. Only then does the sidecar confirm the transaction to SAP.
+
+The sidecar keeps nothing. If the worker is away, or cannot store the IDoc, the transaction fails
+and SAP sends it again (SM58: set the destination's tRFC options to retry). The inbox drops an
+IDoc it already has, by sender and IDoc number. IDocs of message types no event takes are accepted
+and dropped.
+
+Fields come from SAP's own segment definitions (`IDOCTYPE_READ_COMPLETE`, read once per IDoc type).
+The event is the control record and the segments as a tree, which a mapping reads with JSONata:
+
+```json
+{"idoc": {"docnum": "0000000000004711", "mestyp": "ORDRSP", "idoctyp": "ORDERS05", "sndprn": "ECCCLNT100"},
+ "segments": [{"segment": "E1EDK01", "fields": {"CURCY": "EUR", "BELNR": "0000012000"}, "segments": []},
+              {"segment": "E1EDP01", "fields": {"POSEX": "000010", "MENGE": "2"},
+               "segments": [{"segment": "E1EDP19", "fields": {"QUALF": "002", "IDTNR": "M-7"}}]}]}
+```
+
+The example recipe is `ecc-orders-to-erp`, with mapping `ecc-order-confirmation-to-sales-order`:
+an order saved in ECC becomes an order in the warehouse ERP database. Run it next to
+`salesforce-won-deals-to-ecc`, with both workers on the same sidecar. A won deal becomes an ECC
+order, and the fake ECC confirms it with an ORDRSP IDoc, which then reaches the ERP. Stop the
+second worker and the IDoc waits in the fake's SM58 queue until the worker is back.
 
 In the Helm chart, `connectors.sidecars` adds a connector's container to every worker and agent pod,
 with the socket volume and `TURGON_CONNECTORS`. With the operator, its Integrations get it too.
@@ -1578,6 +1634,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 ## Not built yet
 
 In rough roadmap order (§16, §19): Salesforce managed subscriptions (the Pub/Sub API keeping the replay position);
-the metadata graph and discovery. Of the Camel/Java connectors, only SAP ECC exists so far, without
-events (change pointers or IDocs). It is tested against a fake ECC and a JCo stand-in, not yet against
-a real SAP system. The `shopify` and `powerbi-export` manifests still have no runtime.
+the metadata graph and discovery. Of the Camel/Java connectors, only SAP ECC exists so far. It is
+tested against a fake ECC and a JCo stand-in, not yet against a real SAP system or gateway. It reads
+IDocs as SAP pushes them, but not change pointers. The `shopify` and `powerbi-export` manifests
+still have no runtime.

@@ -1,0 +1,35 @@
+# Orders saved in SAP ECC reach the warehouse ERP: ECC sends each order's
+# confirmation as an IDoc (ORDRSP) to Turgon's server program, the IDoc
+# becomes a sales order for the customer's master record, and it is
+# written to the ERP database once. ECC confirms the IDoc only after
+# Turgon has stored it, so none is lost; a repeated one is dropped.
+apiVersion: turgon.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: ecc-orders-to-erp
+  version: 1.0.0
+  description: "An order saved in SAP ECC, sent as an ORDRSP IDoc, becomes a sales order in the warehouse ERP database."
+spec:
+  trigger:
+    source: ecc-prod
+    event: SalesOrder.Created
+  steps:
+    - map:
+        from: ecc-prod.SalesOrder
+        to: model.SalesOrder
+        mapping: ecc-order-confirmation-to-sales-order@1
+    # The IDoc names the sold-to party by its SAP customer number.
+    - resolve:
+        entity: model.Customer
+        strategy: exact
+        autoMatchAbove: 1.0
+    - write:
+        target: erp-db
+        operation: create-sales-order
+        idempotencyKey: "ECC-{{ doc.externalId }}"
+        simulate: true
+  policies: [writeback-default]
+  capacity:
+    peakPerSecond: 5
+  slo:
+    p95Latency: 5s

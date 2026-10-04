@@ -67,21 +67,26 @@ final class JcoRfc implements Rfc {
         registered = true;
     }
 
-    private static Class<?> type(String name) throws ClassNotFoundException {
+    /** The destination's name, for a server's repository. */
+    String destinationName() {
+        return name;
+    }
+
+    static Class<?> type(String name) throws ClassNotFoundException {
         return Class.forName(name, true, JcoRfc.class.getClassLoader());
     }
 
-    private static Object invokeStatic(String cls, String method, Class<?>[] types, Object... args) throws Exception {
+    static Object invokeStatic(String cls, String method, Class<?>[] types, Object... args) throws Exception {
         return unwrap(() -> type(cls).getMethod(method, types).invoke(null, args));
     }
 
     /** Calls a method of a JCo interface on an object implementing it. */
-    private static Object invoke(Object target, String iface, String method, Class<?>[] types, Object... args) throws Exception {
+    static Object invoke(Object target, String iface, String method, Class<?>[] types, Object... args) throws Exception {
         Method m = type(P + iface).getMethod(method, types);
         return unwrap(() -> m.invoke(target, args));
     }
 
-    private static Object invoke(Object target, String iface, String method) throws Exception {
+    static Object invoke(Object target, String iface, String method) throws Exception {
         return invoke(target, iface, method, new Class<?>[0]);
     }
 
@@ -166,7 +171,7 @@ final class JcoRfc implements Rfc {
         }
     }
 
-    private static Map<String, Object> read(Object record) throws Exception {
+    static Map<String, Object> read(Object record) throws Exception {
         Object md = invoke(record, "JCoRecord", "getMetaData");
         int n = (int) invoke(md, "JCoMetaData", "getFieldCount");
         Class<?>[] i = {int.class};

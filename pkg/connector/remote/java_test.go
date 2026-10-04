@@ -120,3 +120,76 @@ func TestJavaSidecar(t *testing.T) {
 		t.Fatalf("cancel %s %v", out, err)
 	}
 }
+
+// TestJavaSidecarStream: ECC's order confirmations (ORDRSP IDocs) stream
+// to the worker; one the worker does not store is sent again by SAP.
+func TestJavaSidecarStream(t *testing.T) {
+	bin := os.Getenv("TURGON_TEST_CONNECTOR_SAP_ECC")
+	if bin == "" {
+		t.Skip("TURGON_TEST_CONNECTOR_SAP_ECC is not set (connectors: gradle :sap-ecc-fake:installDist)")
+	}
+	sock := filepath.Join(t.TempDir(), "sap-ecc.sock")
+	sidecar(t, bin, sock)
+	pool := NewPool()
+	defer pool.Close()
+	ctx := context.Background()
+	cfg := compiler.ConnectorConfig{Endpoint: "sap-ecc", Name: "sap-ecc", Version: "0.4.0", Runtime: "camel-java", SecretRef: "s",
+		Config: json.RawMessage(`{"rfc":{"provider":"fake","destination":{"ashost":"ecc-stream"}},
+			"idoc":{"server":{"gwhost":"ecc-stream","gwserv":"sapgw00","progid":"TURGON_IDOC"},
+			        "events":{"SalesOrder.Created":{"messageTypes":["ORDRSP"]}}}}`)}
+	inst, err := pool.Factory(Address{Target: "unix://" + sock, Token: "tok"})(ctx, cfg, connector.StaticSecrets{"s": "TURGON:pw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Close()
+	st, ok := inst.(connector.Streamer)
+	if !ok || !st.Streams("SalesOrder.Created") {
+		t.Fatal("SalesOrder.Created does not stream")
+	}
+	order := json.RawMessage(`{"customerId":"1000","lines":[{"material":"M-7","quantity":2}]}`)
+
+	// The first delivery fails (the inbox is away): not acknowledged, the
+	// stream ends, and SAP keeps the IDoc.
+	if _, err := inst.Commit(ctx, "create-sales-order", "006A", order); err != nil {
+		t.Fatal(err)
+	}
+	fail := errors.New("the inbox is away")
+	err = st.Stream(ctx, "SalesOrder.Created", nil, func([]connector.Event, []byte) error { return fail })
+	if !errors.Is(err, fail) {
+		t.Fatalf("first stream: %v", err)
+	}
+
+	// Reopened: SAP sends it again, then the next order's too.
+	sctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	var got []connector.Event
+	committed := false
+	err = st.Stream(sctx, "SalesOrder.Created", nil, func(evs []connector.Event, _ []byte) error {
+		got = append(got, evs...)
+		if !committed {
+			committed = true
+			go func() { _, _ = inst.Commit(ctx, "create-sales-order", "006B", order) }()
+		}
+		if len(got) == 2 {
+			cancel()
+		}
+		return nil
+	})
+	if len(got) != 2 {
+		t.Fatalf("got %d events: %v", len(got), err)
+	}
+	var p struct {
+		Idoc     map[string]string `json:"idoc"`
+		Segments []struct {
+			Segment string            `json:"segment"`
+			Fields  map[string]string `json:"fields"`
+		} `json:"segments"`
+	}
+	if err := json.Unmarshal(got[0].Payload, &p); err != nil {
+		t.Fatal(err)
+	}
+	if got[0].ID != "ECCCLNT100/0000000000004711" || got[1].ID != "ECCCLNT100/0000000000004712" || p.Idoc["mestyp"] != "ORDRSP" ||
+		p.Segments[0].Segment != "E1EDK01" || p.Segments[0].Fields["BELNR"] != "0000012000" {
+		t.Fatalf("events %s %s %+v", got[0].ID, got[1].ID, p)
+	}
+}

@@ -46,6 +46,13 @@ service Connector {
   rpc Poll(PollRequest) returns (PollResponse);
   // Export streams the records of a named export.
   rpc Export(ExportRequest) returns (stream ExportRecord);
+  // Stream subscribes to an event the system pushes (SAP IDocs over tRFC,
+  // say). The worker opens it, then acknowledges each batch once it has
+  // stored the batch's events durably; the connector confirms them to the
+  // system only then, so an event is never lost to a crash in between. A
+  // batch the worker did not acknowledge is delivered again (the system
+  // retries); the worker drops events whose IDs it already has.
+  rpc Stream(stream StreamRequest) returns (stream StreamBatch);
 }
 
 // The protocol version this file describes.
@@ -64,7 +71,7 @@ message DescribeResponse {
   string connector = 2;
   string version = 3;
   // What it implements beyond Commit: "simulate", "confirm", "read",
-  // "poll", "export", "check".
+  // "poll", "export", "check", "stream".
   repeated string capabilities = 4;
 }
 
@@ -81,7 +88,10 @@ message ConfigureRequest {
   map<string, string> secrets = 5;
 }
 
-message ConfigureResponse {}
+message ConfigureResponse {
+  // The events of this instance that arrive by Stream rather than Poll.
+  repeated string streamed_events = 1;
+}
 
 message InstanceRequest {
   string instance = 1;
@@ -160,4 +170,32 @@ message ExportRequest {
 
 message ExportRecord {
   map<string, string> fields = 1;
+}
+
+message StreamRequest {
+  oneof request {
+    // The first message: what to subscribe to.
+    StreamOpen open = 1;
+    // Every later one: a batch the worker has stored.
+    StreamAck ack = 2;
+  }
+}
+
+message StreamOpen {
+  string instance = 1;
+  string event = 2;
+  // Where to resume, as a previous batch gave it (empty: from now).
+  bytes resume = 3;
+}
+
+message StreamAck {
+  uint64 batch = 1;
+}
+
+message StreamBatch {
+  // Numbers the batch within the stream, for its acknowledgement.
+  uint64 batch = 1;
+  repeated Event events = 2;
+  // Where to resume after this batch, if the system has positions.
+  bytes resume = 3;
 }

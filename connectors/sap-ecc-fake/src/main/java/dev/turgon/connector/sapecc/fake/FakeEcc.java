@@ -16,7 +16,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * with SAP's rules where they matter: an order is kept only if
  * BAPI_TRANSACTION_COMMIT runs in the same session, a test run saves
  * nothing, customers can be blocked for sales, orders with a delivery
- * cannot be deleted, and unknown parameters fail as in JCo.
+ * cannot be deleted, and unknown parameters fail as in JCo. Saving an order
+ * sends an order confirmation (ORDRSP, basic type ORDERS05) to the
+ * registered server programs over "tRFC": a transaction they fail is sent
+ * again every half second, as SAP's SM58 does.
  *
  * <p>Customers 1000 (Ada Lovelace GmbH), 1001 (Hopper Labs) and 1002
  * (blocked); materials M-1, M-7, M-8 and M-9; sales area 1000/10/00.
@@ -25,7 +28,7 @@ public final class FakeEcc {
     private static final Map<String, FakeEcc> SYSTEMS = new ConcurrentHashMap<>();
     static final Set<String> FUNCTIONS = Set.of("RFC_PING", "BAPI_SALESORDER_CREATEFROMDAT2", "BAPI_SALESORDER_GETLIST",
             "BAPI_SALESORDER_GETSTATUS", "BAPI_SALESORDER_CHANGE", "BAPI_TRANSACTION_COMMIT", "BAPI_TRANSACTION_ROLLBACK",
-            "BAPI_CUSTOMER_GETDETAIL2");
+            "BAPI_CUSTOMER_GETDETAIL2", "IDOCTYPE_READ_COMPLETE");
 
     public record Customer(String name, String street, String postalCode, String city, String country, boolean blocked) {}
 
@@ -37,6 +40,137 @@ public final class FakeEcc {
     private final Map<String, Order> orders = new ConcurrentHashMap<>();
     private final AtomicInteger next = new AtomicInteger(12000);
     private final Map<String, Integer> failures = new ConcurrentHashMap<>();
+    private final Map<String, dev.turgon.connector.sapecc.IdocReceiver> programs = new ConcurrentHashMap<>();
+    private final java.util.concurrent.LinkedBlockingDeque<Transaction> outbound = new java.util.concurrent.LinkedBlockingDeque<>();
+    private final AtomicInteger docnums = new AtomicInteger(4711);
+    /** Transactions SAP's partners accepted, in order, for tests. */
+    public final List<Transaction> sent = java.util.Collections.synchronizedList(new ArrayList<>());
+    private Thread sender;
+
+    /** One tRFC transaction of IDocs, and how often it was tried. */
+    public static final class Transaction {
+        public final String tid;
+        public final List<Map<String, String>> control;
+        public final List<Map<String, String>> data;
+        public volatile int attempts;
+        public volatile String lastError = "";
+
+        Transaction(String tid, List<Map<String, String>> control, List<Map<String, String>> data) {
+            this.tid = tid;
+            this.control = control;
+            this.data = data;
+        }
+    }
+
+    /** Registers a server program; IDocs go to every registered one. */
+    public synchronized AutoCloseable register(String progid, dev.turgon.connector.sapecc.IdocReceiver receiver) {
+        programs.put(progid, receiver);
+        if (sender == null) {
+            sender = new Thread(this::send, "fake-ecc-trfc");
+            sender.setDaemon(true);
+            sender.start();
+        }
+        return () -> programs.remove(progid, receiver);
+    }
+
+    /** Queues IDocs for the registered programs (outbound processing). */
+    public void send(List<Map<String, String>> control, List<Map<String, String>> data) {
+        outbound.add(new Transaction(java.util.UUID.randomUUID().toString().replace("-", "").substring(0, 24).toUpperCase(), control, data));
+    }
+
+    /** The transactions not yet accepted (SM58). */
+    public List<Transaction> pending() {
+        return List.copyOf(outbound);
+    }
+
+    private void send() {
+        while (true) {
+            Transaction t;
+            try {
+                t = outbound.takeFirst();
+            } catch (InterruptedException e) {
+                return;
+            }
+            var receivers = List.copyOf(programs.values());
+            t.attempts++;
+            try {
+                if (receivers.isEmpty()) {
+                    throw new IllegalStateException("no server program is registered");
+                }
+                receivers.getFirst().receive(t.tid, t.control, t.data);
+                sent.add(t);
+            } catch (Exception e) {
+                t.lastError = e.getMessage();
+                outbound.addFirst(t); // stays first: tRFC keeps the order
+                try {
+                    Thread.sleep(500);
+                } catch (InterruptedException x) {
+                    return;
+                }
+            }
+        }
+    }
+
+    /** ORDERS05's segments, the fields the order confirmation fills (offsets as SAP gives them). */
+    static final Map<String, List<Object[]>> ORDERS05 = new LinkedHashMap<>();
+
+    static {
+        ORDERS05.put("E1EDK01", List.of(new Object[] {"ACTION", 3}, new Object[] {"KZABS", 1}, new Object[] {"CURCY", 3},
+                new Object[] {"HWAER", 3}, new Object[] {"WKURS", 12}, new Object[] {"ZTERM", 17}, new Object[] {"BSART", 4},
+                new Object[] {"BELNR", 35}));
+        ORDERS05.put("E1EDKA1", List.of(new Object[] {"PARVW", 3}, new Object[] {"PARTN", 17}, new Object[] {"LIFNR", 17},
+                new Object[] {"NAME1", 35}));
+        ORDERS05.put("E1EDK02", List.of(new Object[] {"QUALF", 3}, new Object[] {"BELNR", 35}, new Object[] {"POSNR", 6},
+                new Object[] {"DATUM", 8}));
+        ORDERS05.put("E1EDP01", List.of(new Object[] {"POSEX", 6}, new Object[] {"ACTION", 3}, new Object[] {"PSTYP", 1},
+                new Object[] {"KZABS", 1}, new Object[] {"MENGE", 15}, new Object[] {"MENEE", 3}));
+        ORDERS05.put("E1EDP19", List.of(new Object[] {"QUALF", 3}, new Object[] {"IDTNR", 35}, new Object[] {"KTEXT", 70}));
+        ORDERS05.put("E1EDS01", List.of(new Object[] {"SUMID", 3}, new Object[] {"SUMME", 18}, new Object[] {"SUNIT", 3},
+                new Object[] {"WAERQ", 3}));
+    }
+
+    /** A data record: the segment's fields laid out in SDATA. */
+    static Map<String, String> record(String docnum, int segnum, int parent, int level, String segment, Map<String, String> values) {
+        StringBuilder sdata = new StringBuilder();
+        for (Object[] f : ORDERS05.get(segment)) {
+            String v = values.getOrDefault((String) f[0], "");
+            int len = (Integer) f[1];
+            sdata.append(String.format("%-" + len + "s", v.length() > len ? v.substring(0, len) : v));
+        }
+        return Map.of("SEGNAM", segment, "DOCNUM", docnum, "SEGNUM", String.format("%06d", segnum),
+                "PSGNUM", String.format("%06d", parent), "HLEVEL", String.format("%02d", level), "SDATA", sdata.toString());
+    }
+
+    /** Net prices per unit, in EUR. */
+    static final Map<String, BigDecimal> PRICES = Map.of("M-1", new BigDecimal("100.00"), "M-7", new BigDecimal("49.90"),
+            "M-8", new BigDecimal("12.50"), "M-9", new BigDecimal("7.00"));
+
+    /** The order confirmation SAP's output determination (BA00) sends when an order is saved. */
+    void confirmOrder(Order o) {
+        String docnum = String.format("%016d", docnums.getAndIncrement());
+        Map<String, String> control = Map.ofEntries(Map.entry("DOCNUM", docnum), Map.entry("IDOCTYP", "ORDERS05"),
+                Map.entry("CIMTYP", ""), Map.entry("MESTYP", "ORDRSP"), Map.entry("SNDPRT", "LS"), Map.entry("SNDPRN", "ECCCLNT100"),
+                Map.entry("RCVPRT", "LS"), Map.entry("RCVPRN", "TURGON"), Map.entry("CREDAT", o.date()), Map.entry("CRETIM", "120000"));
+        List<Map<String, String>> data = new ArrayList<>();
+        int seg = 0;
+        Customer c = customers.get(o.customer());
+        data.add(record(docnum, ++seg, 0, 1, "E1EDK01", Map.of("CURCY", "EUR", "BSART", "TA", "BELNR", o.number())));
+        data.add(record(docnum, ++seg, 0, 2, "E1EDKA1", Map.of("PARVW", "AG", "PARTN", o.customer(), "NAME1", c == null ? "" : c.name())));
+        data.add(record(docnum, ++seg, 0, 2, "E1EDK02", Map.of("QUALF", "001", "BELNR", o.purchaseOrder(), "DATUM", o.date())));
+        for (Map<String, String> it : o.items()) {
+            int item = ++seg;
+            data.add(record(docnum, item, 0, 2, "E1EDP01", Map.of("POSEX", it.getOrDefault("ITM_NUMBER", ""),
+                    "MENGE", it.getOrDefault("TARGET_QTY", ""), "MENEE", "ST")));
+            data.add(record(docnum, ++seg, item, 3, "E1EDP19", Map.of("QUALF", "002", "IDTNR", it.getOrDefault("MATERIAL", ""))));
+        }
+        BigDecimal net = BigDecimal.ZERO;
+        for (Map<String, String> it : o.items()) {
+            net = net.add(PRICES.getOrDefault(it.get("MATERIAL"), BigDecimal.ZERO).multiply(new BigDecimal(it.getOrDefault("TARGET_QTY", "0"))));
+        }
+        data.add(record(docnum, ++seg, 0, 1, "E1EDS01", Map.of("SUMID", "002", "SUMME", net.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString(),
+                "WAERQ", "EUR")));
+        send(List.of(control), data);
+    }
     /** Calls made, by function, for tests. */
     public final List<String> calls = java.util.Collections.synchronizedList(new ArrayList<>());
 
@@ -230,6 +364,24 @@ public final class FakeEcc {
                             "CITY", c.city(), "COUNTRY", c.country()));
                 }
             }
+            case "IDOCTYPE_READ_COMPLETE" -> {
+                allow(function, p, "PI_IDOCTYP", "PI_CIMTYP", "PI_RELEASE", "PI_APPLREL");
+                List<Map<String, String>> segments = new ArrayList<>(), fields = new ArrayList<>();
+                if ("ORDERS05".equals(get(p, "PI_IDOCTYP", ""))) {
+                    int nr = 0;
+                    for (var seg : ORDERS05.entrySet()) {
+                        segments.add(Map.of("SEGMENTTYP", seg.getKey(), "NR", String.format("%04d", ++nr)));
+                        int at = 64; // SDATA starts after the data record's 63-byte header
+                        for (Object[] f : seg.getValue()) {
+                            fields.add(Map.of("SEGMENTTYP", seg.getKey(), "FIELDNAME", (String) f[0],
+                                    "BYTE_FIRST", String.format("%06d", at), "EXTLEN", String.format("%06d", (Integer) f[1])));
+                            at += (Integer) f[1];
+                        }
+                    }
+                }
+                out.put("PT_SEGMENTS", segments);
+                out.put("PT_FIELDS", fields);
+            }
             default -> throw new IllegalStateException("function module " + function + " is not in the repository");
         }
         return out;
@@ -277,7 +429,10 @@ public final class FakeEcc {
         String number = String.format("%010d", next.getAndIncrement());
         String date = h.getOrDefault("REQ_DATE_H", LocalDate.now().toString().replace("-", ""));
         Order o = new Order(number, soldTo, h.get("SALES_ORG"), h.getOrDefault("PURCH_NO_C", ""), date, List.copyOf(items), false);
-        luw.add(() -> orders.put(number, o));
+        luw.add(() -> {
+            orders.put(number, o);
+            confirmOrder(o);
+        });
         ret.add(msg("S", "V1", "311", "Standard Order " + number + " has been saved"));
         out.put("SALESDOCUMENT", number);
         out.put("RETURN", ret);
