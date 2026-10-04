@@ -448,6 +448,7 @@ The protocol mirrors the worker's connector interfaces:
 | `Simulate`, `Commit`, `Confirm` | The write's dry run, the write, and reading it back |
 | `Read`, `Poll`, `Export`, `Check` | Reads, polled events, exports and connection checks |
 | `Stream` | Events the system pushes. The worker acknowledges each batch once its inbox holds it, and only then does the connector confirm the batch to the system |
+| `Discover` | What the system holds, for the metadata graph (`turgon discover`) |
 
 Errors are status codes:
 
@@ -720,6 +721,53 @@ psql "$DB" -c "insert into shop.orders (order_number, total, currency, customer,
   values (3001, 349.90, 'eur', '{\"email\": \"ada@example.com\"}', '[{\"sku\": \"M-7\", \"qty\": 1}]')"
 bin/turgon pending shop-order-rows-to-erp/000000002DCB2480.1   # run ID: commit LSN.change
 ```
+
+### Metadata graph: what each system holds, and what changed
+
+`turgon discover` asks each endpoint's connector what the system holds, and keeps it in Turgon's
+database as a snapshot. The connectors read it from the system's own catalog:
+
+| Connector | Objects | From |
+|---|---|---|
+| `postgres` | tables and views, with columns, types, lengths, NOT NULL, primary and foreign keys, comments | `pg_catalog`, resolved like the connector's queries (`search_path`) |
+| `salesforce` | sObjects, with fields, types, lengths, required, field-level security, lookups | the REST API's `describe` |
+| `sap-odata` | entity sets, with properties, keys, `MaxLength`, `sap:label`, `sap:creatable`/`updatable`, navigation targets | each service's `$metadata` |
+| `sap-ecc` | BAPI interfaces, the dictionary structures the BAPIs take, IDoc segments | `RFC_GET_FUNCTION_INTERFACE`, `DDIF_FIELDINFO_GET`, `IDOCTYPE_READ_COMPLETE` |
+
+A connector reports the objects its configuration uses, and what uses each field: an
+operation, an event, an export. Turgon adds the spec's mappings that read the object, so a field
+links to everything that relies on it. `--object` adds objects nothing uses yet: `erp-db=public.*`,
+`salesforce-prod=Contract`, `ecc-prod=IDOC:DEBMAS07`.
+
+A snapshot is stored only when the system changed (its digest covers objects and fields).
+Each later discovery lists the changes since the previous one. A removed field, a type change, a
+shorter field, a field that became required or read-only is flagged **BREAKING** when something
+uses it. A new required field breaks the operations that create records of that object, even if
+they never set it. An object the configuration uses but the system lacks is **MISSING**. Changes
+nothing uses are listed without the flag.
+
+```sh
+bin/turgon discover -s shop.json --database-url "$TURGON_DATABASE_URL"
+# erp-db (postgres 1.0.0): 3 objects, 20 fields; first snapshot 1
+# shop-db (postgres 1.0.0): 2 objects, 9 fields; first snapshot 2
+
+psql "$ERP_DSN" -c "ALTER TABLE erp.sales_orders ALTER COLUMN currency TYPE char(2) USING left(currency, 2);
+  ALTER TABLE erp.customers ADD COLUMN vat_id text NOT NULL DEFAULT '';
+  ALTER TABLE erp.sales_orders ADD COLUMN channel text NOT NULL"
+bin/turgon discover -s shop.json --database-url "$TURGON_DATABASE_URL" --fail-on-breaking   # exits 1
+# erp-db (postgres 1.0.0): 3 objects, 22 fields; changed: snapshot 3, previous 1 (2026-10-04T17:05:21Z)
+#   BREAKING field-added erp.sales_orders.channel (text); used by operation create-sales-order (creates)
+#   BREAKING length-shrunk erp.sales_orders.currency (3 -> 2); used by operation create-sales-order, operation get-sales-order
+#            field-added erp.customers.vat_id (text)
+# shop-db (postgres 1.0.0): 2 objects, 9 fields; unchanged since snapshot 2 (2026-10-04T17:05:21Z)
+```
+
+Run it on a schedule (a Kubernetes CronJob, a pipeline stage before deploying a spec) with
+`--fail-on-breaking`, and a change made in a system is seen before the next run fails on it.
+`--json` prints the catalogs' summaries and changes for other tools. Without `--database-url` it
+only reads and summarizes. Sidecar connectors discover over the protocol's `Discover` call; the
+fake ECC's dictionary and the fake Salesforce's field-level security (`readonly
+Opportunity.ERP_Order_Number__c` on `fakesf`'s input) can be changed to see drift.
 
 ### Performance
 
@@ -1584,7 +1632,8 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/connector/remote`, `proto/` | §7.1 | The connector protocol (gRPC) and its Go client: connectors running in a sidecar, configured per endpoint with resolved secrets, reconfigured after a sidecar restart |
 | `connectors/` | §7.1 | Camel/Java connectors: `sdk` (the protocol's server, Camel routes per operation), `sap-ecc` (BAPIs over RFC through SAP JCo), `sap-ecc-fake` (an in-memory ECC) |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
-| `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references, the webhook inbox |
+| `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references, the webhook inbox, metadata snapshots |
+| `pkg/meta` | §7.2 | The metadata graph: catalogs of what each system holds, their digests, drift between snapshots, and what uses each field |
 | `pkg/semver` | | Version constraints (`^`, `~`, partial, `>=`) |
 | `pkg/agent` | §7.7, §8 | MCP server and A2A agent: business read tools, and write tools that start approval-gated writes; gateway identity, per-call policy and audit; agentgateway configuration |
 | `pkg/notify` | §7.3, §8 | Notifications when a run needs a person: Slack, Microsoft Teams, or a signed JSON webhook, with console links |
@@ -1592,7 +1641,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/console` | §7.3, §12 | Console API (runs and retries, approvals, the data-steward queue, audit, catalog), OpenID Connect sign-in or proxy authentication, embedded web app |
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
 | `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
-| `cmd/turgon` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check`, `mcp`, `gateway-config` |
+| `cmd/turgon` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check`, `discover`, `mcp`, `gateway-config` |
 | `pkg/plugin` | §18.4 | Logic plugin host: wazero sandbox speaking the Canonical ABI of `turgon:stack/logic-plugin` 0.1.0 and 0.2.0; `runner/` enforces grants, reads through the write guard, proposes governed writes, makes HTTP requests with host-inserted secrets, delivers events between plugins and audits each invocation |
 | `pkg/netguard` | §9 | Keeps requests Turgon makes for others (A2A push notifications, plugins' HTTP) on public addresses |
 | `wit/turgon-stack.wit` | §18.4 | Host interface for Wasm plugins (0.2.0; `wit/0.1.0/` keeps the first version) |
@@ -1633,8 +1682,10 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 ## Not built yet
 
-In rough roadmap order (§16, §19): Salesforce managed subscriptions (the Pub/Sub API keeping the replay position);
-the metadata graph and discovery. Of the Camel/Java connectors, only SAP ECC exists so far. It is
+In rough roadmap order (§16, §19): Salesforce managed subscriptions (the Pub/Sub API keeping the replay position).
+The metadata graph has discovery, snapshots and drift; the `rest` and `debezium` connectors do not
+discover yet, the console does not show the graph, and a mapping's use of a field is found only when
+it reads the object by the connector's name for it (`salesforce.Opportunity`). Of the Camel/Java connectors, only SAP ECC exists so far. It is
 tested against a fake ECC and a JCo stand-in, not yet against a real SAP system or gateway. It reads
 IDocs as SAP pushes them, but not change pointers. The `shopify` and `powerbi-export` manifests
 still have no runtime.

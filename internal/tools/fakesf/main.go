@@ -27,6 +27,12 @@ func main() {
 	sf := sftest.New()
 	defer sf.Close()
 	sf.PubSubAddr = *pubsubAddr
+	// The org's schema, described before any record exists.
+	sf.Fields = map[string][]string{
+		"Account":     {"Name", "BillingCity", "BillingCountry", "Industry", "ERP_Customer_Number__c"},
+		"Opportunity": {"StageName", "AccountId", "Amount", "CloseDate", "CurrencyIsoCode", "ERP_Order_Number__c"},
+	}
+	sf.Types = map[string]string{"Opportunity.Amount": "currency", "Opportunity.CloseDate": "date", "Opportunity.StageName": "picklist"}
 	var mu sync.Mutex
 	rejected := map[string]bool{}
 	sf.FailPatch = func(sobject, id string, _ map[string]any) (int, string, string) {
@@ -55,6 +61,11 @@ func main() {
 			fmt.Fprintf(os.Stderr, "updates to %s are rejected by a validation rule\n", f[1])
 			continue
 		}
+		if len(f) == 2 && f[0] == "readonly" {
+			sf.SetReadOnly(f[1])
+			fmt.Fprintf(os.Stderr, "%s is read-only for the integration user\n", f[1])
+			continue
+		}
 		if len(f) == 2 && f[0] == "accounts" {
 			count, _ := strconv.Atoi(f[1])
 			for i := 1; i <= count; i++ {
@@ -65,7 +76,7 @@ func main() {
 			continue
 		}
 		if len(f) != 2 {
-			fmt.Fprintln(os.Stderr, "usage: <AccountId> <Amount> | account <AccountId> <ERP number> <name> | accounts <n> | reject <RecordId>")
+			fmt.Fprintln(os.Stderr, "usage: <AccountId> <Amount> | account <AccountId> <ERP number> <name> | accounts <n> | reject <RecordId> | readonly <SObject.Field>")
 			continue
 		}
 		amount, _ := strconv.ParseFloat(f[1], 64)

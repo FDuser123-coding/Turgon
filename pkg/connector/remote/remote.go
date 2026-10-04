@@ -31,6 +31,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	pb "github.com/fduser123-coding/turgon/pkg/connector/remote/connectorpb"
+	"github.com/fduser123-coding/turgon/pkg/meta"
 	"github.com/fduser123-coding/turgon/pkg/semver"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
 )
@@ -44,6 +45,7 @@ const (
 	CapExport   = "export"
 	CapCheck    = "check"
 	CapStream   = "stream"
+	CapDiscover = "discover"
 )
 
 // StartTimeout is how long configuring an instance waits for its sidecar.
@@ -245,6 +247,7 @@ var (
 	_ connector.Exporter   = (*instance)(nil)
 	_ writeguard.Reader    = (*instance)(nil)
 	_ writeguard.Confirmer = (*instance)(nil)
+	_ connector.Discoverer = (*instance)(nil)
 	_ connector.Source     = (*pollingInstance)(nil)
 	_ connector.Streamer   = (*pollingInstance)(nil)
 )
@@ -478,4 +481,25 @@ func (p *pollingInstance) Stream(ctx context.Context, event string, resume []byt
 		}
 		batch, err = st.Recv()
 	}
+}
+
+// Discover asks the connector what its system holds.
+func (x *instance) Discover(ctx context.Context, objects []string) (meta.Catalog, error) {
+	if !x.caps[CapDiscover] {
+		return meta.Catalog{}, fmt.Errorf("%w: %s discovery", ErrUnsupported, x.connector)
+	}
+	r, err := call(ctx, x, func(ctx context.Context) (*pb.DiscoverResponse, error) {
+		return x.client.Discover(ctx, &pb.DiscoverRequest{Instance: x.id, Objects: objects})
+	})
+	if err != nil {
+		return meta.Catalog{}, x.wrap("discover", err)
+	}
+	var cat meta.Catalog
+	if err := json.Unmarshal(r.GetCatalog(), &cat); err != nil {
+		return meta.Catalog{}, fmt.Errorf("connector %s: the catalog is not valid JSON: %w", x.connector, err)
+	}
+	cat.Endpoint, cat.Connector, cat.Version = x.endpoint, x.connector, x.version
+	cat.DiscoveredAt = time.Now().UTC()
+	cat.Normalize()
+	return cat, nil
 }

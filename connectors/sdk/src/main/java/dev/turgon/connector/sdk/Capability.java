@@ -8,7 +8,8 @@ public enum Capability {
     POLL("poll"),
     EXPORT("export"),
     CHECK("check"),
-    STREAM("stream");
+    STREAM("stream"),
+    DISCOVER("discover");
 
     private final String wire;
 

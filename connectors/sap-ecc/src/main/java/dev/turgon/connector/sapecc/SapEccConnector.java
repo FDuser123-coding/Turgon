@@ -33,7 +33,7 @@ public final class SapEccConnector implements Connector {
 
     @Override
     public Set<Capability> capabilities() {
-        return EnumSet.of(Capability.SIMULATE, Capability.CONFIRM, Capability.READ, Capability.CHECK, Capability.STREAM);
+        return EnumSet.of(Capability.SIMULATE, Capability.CONFIRM, Capability.READ, Capability.CHECK, Capability.STREAM, Capability.DISCOVER);
     }
 
     /** The RFC providers on the class path. */

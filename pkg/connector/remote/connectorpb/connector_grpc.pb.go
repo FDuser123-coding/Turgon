@@ -48,6 +48,7 @@ const (
 	Connector_Poll_FullMethodName      = "/turgon.connector.v1.Connector/Poll"
 	Connector_Export_FullMethodName    = "/turgon.connector.v1.Connector/Export"
 	Connector_Stream_FullMethodName    = "/turgon.connector.v1.Connector/Stream"
+	Connector_Discover_FullMethodName  = "/turgon.connector.v1.Connector/Discover"
 )
 
 // ConnectorClient is the client API for Connector service.
@@ -83,6 +84,9 @@ type ConnectorClient interface {
 	// batch the worker did not acknowledge is delivered again (the system
 	// retries); the worker drops events whose IDs it already has.
 	Stream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamRequest, StreamBatch], error)
+	// Discover reads what the system holds for the metadata graph: the
+	// objects the configuration uses, and those named.
+	Discover(ctx context.Context, in *DiscoverRequest, opts ...grpc.CallOption) (*DiscoverResponse, error)
 }
 
 type connectorClient struct {
@@ -215,6 +219,16 @@ func (c *connectorClient) Stream(ctx context.Context, opts ...grpc.CallOption) (
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Connector_StreamClient = grpc.BidiStreamingClient[StreamRequest, StreamBatch]
 
+func (c *connectorClient) Discover(ctx context.Context, in *DiscoverRequest, opts ...grpc.CallOption) (*DiscoverResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DiscoverResponse)
+	err := c.cc.Invoke(ctx, Connector_Discover_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ConnectorServer is the server API for Connector service.
 // All implementations must embed UnimplementedConnectorServer
 // for forward compatibility.
@@ -248,6 +262,9 @@ type ConnectorServer interface {
 	// batch the worker did not acknowledge is delivered again (the system
 	// retries); the worker drops events whose IDs it already has.
 	Stream(grpc.BidiStreamingServer[StreamRequest, StreamBatch]) error
+	// Discover reads what the system holds for the metadata graph: the
+	// objects the configuration uses, and those named.
+	Discover(context.Context, *DiscoverRequest) (*DiscoverResponse, error)
 	mustEmbedUnimplementedConnectorServer()
 }
 
@@ -290,6 +307,9 @@ func (UnimplementedConnectorServer) Export(*ExportRequest, grpc.ServerStreamingS
 }
 func (UnimplementedConnectorServer) Stream(grpc.BidiStreamingServer[StreamRequest, StreamBatch]) error {
 	return status.Error(codes.Unimplemented, "method Stream not implemented")
+}
+func (UnimplementedConnectorServer) Discover(context.Context, *DiscoverRequest) (*DiscoverResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Discover not implemented")
 }
 func (UnimplementedConnectorServer) mustEmbedUnimplementedConnectorServer() {}
 func (UnimplementedConnectorServer) testEmbeddedByValue()                   {}
@@ -492,6 +512,24 @@ func _Connector_Stream_Handler(srv interface{}, stream grpc.ServerStream) error 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Connector_StreamServer = grpc.BidiStreamingServer[StreamRequest, StreamBatch]
 
+func _Connector_Discover_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DiscoverRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConnectorServer).Discover(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Connector_Discover_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConnectorServer).Discover(ctx, req.(*DiscoverRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Connector_ServiceDesc is the grpc.ServiceDesc for Connector service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -534,6 +572,10 @@ var Connector_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Poll",
 			Handler:    _Connector_Poll_Handler,
+		},
+		{
+			MethodName: "Discover",
+			Handler:    _Connector_Discover_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{

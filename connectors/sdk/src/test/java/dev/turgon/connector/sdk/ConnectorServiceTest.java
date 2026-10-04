@@ -208,7 +208,7 @@ class ConnectorServiceTest {
         var d = stub.describe(DescribeRequest.newBuilder().setProtocol(Protocol.PROTOCOL_V1).build());
         assertEquals("orders", d.getConnector());
         assertEquals("1.2.0", d.getVersion());
-        assertEquals(List.of("simulate", "confirm", "read", "poll", "export", "check", "stream"), d.getCapabilitiesList());
+        assertEquals(List.of("simulate", "confirm", "read", "poll", "export", "check", "stream", "discover"), d.getCapabilitiesList());
 
         configure("erp-1");
         EndpointConfig cfg = connector.bound.getFirst();

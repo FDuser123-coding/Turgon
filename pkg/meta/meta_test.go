@@ -1,0 +1,129 @@
+package meta
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/fduser123-coding/turgon/pkg/compiler"
+)
+
+func opportunity(fields ...Field) Catalog {
+	return Catalog{Endpoint: "salesforce-prod", Connector: "salesforce", Objects: []Object{
+		{Name: "Opportunity", Kind: "sobject", Fields: fields},
+		{Name: "Account", Kind: "sobject", Fields: []Field{{Name: "Id", Type: "id", Key: true}}},
+	}, Uses: []Use{{Object: "Opportunity", Field: "ERP_Order_Number__c", By: "operation update-opportunity"}}}
+}
+
+func TestDigestIgnoresOrderAndUses(t *testing.T) {
+	a := opportunity(Field{Name: "Amount", Type: "currency"}, Field{Name: "Id", Type: "id"})
+	b := opportunity(Field{Name: "Id", Type: "id"}, Field{Name: "Amount", Type: "currency"})
+	b.Objects[0], b.Objects[1] = b.Objects[1], b.Objects[0]
+	b.Uses = nil
+	if a.Digest() != b.Digest() {
+		t.Fatal("equal catalogs differ")
+	}
+	if a.Objects[0].Name != "Opportunity" {
+		t.Fatal("Digest reordered its receiver")
+	}
+	c := opportunity(Field{Name: "Amount", Type: "double"}, Field{Name: "Id", Type: "id"})
+	if a.Digest() == c.Digest() {
+		t.Fatal("a type change kept the digest")
+	}
+}
+
+func TestDiff(t *testing.T) {
+	old := opportunity(
+		Field{Name: "Id", Type: "id", Key: true},
+		Field{Name: "Amount", Type: "currency"},
+		Field{Name: "CloseDate", Type: "date"},
+		Field{Name: "Name", Type: "string", Length: 120},
+		Field{Name: "StageName", Type: "picklist", Required: true},
+		Field{Name: "ERP_Order_Number__c", Type: "string", Length: 20},
+	)
+	new2 := opportunity(
+		Field{Name: "Id", Type: "id", Key: true},
+		Field{Name: "Amount", Type: "double"},
+		Field{Name: "Name", Type: "string", Length: 80, Required: true},
+		Field{Name: "StageName", Type: "picklist"},
+		Field{Name: "ERP_Order_Number__c", Type: "string", Length: 20, ReadOnly: true},
+		Field{Name: "Region__c", Type: "string"},
+	)
+	new2.Objects = []Object{new2.Objects[0], {Name: "Quote", Kind: "sobject"}}
+	var got []string
+	for _, c := range Diff(old, new2) {
+		s := c.String()
+		if c.Breaking {
+			s += " !"
+		}
+		got = append(got, s)
+	}
+	want := []string{
+		"object-removed Account !",
+		"field-removed Opportunity.CloseDate (was date) !",
+		"became-read-only Opportunity.ERP_Order_Number__c !",
+		"became-required Opportunity.Name !",
+		"length-shrunk Opportunity.Name (120 -> 80) !",
+		"field-added Opportunity.Region__c (string)",
+		"no-longer-required Opportunity.StageName",
+		"type-changed Opportunity.Amount (currency -> double) !",
+		"object-added Quote",
+	}
+	if strings.Join(sortStrings(got), "\n") != strings.Join(sortStrings(want), "\n") {
+		t.Fatalf("got\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if len(Diff(old, old)) != 0 {
+		t.Fatal("a catalog differs from itself")
+	}
+}
+
+func sortStrings(s []string) []string {
+	out := append([]string(nil), s...)
+	for i := range out {
+		for j := i + 1; j < len(out); j++ {
+			if out[j] < out[i] {
+				out[i], out[j] = out[j], out[i]
+			}
+		}
+	}
+	return out
+}
+
+func TestUsageAndAnnotate(t *testing.T) {
+	c := opportunity(Field{Name: "Id", Type: "id"}, Field{Name: "Amount", Type: "currency"}, Field{Name: "CloseDate", Type: "date"},
+		Field{Name: "ERP_Order_Number__c", Type: "string"})
+	spec := &compiler.RuntimeSpec{}
+	spec.Spec.Workflows = []compiler.Workflow{{Steps: []compiler.WorkflowStep{
+		{Map: &compiler.MapConfig{Mapping: "sf-opportunity-to-order@3", From: "salesforce.Opportunity", Fields: map[string]string{
+			"netValue": "Amount", "orderDate": "$substring(CloseDate, 0, 10)", "externalId": "Id", "note": "'Amount'"}}},
+		{Map: &compiler.MapConfig{Mapping: "other@1", From: "hubspot-crm.Deal", Fields: map[string]string{"x": "Amount"}}},
+	}}}
+	u := Usage(c, spec)
+	if got := strings.Join(u["Opportunity.Amount"], "; "); got != "mapping sf-opportunity-to-order@3 (netValue); mapping sf-opportunity-to-order@3 (note)" {
+		t.Fatalf("Amount used by %q", got)
+	}
+	if got := strings.Join(u["Opportunity.CloseDate"], "; "); got != "mapping sf-opportunity-to-order@3 (orderDate)" {
+		t.Fatalf("CloseDate used by %q", got)
+	}
+	if got := strings.Join(u["Opportunity.ERP_Order_Number__c"], ""); got != "operation update-opportunity" {
+		t.Fatalf("ERP field used by %q", got)
+	}
+
+	changes := Annotate([]Change{{Kind: FieldRemoved, Object: "Opportunity", Field: "CloseDate", Breaking: true},
+		{Kind: ObjectRemoved, Object: "Opportunity", Breaking: true}}, u, nil)
+	if len(changes[0].UsedBy) != 1 || len(changes[1].UsedBy) != 5 {
+		t.Fatalf("annotated %+v", changes)
+	}
+
+	// A new required field breaks what creates records, though nothing reads it.
+	c.Uses = append(c.Uses, Use{Object: "Opportunity", Field: "Amount", By: "operation create-opportunity", Creates: true},
+		Use{Object: "Opportunity", Field: "Region__c", By: "operation tag-region", Creates: true})
+	cr := Creators(c)
+	changes = Annotate([]Change{{Kind: FieldAdded, Object: "Opportunity", Field: "Region__c", Breaking: true},
+		{Kind: FieldAdded, Object: "Opportunity", Field: "Note__c"}}, Usage(c, nil), cr)
+	if got := strings.Join(changes[0].UsedBy, "; "); got != "operation create-opportunity (creates); operation tag-region" {
+		t.Fatalf("required field used by %q", got)
+	}
+	if changes[1].UsedBy != nil {
+		t.Fatalf("optional field used by %v", changes[1].UsedBy)
+	}
+}

@@ -137,7 +137,7 @@ type DescribeResponse struct {
 	Connector string `protobuf:"bytes,2,opt,name=connector,proto3" json:"connector,omitempty"`
 	Version   string `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
 	// What it implements beyond Commit: "simulate", "confirm", "read",
-	// "poll", "export", "check", "stream".
+	// "poll", "export", "check", "stream", "discover".
 	Capabilities  []string `protobuf:"bytes,4,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1364,6 +1364,107 @@ func (x *StreamBatch) GetResume() []byte {
 	return nil
 }
 
+type DiscoverRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Instance string                 `protobuf:"bytes,1,opt,name=instance,proto3" json:"instance,omitempty"`
+	// More objects to read, by the system's names.
+	Objects       []string `protobuf:"bytes,2,rep,name=objects,proto3" json:"objects,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiscoverRequest) Reset() {
+	*x = DiscoverRequest{}
+	mi := &file_turgon_connector_v1_connector_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiscoverRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiscoverRequest) ProtoMessage() {}
+
+func (x *DiscoverRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turgon_connector_v1_connector_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiscoverRequest.ProtoReflect.Descriptor instead.
+func (*DiscoverRequest) Descriptor() ([]byte, []int) {
+	return file_turgon_connector_v1_connector_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *DiscoverRequest) GetInstance() string {
+	if x != nil {
+		return x.Instance
+	}
+	return ""
+}
+
+func (x *DiscoverRequest) GetObjects() []string {
+	if x != nil {
+		return x.Objects
+	}
+	return nil
+}
+
+type DiscoverResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// JSON: {"objects": [{"name", "kind", "label", "fields": [{"name",
+	// "type", "label", "length", "required", "key", "readOnly"}], "links":
+	// [{"name", "to", "toField"}]}], "uses": [{"object", "field", "by"}]}
+	// (pkg/meta.Catalog).
+	Catalog       []byte `protobuf:"bytes,1,opt,name=catalog,proto3" json:"catalog,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *DiscoverResponse) Reset() {
+	*x = DiscoverResponse{}
+	mi := &file_turgon_connector_v1_connector_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *DiscoverResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*DiscoverResponse) ProtoMessage() {}
+
+func (x *DiscoverResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_turgon_connector_v1_connector_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use DiscoverResponse.ProtoReflect.Descriptor instead.
+func (*DiscoverResponse) Descriptor() ([]byte, []int) {
+	return file_turgon_connector_v1_connector_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *DiscoverResponse) GetCatalog() []byte {
+	if x != nil {
+		return x.Catalog
+	}
+	return nil
+}
+
 var File_turgon_connector_v1_connector_proto protoreflect.FileDescriptor
 
 const file_turgon_connector_v1_connector_proto_rawDesc = "" +
@@ -1449,10 +1550,15 @@ const file_turgon_connector_v1_connector_proto_rawDesc = "" +
 	"\vStreamBatch\x12\x14\n" +
 	"\x05batch\x18\x01 \x01(\x04R\x05batch\x122\n" +
 	"\x06events\x18\x02 \x03(\v2\x1a.turgon.connector.v1.EventR\x06events\x12\x16\n" +
-	"\x06resume\x18\x03 \x01(\fR\x06resume*5\n" +
+	"\x06resume\x18\x03 \x01(\fR\x06resume\"G\n" +
+	"\x0fDiscoverRequest\x12\x1a\n" +
+	"\binstance\x18\x01 \x01(\tR\binstance\x12\x18\n" +
+	"\aobjects\x18\x02 \x03(\tR\aobjects\",\n" +
+	"\x10DiscoverResponse\x12\x18\n" +
+	"\acatalog\x18\x01 \x01(\fR\acatalog*5\n" +
 	"\bProtocol\x12\x18\n" +
 	"\x14PROTOCOL_UNSPECIFIED\x10\x00\x12\x0f\n" +
-	"\vPROTOCOL_V1\x10\x012\xa5\a\n" +
+	"\vPROTOCOL_V1\x10\x012\xfe\a\n" +
 	"\tConnector\x12W\n" +
 	"\bDescribe\x12$.turgon.connector.v1.DescribeRequest\x1a%.turgon.connector.v1.DescribeResponse\x12Z\n" +
 	"\tConfigure\x12%.turgon.connector.v1.ConfigureRequest\x1a&.turgon.connector.v1.ConfigureResponse\x12U\n" +
@@ -1464,7 +1570,8 @@ const file_turgon_connector_v1_connector_proto_rawDesc = "" +
 	"\x04Read\x12 .turgon.connector.v1.ReadRequest\x1a!.turgon.connector.v1.ReadResponse\x12K\n" +
 	"\x04Poll\x12 .turgon.connector.v1.PollRequest\x1a!.turgon.connector.v1.PollResponse\x12Q\n" +
 	"\x06Export\x12\".turgon.connector.v1.ExportRequest\x1a!.turgon.connector.v1.ExportRecord0\x01\x12R\n" +
-	"\x06Stream\x12\".turgon.connector.v1.StreamRequest\x1a .turgon.connector.v1.StreamBatch(\x010\x01B`\n" +
+	"\x06Stream\x12\".turgon.connector.v1.StreamRequest\x1a .turgon.connector.v1.StreamBatch(\x010\x01\x12W\n" +
+	"\bDiscover\x12$.turgon.connector.v1.DiscoverRequest\x1a%.turgon.connector.v1.DiscoverResponseB`\n" +
 	"\x17dev.turgon.connector.v1P\x01ZCgithub.com/fduser123-coding/turgon/pkg/connector/remote/connectorpbb\x06proto3"
 
 var (
@@ -1480,7 +1587,7 @@ func file_turgon_connector_v1_connector_proto_rawDescGZIP() []byte {
 }
 
 var file_turgon_connector_v1_connector_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_turgon_connector_v1_connector_proto_msgTypes = make([]protoimpl.MessageInfo, 25)
+var file_turgon_connector_v1_connector_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
 var file_turgon_connector_v1_connector_proto_goTypes = []any{
 	(Protocol)(0),             // 0: turgon.connector.v1.Protocol
 	(*DescribeRequest)(nil),   // 1: turgon.connector.v1.DescribeRequest
@@ -1506,16 +1613,18 @@ var file_turgon_connector_v1_connector_proto_goTypes = []any{
 	(*StreamOpen)(nil),        // 21: turgon.connector.v1.StreamOpen
 	(*StreamAck)(nil),         // 22: turgon.connector.v1.StreamAck
 	(*StreamBatch)(nil),       // 23: turgon.connector.v1.StreamBatch
-	nil,                       // 24: turgon.connector.v1.ConfigureRequest.SecretsEntry
-	nil,                       // 25: turgon.connector.v1.ExportRecord.FieldsEntry
+	(*DiscoverRequest)(nil),   // 24: turgon.connector.v1.DiscoverRequest
+	(*DiscoverResponse)(nil),  // 25: turgon.connector.v1.DiscoverResponse
+	nil,                       // 26: turgon.connector.v1.ConfigureRequest.SecretsEntry
+	nil,                       // 27: turgon.connector.v1.ExportRecord.FieldsEntry
 }
 var file_turgon_connector_v1_connector_proto_depIdxs = []int32{
 	0,  // 0: turgon.connector.v1.DescribeRequest.protocol:type_name -> turgon.connector.v1.Protocol
 	0,  // 1: turgon.connector.v1.DescribeResponse.protocol:type_name -> turgon.connector.v1.Protocol
-	24, // 2: turgon.connector.v1.ConfigureRequest.secrets:type_name -> turgon.connector.v1.ConfigureRequest.SecretsEntry
+	26, // 2: turgon.connector.v1.ConfigureRequest.secrets:type_name -> turgon.connector.v1.ConfigureRequest.SecretsEntry
 	7,  // 3: turgon.connector.v1.CheckResponse.results:type_name -> turgon.connector.v1.CheckResult
 	16, // 4: turgon.connector.v1.PollResponse.events:type_name -> turgon.connector.v1.Event
-	25, // 5: turgon.connector.v1.ExportRecord.fields:type_name -> turgon.connector.v1.ExportRecord.FieldsEntry
+	27, // 5: turgon.connector.v1.ExportRecord.fields:type_name -> turgon.connector.v1.ExportRecord.FieldsEntry
 	21, // 6: turgon.connector.v1.StreamRequest.open:type_name -> turgon.connector.v1.StreamOpen
 	22, // 7: turgon.connector.v1.StreamRequest.ack:type_name -> turgon.connector.v1.StreamAck
 	16, // 8: turgon.connector.v1.StreamBatch.events:type_name -> turgon.connector.v1.Event
@@ -1530,19 +1639,21 @@ var file_turgon_connector_v1_connector_proto_depIdxs = []int32{
 	15, // 17: turgon.connector.v1.Connector.Poll:input_type -> turgon.connector.v1.PollRequest
 	18, // 18: turgon.connector.v1.Connector.Export:input_type -> turgon.connector.v1.ExportRequest
 	20, // 19: turgon.connector.v1.Connector.Stream:input_type -> turgon.connector.v1.StreamRequest
-	2,  // 20: turgon.connector.v1.Connector.Describe:output_type -> turgon.connector.v1.DescribeResponse
-	4,  // 21: turgon.connector.v1.Connector.Configure:output_type -> turgon.connector.v1.ConfigureResponse
-	6,  // 22: turgon.connector.v1.Connector.Release:output_type -> turgon.connector.v1.ReleaseResponse
-	8,  // 23: turgon.connector.v1.Connector.Check:output_type -> turgon.connector.v1.CheckResponse
-	10, // 24: turgon.connector.v1.Connector.Simulate:output_type -> turgon.connector.v1.WriteResponse
-	10, // 25: turgon.connector.v1.Connector.Commit:output_type -> turgon.connector.v1.WriteResponse
-	12, // 26: turgon.connector.v1.Connector.Confirm:output_type -> turgon.connector.v1.ConfirmResponse
-	14, // 27: turgon.connector.v1.Connector.Read:output_type -> turgon.connector.v1.ReadResponse
-	17, // 28: turgon.connector.v1.Connector.Poll:output_type -> turgon.connector.v1.PollResponse
-	19, // 29: turgon.connector.v1.Connector.Export:output_type -> turgon.connector.v1.ExportRecord
-	23, // 30: turgon.connector.v1.Connector.Stream:output_type -> turgon.connector.v1.StreamBatch
-	20, // [20:31] is the sub-list for method output_type
-	9,  // [9:20] is the sub-list for method input_type
+	24, // 20: turgon.connector.v1.Connector.Discover:input_type -> turgon.connector.v1.DiscoverRequest
+	2,  // 21: turgon.connector.v1.Connector.Describe:output_type -> turgon.connector.v1.DescribeResponse
+	4,  // 22: turgon.connector.v1.Connector.Configure:output_type -> turgon.connector.v1.ConfigureResponse
+	6,  // 23: turgon.connector.v1.Connector.Release:output_type -> turgon.connector.v1.ReleaseResponse
+	8,  // 24: turgon.connector.v1.Connector.Check:output_type -> turgon.connector.v1.CheckResponse
+	10, // 25: turgon.connector.v1.Connector.Simulate:output_type -> turgon.connector.v1.WriteResponse
+	10, // 26: turgon.connector.v1.Connector.Commit:output_type -> turgon.connector.v1.WriteResponse
+	12, // 27: turgon.connector.v1.Connector.Confirm:output_type -> turgon.connector.v1.ConfirmResponse
+	14, // 28: turgon.connector.v1.Connector.Read:output_type -> turgon.connector.v1.ReadResponse
+	17, // 29: turgon.connector.v1.Connector.Poll:output_type -> turgon.connector.v1.PollResponse
+	19, // 30: turgon.connector.v1.Connector.Export:output_type -> turgon.connector.v1.ExportRecord
+	23, // 31: turgon.connector.v1.Connector.Stream:output_type -> turgon.connector.v1.StreamBatch
+	25, // 32: turgon.connector.v1.Connector.Discover:output_type -> turgon.connector.v1.DiscoverResponse
+	21, // [21:33] is the sub-list for method output_type
+	9,  // [9:21] is the sub-list for method input_type
 	9,  // [9:9] is the sub-list for extension type_name
 	9,  // [9:9] is the sub-list for extension extendee
 	0,  // [0:9] is the sub-list for field type_name
@@ -1563,7 +1674,7 @@ func file_turgon_connector_v1_connector_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turgon_connector_v1_connector_proto_rawDesc), len(file_turgon_connector_v1_connector_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   25,
+			NumMessages:   27,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

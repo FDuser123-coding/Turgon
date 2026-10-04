@@ -212,6 +212,12 @@ public final class ConnectorService extends ConnectorGrpc.ConnectorImplBase {
     }
 
     @Override
+    public void discover(dev.turgon.connector.v1.DiscoverRequest req, StreamObserver<dev.turgon.connector.v1.DiscoverResponse> out) {
+        answer(out, () -> dev.turgon.connector.v1.DiscoverResponse.newBuilder()
+                .setCatalog(bytes(instance(req.getInstance()).discover(req.getObjectsList()))).build());
+    }
+
+    @Override
     public void read(ReadRequest req, StreamObserver<ReadResponse> out) {
         answer(out, () -> ReadResponse.newBuilder()
                 .setRecord(bytes(instance(req.getInstance()).read(req.getOperation(), req.getId()))).build());

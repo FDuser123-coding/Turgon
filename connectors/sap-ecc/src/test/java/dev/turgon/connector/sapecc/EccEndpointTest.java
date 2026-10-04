@@ -147,6 +147,59 @@ class EccEndpointTest {
         }
     }
 
+    static JsonNode object(JsonNode cat, String name) {
+        for (JsonNode o : cat.path("objects")) {
+            if (o.path("name").asText().equals(name)) {
+                return o;
+            }
+        }
+        return null;
+    }
+
+    static JsonNode field(JsonNode o, String name) {
+        for (JsonNode f : o.path("fields")) {
+            if (f.path("name").asText().equals(name)) {
+                return f;
+            }
+        }
+        return null;
+    }
+
+    @Test
+    void discoversInterfacesStructuresAndIdocs() throws Exception {
+        JsonNode cat = ecc.discover(List.of("IDOC:ORDERS05", "STRUCTURE:BAPIRET2", "FUNCTION:BAPI_SALESORDER_GETSTATUS"));
+        JsonNode create = object(cat, "BAPI_SALESORDER_CREATEFROMDAT2");
+        assertEquals("function", create.path("kind").asText());
+        assertEquals("BAPISDHD1", field(create, "ORDER_HEADER_IN").path("type").asText());
+        assertTrue(field(create, "ORDER_HEADER_IN").path("required").asBoolean());
+        assertFalse(field(create, "TESTRUN").path("required").asBoolean(), "optional");
+        assertTrue(field(create, "SALESDOCUMENT").path("readOnly").asBoolean(), "an export");
+        assertTrue(object(cat, "BAPI_SALESORDER_GETSTATUS") != null);
+
+        JsonNode header = object(cat, "BAPISDHD1");
+        assertEquals("structure", header.path("kind").asText());
+        assertEquals(35, field(header, "PURCH_NO_C").path("length").asInt());
+        assertEquals("CHAR", field(header, "PURCH_NO_C").path("type").asText());
+        assertEquals(null, object(cat, "BAPIRET2"), "a structure the system does not have is left out");
+
+        JsonNode e1edk01 = object(cat, "ORDERS05/E1EDK01");
+        assertEquals("idoc-segment", e1edk01.path("kind").asText());
+        assertEquals(35, field(e1edk01, "BELNR").path("length").asInt());
+
+        boolean used = false;
+        for (JsonNode u : cat.path("uses")) {
+            used |= u.path("object").asText().equals("BAPISDHD1") && u.path("field").asText().equals("PURCH_NO_C")
+                    && u.path("by").asText().equals("operation create-sales-order") && u.path("creates").asBoolean();
+        }
+        assertTrue(used, cat.path("uses").toString());
+
+        // Someone shortens the field in SE11: the next discovery sees it.
+        sap.structures.get("BAPISDHD1").put("PURCH_NO_C", new Object[] {"CHAR", 20, "Customer purchase order number"});
+        assertEquals(20, field(object(ecc.discover(List.of()), "BAPISDHD1"), "PURCH_NO_C").path("length").asInt());
+
+        assertThrows(Exception.class, () -> ecc.discover(List.of("FUNCTION:Z_NOPE")));
+    }
+
     @Test
     void configuration() throws Exception {
         EccConfig c = EccConfig.from(config("""

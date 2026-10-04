@@ -63,6 +63,16 @@ public interface Endpoint extends AutoCloseable {
         throw new ConnectorException.Unsupported("export");
     }
 
+    /**
+     * What the system holds, for the metadata graph: the objects the
+     * configuration uses and those named, as
+     * {@code {"objects": [{"name", "kind", "fields": [...], "links": [...]}], "uses": [...]}}
+     * (Turgon's pkg/meta.Catalog).
+     */
+    default JsonNode discover(List<String> objects) throws Exception {
+        throw new ConnectorException.Unsupported("discover");
+    }
+
     default List<CheckResult> check() throws Exception {
         throw new ConnectorException.Unsupported("check");
     }
