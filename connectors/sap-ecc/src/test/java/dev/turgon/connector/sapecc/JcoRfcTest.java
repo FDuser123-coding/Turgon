@@ -62,4 +62,30 @@ class JcoRfcTest {
         ecc.close();
         assertTrue(Environment.DELETED.contains(name), Environment.DELETED.toString());
     }
+
+    @Test
+    void receivesIdocsThroughAJcoServer() throws Exception {
+        FakeEcc.reset();
+        String config = IdocTest.CONFIG.replace("\"provider\":\"fake\"", "\"provider\":\"jco\"").replace("ecc-idoc", "jco-idoc");
+        try (Endpoint ecc = new SapEccConnector().bind(EccEndpointTest.config(config, "TURGON:pw"))) {
+            IdocTest.Worker w = new IdocTest.Worker();
+            AutoCloseable sub = ecc.stream("SalesOrder.Created", null, w);
+            assertTrue(com.sap.conn.jco.server.JCoServerFactory.EVENTS.contains("start TURGON_IDOC"));
+            String order = ecc.commit("create-sales-order", "006A", EccEndpointTest.json(EccEndpointTest.ORDER)).path("salesOrder").asText();
+            IdocTest.await(() -> w.got.size() == 1);
+            JsonNode k01 = IdocTest.segment(w.got.getFirst().payload().path("segments"), "E1EDK01");
+            assertEquals(order, k01.path("fields").path("BELNR").asText());
+
+            w.failing.set(true);
+            ecc.commit("create-sales-order", "006B", EccEndpointTest.json(EccEndpointTest.ORDER));
+            FakeEcc sap = FakeEcc.system("jco-idoc");
+            IdocTest.await(() -> !sap.pending().isEmpty() && sap.pending().getFirst().attempts >= 2);
+            w.failing.set(false);
+            IdocTest.await(() -> w.got.size() == 2);
+
+            sub.close();
+            assertTrue(com.sap.conn.jco.server.JCoServerFactory.EVENTS.contains("stop TURGON_IDOC"));
+            assertTrue(com.sap.conn.jco.server.JCoServerFactory.EVENTS.contains("release"));
+        }
+    }
 }

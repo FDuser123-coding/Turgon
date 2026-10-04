@@ -35,7 +35,7 @@ spec:
   events:
     - name: SalesOrder.Created
       entity: SalesOrder
-      interface: change-pointers
+      interface: idoc-outbound
   operations:
     - name: get-customer
       entity: Customer

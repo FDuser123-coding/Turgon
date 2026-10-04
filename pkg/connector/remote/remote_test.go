@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"path/filepath"
 	"strings"
@@ -31,6 +32,7 @@ type fakeConnector struct {
 	token         string
 
 	mu         sync.Mutex
+	acks       []uint64
 	configured map[string]*pb.ConfigureRequest
 	released   []string
 	orders     map[string]string // idempotency key -> order number
@@ -76,7 +78,7 @@ func (f *fakeConnector) Configure(ctx context.Context, r *pb.ConfigureRequest) (
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.configured[r.GetInstance()] = r
-	return &pb.ConfigureResponse{}, nil
+	return &pb.ConfigureResponse{StreamedEvents: []string{"SalesOrder.Created"}}, nil
 }
 
 func (f *fakeConnector) Release(ctx context.Context, r *pb.InstanceRequest) (*pb.ReleaseResponse, error) {
@@ -384,5 +386,99 @@ func TestParseAddresses(t *testing.T) {
 	}
 	if got, err := ParseAddresses("", ""); err != nil || len(got) != 0 {
 		t.Errorf("empty: %v %v", got, err)
+	}
+}
+
+// Stream pushes three batches of one IDoc each and records the acks; a
+// batch the worker does not acknowledge ends the stream.
+func (f *fakeConnector) Stream(s grpc.BidiStreamingServer[pb.StreamRequest, pb.StreamBatch]) error {
+	req, err := s.Recv()
+	if err != nil {
+		return err
+	}
+	open := req.GetOpen()
+	if open == nil {
+		return status.Error(codes.InvalidArgument, "open the stream first")
+	}
+	if err := f.instance(s.Context(), open.GetInstance()); err != nil {
+		return err
+	}
+	for b := uint64(1); b <= 3; b++ {
+		ev := &pb.Event{Id: fmt.Sprintf("idoc-%d", b), Name: open.GetEvent(), Payload: []byte(`{"docnum":"` + fmt.Sprint(b) + `"}`)}
+		if err := s.Send(&pb.StreamBatch{Batch: b, Events: []*pb.Event{ev}}); err != nil {
+			return err
+		}
+		ack, err := s.Recv()
+		if err != nil {
+			return err
+		}
+		if ack.GetAck().GetBatch() != b {
+			return status.Errorf(codes.InvalidArgument, "acked %d, sent %d", ack.GetAck().GetBatch(), b)
+		}
+		f.mu.Lock()
+		f.acks = append(f.acks, b)
+		f.mu.Unlock()
+	}
+	<-s.Context().Done()
+	return nil
+}
+
+func TestRemoteStream(t *testing.T) {
+	f := &fakeConnector{name: "sap-ecc", version: "0.4.0", caps: []string{CapStream}}
+	pool := NewPool()
+	defer pool.Close()
+	ctx := context.Background()
+	inst, err := pool.Factory(Address{Target: serve(t, f)})(ctx, spec, secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Close()
+	st, ok := inst.(connector.Streamer)
+	if !ok || !st.Streams("SalesOrder.Created") || st.Streams("SalesOrder.Changed") {
+		t.Fatalf("streamer %v", ok)
+	}
+	if _, err := inst.(connector.Source).Poll(ctx, "SalesOrder.Created", 0, 10); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("poll: %v", err)
+	}
+
+	// The second batch fails to be stored: it is not acknowledged.
+	var got []string
+	fail := errors.New("the inbox is away")
+	err = st.Stream(ctx, "SalesOrder.Created", nil, func(evs []connector.Event, _ []byte) error {
+		if len(got) == 1 {
+			return fail
+		}
+		for _, e := range evs {
+			got = append(got, e.ID+":"+string(e.Payload))
+		}
+		return nil
+	})
+	if !errors.Is(err, fail) || strings.Join(got, ",") != `idoc-1:{"docnum":"1"}` {
+		t.Fatalf("got %v, %v", got, err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	f.mu.Lock()
+	acks := fmt.Sprint(f.acks)
+	f.mu.Unlock()
+	if acks != "[1]" {
+		t.Fatalf("acks %s", acks)
+	}
+
+	// After a sidecar restart the stream configures the instance again.
+	f.mu.Lock()
+	f.configured = map[string]*pb.ConfigureRequest{}
+	f.acks = nil
+	f.mu.Unlock()
+	cctx, cancel := context.WithCancel(ctx)
+	got = nil
+	err = st.Stream(cctx, "SalesOrder.Created", nil, func(evs []connector.Event, _ []byte) error {
+		got = append(got, evs[0].ID)
+		if len(got) == 3 {
+			cancel()
+		}
+		return nil
+	})
+	if cctx.Err() == nil || strings.Join(got, ",") != "idoc-1,idoc-2,idoc-3" {
+		t.Fatalf("got %v, %v", got, err)
 	}
 }

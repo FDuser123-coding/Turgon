@@ -5,6 +5,14 @@ import java.util.List;
 
 public final class Environment {
     public static volatile DestinationDataProvider provider;
+    public static volatile ServerDataProvider serverProvider;
+
+    public static synchronized void registerServerDataProvider(ServerDataProvider p) {
+        if (serverProvider != null) {
+            throw new IllegalStateException("ServerDataProvider already registered");
+        }
+        serverProvider = p;
+    }
     /** Destinations JCo was told were deleted. */
     public static final List<String> DELETED = new ArrayList<>();
 

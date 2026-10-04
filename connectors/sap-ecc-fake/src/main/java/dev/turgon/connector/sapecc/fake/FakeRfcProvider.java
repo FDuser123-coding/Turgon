@@ -1,6 +1,7 @@
 package dev.turgon.connector.sapecc.fake;
 
 import dev.turgon.connector.sapecc.EccConfig;
+import dev.turgon.connector.sapecc.IdocReceiver;
 import dev.turgon.connector.sapecc.Rfc;
 import dev.turgon.connector.sapecc.RfcProvider;
 import dev.turgon.connector.sdk.EndpointConfig;
@@ -26,5 +27,11 @@ public final class FakeRfcProvider implements RfcProvider {
     public Rfc open(EndpointConfig endpoint, EccConfig config) {
         String host = config.destination().getOrDefault("jco.client.ashost", "fake");
         return new FakeEcc.Connection(FakeEcc.system(host), config.destination().getOrDefault("jco.client.user", ""));
+    }
+
+    @Override
+    public AutoCloseable serve(EndpointConfig endpoint, EccConfig config, Rfc rfc, IdocReceiver receiver) {
+        String host = config.destination().getOrDefault("jco.client.ashost", "fake");
+        return FakeEcc.system(host).register(config.server().getOrDefault("jco.server.progid", "TURGON"), receiver);
     }
 }

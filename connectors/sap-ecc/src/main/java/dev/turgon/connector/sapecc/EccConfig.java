@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import dev.turgon.connector.sdk.ConnectorException;
 import dev.turgon.connector.sdk.EndpointConfig;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.TreeMap;
 
@@ -23,6 +24,10 @@ import java.util.TreeMap;
  * orderType: TA                  # TA is the standard order (OR with English keys)
  * partnerRole: AG                # the sold-to party (SP with English keys)
  * lookupByPurchaseOrder: true    # find a retried create by its purchase order number
+ * idoc:                          # events: IDocs SAP sends to a registered server program
+ *   server: { gwhost: ecc.example.com, gwserv: sapgw00, progid: TURGON_IDOC, connectionCount: 2 }
+ *   events:
+ *     SalesOrder.Created: { messageTypes: [ORDRSP], idocTypes: [ORDERS05] }
  * </pre>
  *
  * The secret is the RFC user: {@code user:password}, or a JSON object of
@@ -30,7 +35,15 @@ import java.util.TreeMap;
  * Passwords are refused in the configuration, which is not secret.
  */
 public record EccConfig(String provider, Map<String, String> destination, String salesOrg, String distributionChannel,
-        String division, String orderType, String partnerRole, boolean lookupByPurchaseOrder, int peakLimit) {
+        String division, String orderType, String partnerRole, boolean lookupByPurchaseOrder, int peakLimit,
+        Map<String, String> server, Map<String, IdocEvent> idocEvents) {
+
+    /** Which IDocs make an event: their message types, and optionally their basic types. */
+    public record IdocEvent(java.util.Set<String> messageTypes, java.util.Set<String> idocTypes) {
+        public boolean matches(String mestyp, String idoctyp) {
+            return messageTypes.contains(mestyp) && (idocTypes.isEmpty() || idocTypes.contains(idoctyp));
+        }
+    }
 
     private static final ObjectMapper JSON = new ObjectMapper();
 
@@ -62,10 +75,33 @@ public record EccConfig(String provider, Map<String, String> destination, String
         dest.putIfAbsent("jco.destination.peak_limit", Integer.toString(peak));
         dest.putIfAbsent("jco.destination.pool_capacity", Integer.toString(Math.min(peak, 3)));
         JsonNode area = c.path("salesArea");
+        Map<String, String> server = new TreeMap<>();
+        c.path("idoc").path("server").properties().forEach(p -> {
+            String k = p.getKey().equals("connectionCount") ? "connection_count" : p.getKey();
+            server.put(k.contains(".") ? k : "jco.server." + k, p.getValue().asText());
+        });
+        Map<String, IdocEvent> events = new TreeMap<>();
+        for (var ev : c.path("idoc").path("events").properties()) {
+            java.util.Set<String> mt = new java.util.TreeSet<>(), it = new java.util.TreeSet<>();
+            ev.getValue().path("messageTypes").forEach(v -> mt.add(v.asText().toUpperCase()));
+            ev.getValue().path("idocTypes").forEach(v -> it.add(v.asText().toUpperCase()));
+            if (mt.isEmpty()) {
+                throw new ConnectorException.Invalid("idoc.events." + ev.getKey() + ".messageTypes must name at least one message type");
+            }
+            events.put(ev.getKey(), new IdocEvent(mt, it));
+        }
+        if (!events.isEmpty()) {
+            for (String k : List.of("jco.server.gwhost", "jco.server.gwserv", "jco.server.progid")) {
+                if (!server.containsKey(k)) {
+                    throw new ConnectorException.Invalid("idoc.server." + k.substring("jco.server.".length()) + " is required to receive IDocs");
+                }
+            }
+            server.putIfAbsent("jco.server.connection_count", "2");
+        }
         return new EccConfig(c.path("rfc").path("provider").asText(""), new LinkedHashMap<>(dest),
                 area.path("salesOrg").asText("1000"), area.path("distributionChannel").asText("10"),
                 area.path("division").asText("00"), c.path("orderType").asText("TA"), c.path("partnerRole").asText("AG"),
-                c.path("lookupByPurchaseOrder").asBoolean(true), peak);
+                c.path("lookupByPurchaseOrder").asBoolean(true), peak, server, events);
     }
 
     /** "ashost" -> "jco.client.ashost"; full property names pass through. */

@@ -1,0 +1,21 @@
+# An SAP ECC order confirmation: the ORDRSP IDoc (basic type ORDERS05) ECC
+# sends when an order is saved, as the sap-ecc connector delivers it, with
+# the control record under idoc and the segments as a tree.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: ecc-order-confirmation-to-sales-order
+  version: 1.0.0
+spec:
+  from: ecc-prod.SalesOrder
+  to: model.SalesOrder
+  fields:
+    - { target: externalId,  expression: "segments[segment='E1EDK01'].fields.BELNR",                                         origin: human, confidence: 1.0 }
+    - { target: customerRef, expression: "segments[segment='E1EDKA1' and fields.PARVW='AG'].fields.PARTN",                    origin: human, confidence: 1.0 }
+    - { target: orderDate,   expression: "$substring(idoc.credat, 0, 4) & '-' & $substring(idoc.credat, 4, 2) & '-' & $substring(idoc.credat, 6, 2)", origin: human, confidence: 0.98 }
+    - { target: netValue,    expression: "$number(segments[segment='E1EDS01' and fields.SUMID='002'].fields.SUMME)",       origin: human, confidence: 0.98 }
+    - { target: currency,    expression: "segments[segment='E1EDK01'].fields.CURCY",                                         origin: human, confidence: 1.0 }
+    - target: lines
+      expression: "segments[segment='E1EDP01'].{ 'material': segments[segment='E1EDP19' and fields.QUALF='002'].fields.IDTNR, 'quantity': $number(fields.MENGE) }[]"
+      origin: human
+      confidence: 0.97

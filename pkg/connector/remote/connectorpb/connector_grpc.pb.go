@@ -47,6 +47,7 @@ const (
 	Connector_Read_FullMethodName      = "/turgon.connector.v1.Connector/Read"
 	Connector_Poll_FullMethodName      = "/turgon.connector.v1.Connector/Poll"
 	Connector_Export_FullMethodName    = "/turgon.connector.v1.Connector/Export"
+	Connector_Stream_FullMethodName    = "/turgon.connector.v1.Connector/Stream"
 )
 
 // ConnectorClient is the client API for Connector service.
@@ -75,6 +76,13 @@ type ConnectorClient interface {
 	Poll(ctx context.Context, in *PollRequest, opts ...grpc.CallOption) (*PollResponse, error)
 	// Export streams the records of a named export.
 	Export(ctx context.Context, in *ExportRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[ExportRecord], error)
+	// Stream subscribes to an event the system pushes (SAP IDocs over tRFC,
+	// say). The worker opens it, then acknowledges each batch once it has
+	// stored the batch's events durably; the connector confirms them to the
+	// system only then, so an event is never lost to a crash in between. A
+	// batch the worker did not acknowledge is delivered again (the system
+	// retries); the worker drops events whose IDs it already has.
+	Stream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamRequest, StreamBatch], error)
 }
 
 type connectorClient struct {
@@ -194,6 +202,19 @@ func (c *connectorClient) Export(ctx context.Context, in *ExportRequest, opts ..
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Connector_ExportClient = grpc.ServerStreamingClient[ExportRecord]
 
+func (c *connectorClient) Stream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamRequest, StreamBatch], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Connector_ServiceDesc.Streams[1], Connector_Stream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[StreamRequest, StreamBatch]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Connector_StreamClient = grpc.BidiStreamingClient[StreamRequest, StreamBatch]
+
 // ConnectorServer is the server API for Connector service.
 // All implementations must embed UnimplementedConnectorServer
 // for forward compatibility.
@@ -220,6 +241,13 @@ type ConnectorServer interface {
 	Poll(context.Context, *PollRequest) (*PollResponse, error)
 	// Export streams the records of a named export.
 	Export(*ExportRequest, grpc.ServerStreamingServer[ExportRecord]) error
+	// Stream subscribes to an event the system pushes (SAP IDocs over tRFC,
+	// say). The worker opens it, then acknowledges each batch once it has
+	// stored the batch's events durably; the connector confirms them to the
+	// system only then, so an event is never lost to a crash in between. A
+	// batch the worker did not acknowledge is delivered again (the system
+	// retries); the worker drops events whose IDs it already has.
+	Stream(grpc.BidiStreamingServer[StreamRequest, StreamBatch]) error
 	mustEmbedUnimplementedConnectorServer()
 }
 
@@ -259,6 +287,9 @@ func (UnimplementedConnectorServer) Poll(context.Context, *PollRequest) (*PollRe
 }
 func (UnimplementedConnectorServer) Export(*ExportRequest, grpc.ServerStreamingServer[ExportRecord]) error {
 	return status.Error(codes.Unimplemented, "method Export not implemented")
+}
+func (UnimplementedConnectorServer) Stream(grpc.BidiStreamingServer[StreamRequest, StreamBatch]) error {
+	return status.Error(codes.Unimplemented, "method Stream not implemented")
 }
 func (UnimplementedConnectorServer) mustEmbedUnimplementedConnectorServer() {}
 func (UnimplementedConnectorServer) testEmbeddedByValue()                   {}
@@ -454,6 +485,13 @@ func _Connector_Export_Handler(srv interface{}, stream grpc.ServerStream) error 
 // This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
 type Connector_ExportServer = grpc.ServerStreamingServer[ExportRecord]
 
+func _Connector_Stream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(ConnectorServer).Stream(&grpc.GenericServerStream[StreamRequest, StreamBatch]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Connector_StreamServer = grpc.BidiStreamingServer[StreamRequest, StreamBatch]
+
 // Connector_ServiceDesc is the grpc.ServiceDesc for Connector service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -503,6 +541,12 @@ var Connector_ServiceDesc = grpc.ServiceDesc{
 			StreamName:    "Export",
 			Handler:       _Connector_Export_Handler,
 			ServerStreams: true,
+		},
+		{
+			StreamName:    "Stream",
+			Handler:       _Connector_Stream_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
 		},
 	},
 	Metadata: "turgon/connector/v1/connector.proto",

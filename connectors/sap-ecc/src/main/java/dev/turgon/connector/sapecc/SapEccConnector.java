@@ -14,7 +14,8 @@ import java.util.Set;
 /**
  * SAP ECC 6.0 through BAPIs over RFC (examples/connectors/sap-ecc.yaml):
  * create-sales-order (test run first), cancel-sales-order (its
- * compensation) and get-customer.
+ * compensation) and get-customer; and events from the IDocs SAP sends to
+ * a registered server program (idoc-outbound).
  */
 public final class SapEccConnector implements Connector {
     public static final String NAME = "sap-ecc";
@@ -32,7 +33,7 @@ public final class SapEccConnector implements Connector {
 
     @Override
     public Set<Capability> capabilities() {
-        return EnumSet.of(Capability.SIMULATE, Capability.CONFIRM, Capability.READ, Capability.CHECK);
+        return EnumSet.of(Capability.SIMULATE, Capability.CONFIRM, Capability.READ, Capability.CHECK, Capability.STREAM);
     }
 
     /** The RFC providers on the class path. */
@@ -61,6 +62,7 @@ public final class SapEccConnector implements Connector {
         if (!p.available()) {
             throw new ConnectorException.Invalid("RFC provider " + p.name() + " is not available: " + p.unavailableFix());
         }
-        return new EccEndpoint(endpoint.endpoint(), cfg, p.open(endpoint, cfg));
+        Rfc rfc = p.open(endpoint, cfg);
+        return new EccEndpoint(endpoint.endpoint(), cfg, rfc, receiver -> p.serve(endpoint, cfg, rfc, receiver));
     }
 }

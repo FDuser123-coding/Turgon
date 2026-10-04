@@ -22,11 +22,21 @@ import dev.turgon.connector.v1.ReadResponse;
 import dev.turgon.connector.v1.ReleaseResponse;
 import dev.turgon.connector.v1.WriteRequest;
 import dev.turgon.connector.v1.WriteResponse;
+import dev.turgon.connector.v1.StreamBatch;
+import dev.turgon.connector.v1.StreamOpen;
+import dev.turgon.connector.v1.StreamRequest;
 import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.stub.ServerCallStreamObserver;
 import io.grpc.stub.StreamObserver;
 import java.io.IOException;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.CompletableFuture;
+import java.util.List;
+import java.time.Duration;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.logging.Level;
@@ -140,7 +150,7 @@ public final class ConnectorService extends ConnectorGrpc.ConnectorImplBase {
                 close(old);
             }
             LOG.info(() -> "configured " + cfg.endpoint() + " as " + req.getInstance());
-            return ConfigureResponse.getDefaultInstance();
+            return ConfigureResponse.newBuilder().addAllStreamedEvents(e.streams().stream().sorted().toList()).build();
         });
     }
 
@@ -234,5 +244,120 @@ public final class ConnectorService extends ConnectorGrpc.ConnectorImplBase {
             return;
         }
         out.onCompleted();
+    }
+
+    /** How long a pushed batch waits for the worker to store it. */
+    static volatile Duration ackTimeout = Duration.ofSeconds(60);
+
+    @Override
+    public StreamObserver<StreamRequest> stream(StreamObserver<StreamBatch> out) {
+        var call = (ServerCallStreamObserver<StreamBatch>) out;
+        return new StreamObserver<StreamRequest>() {
+            final Map<Long, CompletableFuture<Void>> pending = new ConcurrentHashMap<>();
+            final AtomicLong next = new AtomicLong();
+            volatile boolean closed;
+            volatile AutoCloseable subscription;
+
+            final StreamSink sink = new StreamSink() {
+                @Override
+                public void deliver(List<Event> events, byte[] resume) throws Exception {
+                    if (closed) {
+                        throw new IllegalStateException("the worker's stream is closed");
+                    }
+                    long id = next.incrementAndGet();
+                    var acked = new CompletableFuture<Void>();
+                    pending.put(id, acked);
+                    var b = StreamBatch.newBuilder().setBatch(id);
+                    if (resume != null) {
+                        b.setResume(ByteString.copyFrom(resume));
+                    }
+                    for (Event e : events) {
+                        b.addEvents(dev.turgon.connector.v1.Event.newBuilder().setId(e.id()).setPosition(e.position())
+                                .setName(e.name()).setPayload(bytes(e.payload())));
+                    }
+                    try {
+                        synchronized (out) {
+                            out.onNext(b.build());
+                        }
+                        acked.get(ackTimeout.toMillis(), TimeUnit.MILLISECONDS);
+                    } catch (TimeoutException e) {
+                        throw new IllegalStateException("the worker did not store the batch in " + ackTimeout.toSeconds() + "s");
+                    } catch (ExecutionException e) {
+                        throw new IllegalStateException("the worker's stream closed before it stored the batch");
+                    } finally {
+                        pending.remove(id);
+                    }
+                }
+
+                @Override
+                public boolean open() {
+                    return !closed;
+                }
+            };
+
+            void close() {
+                if (closed) {
+                    return;
+                }
+                closed = true;
+                pending.values().forEach(f -> f.completeExceptionally(new IllegalStateException("closed")));
+                AutoCloseable s = subscription;
+                if (s != null) {
+                    try {
+                        s.close();
+                    } catch (Exception e) {
+                        LOG.log(Level.WARNING, "closing a subscription failed", e);
+                    }
+                }
+            }
+
+            {
+                call.setOnCancelHandler(this::close);
+            }
+
+            @Override
+            public void onNext(StreamRequest req) {
+                switch (req.getRequestCase()) {
+                    case OPEN -> {
+                        if (subscription != null) {
+                            out.onError(Status.INVALID_ARGUMENT.withDescription("the stream is already open").asRuntimeException());
+                            return;
+                        }
+                        try {
+                            StreamOpen o = req.getOpen();
+                            Endpoint e = instance(o.getInstance());
+                            if (!e.streams().contains(o.getEvent())) {
+                                throw new ConnectorException.Invalid("event " + o.getEvent() + " does not arrive by stream");
+                            }
+                            subscription = e.stream(o.getEvent(), o.getResume().toByteArray(), sink);
+                            LOG.info(() -> "streaming " + o.getEvent() + " to the worker");
+                        } catch (Exception x) {
+                            closed = true;
+                            out.onError(status(x));
+                        }
+                    }
+                    case ACK -> {
+                        var f = pending.get(req.getAck().getBatch());
+                        if (f != null) {
+                            f.complete(null);
+                        }
+                    }
+                    default -> out.onError(Status.INVALID_ARGUMENT.withDescription("open the stream first").asRuntimeException());
+                }
+            }
+
+            @Override
+            public void onError(Throwable t) {
+                close();
+            }
+
+            @Override
+            public void onCompleted() {
+                close();
+                synchronized (out) {
+                    out.onCompleted();
+                }
+            }
+        };
     }
 }

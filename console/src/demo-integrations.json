@@ -20,12 +20,18 @@
       "description": "SAP ECC 6.0, sales orders through BAPIs over RFC.",
       "connector": "sap-ecc",
       "product": "SAP ECC 6.0, EHP 6-8",
-      "role": "target",
-      "events": [],
+      "role": "both",
+      "events": [
+        {
+          "name": "SalesOrder.Created",
+          "delivery": "polling"
+        }
+      ],
       "operations": [
         "create-sales-order"
       ],
       "flows": [
+        "ecc-orders-to-erp",
         "salesforce-won-deals-to-ecc"
       ]
     },
@@ -41,6 +47,7 @@
         "record-payment"
       ],
       "flows": [
+        "ecc-orders-to-erp",
         "hubspot-won-deals-to-erp",
         "legacy-orders-to-erp",
         "salesforce-won-deals-to-erp",
@@ -248,6 +255,46 @@
     }
   ],
   "flows": [
+    {
+      "name": "ecc-orders-to-erp",
+      "version": "1.0.0",
+      "description": "An order saved in SAP ECC, sent as an ORDRSP IDoc, becomes a sales order in the warehouse ERP database.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "ecc-prod",
+        "event": "SalesOrder.Created",
+        "delivery": "polling"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "ecc-order-confirmation-to-sales-order@1.0.0",
+          "from": "ecc-prod.SalesOrder",
+          "to": "model.SalesOrder",
+          "fields": 6
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "exact"
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "erp-db",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "rollback",
+          "compensation": "cancel-sales-order"
+        }
+      ],
+      "targets": [
+        "erp-db"
+      ],
+      "slo": "p95 5s"
+    },
     {
       "name": "hubspot-won-deals-to-dynamics",
       "version": "1.0.0",

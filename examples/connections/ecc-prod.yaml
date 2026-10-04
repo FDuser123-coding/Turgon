@@ -4,6 +4,10 @@
 # JCo is SAP's to license and is mounted into the sidecar. Orders are test
 # run first (TESTRUN); the opportunity's ID becomes the purchase order
 # number, so a retried create finds the order instead of making a second.
+# Events are the IDocs ECC sends: the order confirmation (ORDRSP, output
+# BA00) of each saved order goes over tRFC to the server program
+# TURGON_IDOC, through an RFC destination of type T in ECC (SM59) and a
+# partner profile for logical system TURGON (WE20).
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
 metadata:
@@ -19,3 +23,7 @@ spec:
       destination: { ashost: ecc.acme.internal, sysnr: "00", client: "100", lang: EN }
     salesArea: { salesOrg: "1000", distributionChannel: "10", division: "00" }
     orderType: TA
+    idoc:
+      server: { gwhost: ecc.acme.internal, gwserv: sapgw00, progid: TURGON_IDOC, connectionCount: 2 }
+      events:
+        SalesOrder.Created: { messageTypes: [ORDRSP], idocTypes: [ORDERS05] }

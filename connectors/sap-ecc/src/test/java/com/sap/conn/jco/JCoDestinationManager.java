@@ -25,7 +25,7 @@ public final class JCoDestinationManager {
     }
 
     // name -> {imports, exports, tables}; a name in brackets is a structure.
-    static final Map<String, List<Set<String>>> SIGNATURES = Map.of(
+    public static final Map<String, List<Set<String>>> SIGNATURES = new java.util.HashMap<>(Map.of(
             "BAPI_SALESORDER_CREATEFROMDAT2", List.of(Set.of("[ORDER_HEADER_IN]", "TESTRUN"), Set.of("SALESDOCUMENT"),
                     Set.of("RETURN", "ORDER_PARTNERS", "ORDER_ITEMS_IN", "ORDER_SCHEDULES_IN")),
             "BAPI_SALESORDER_GETLIST", List.of(Set.of("CUSTOMER_NUMBER", "SALES_ORGANIZATION", "PURCHASE_ORDER_NUMBER"),
@@ -36,7 +36,12 @@ public final class JCoDestinationManager {
             "BAPI_TRANSACTION_ROLLBACK", List.of(Set.of(), Set.of("[RETURN]"), Set.of()),
             "BAPI_CUSTOMER_GETDETAIL2", List.of(Set.of("CUSTOMERNO"), Set.of("[CUSTOMERADDRESS]", "[RETURN]"), Set.of()),
             "RFC_PING", List.of(Set.of(), Set.of(), Set.of()),
-            "Z_RAISE", List.of(Set.of(), Set.of(), Set.of()));
+            "Z_RAISE", List.of(Set.of(), Set.of(), Set.of())));
+
+    static {
+        SIGNATURES.put("IDOCTYPE_READ_COMPLETE", List.of(Set.of("PI_IDOCTYP", "PI_CIMTYP"), Set.of(), Set.of("PT_SEGMENTS", "PT_FIELDS")));
+        SIGNATURES.put("IDOC_INBOUND_ASYNCHRONOUS", List.of(Set.of(), Set.of(), Set.of("IDOC_CONTROL_REC_40", "IDOC_DATA_REC_40")));
+    }
 
     static final class Dest implements JCoDestination {
         final FakeEcc.Connection conn;
@@ -61,8 +66,8 @@ public final class JCoDestinationManager {
     }
 
     /** A record whose fields are declared (scalars, [structures], tables) or, for structures, open. */
-    static class Rec implements JCoParameterList, JCoStructure {
-        final Map<String, Object> values = new LinkedHashMap<>();
+    public static class Rec implements JCoParameterList, JCoStructure {
+        public final Map<String, Object> values = new LinkedHashMap<>();
         final Set<String> declared;
 
         Rec(Set<String> declared) {
@@ -143,8 +148,8 @@ public final class JCoDestinationManager {
         }
     }
 
-    static final class Tab extends Rec implements JCoTable {
-        final List<Map<String, String>> rows = new ArrayList<>();
+    public static final class Tab extends Rec implements JCoTable {
+        public final List<Map<String, String>> rows = new ArrayList<>();
         int row = -1;
 
         Tab() {
@@ -209,13 +214,13 @@ public final class JCoDestinationManager {
         }
     }
 
-    static final class Function implements JCoFunction {
+    public static final class Function implements JCoFunction {
         final String name;
         final Rec imports;
         final Rec exports;
-        final Rec tables;
+        public final Rec tables;
 
-        Function(String name, List<Set<String>> sig) {
+        public Function(String name, List<Set<String>> sig) {
             this.name = name;
             imports = new Rec(sig.get(0));
             exports = new Rec(sig.get(1));

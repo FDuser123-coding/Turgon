@@ -1,6 +1,7 @@
 package dev.turgon.connector.sdk;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -115,6 +116,20 @@ class ConnectorServiceTest {
         public List<CheckResult> check() {
             return List.of(CheckResult.pass("system", "answers"));
         }
+
+        static volatile StreamSink sink;
+        static final java.util.concurrent.atomic.AtomicInteger CLOSED = new java.util.concurrent.atomic.AtomicInteger();
+
+        @Override
+        public Set<String> streams() {
+            return Set.of("Order.Shipped");
+        }
+
+        @Override
+        public AutoCloseable stream(String event, byte[] resume, StreamSink s) {
+            sink = s;
+            return CLOSED::incrementAndGet;
+        }
     }
 
     static final class OrdersConnector implements Connector {
@@ -193,7 +208,7 @@ class ConnectorServiceTest {
         var d = stub.describe(DescribeRequest.newBuilder().setProtocol(Protocol.PROTOCOL_V1).build());
         assertEquals("orders", d.getConnector());
         assertEquals("1.2.0", d.getVersion());
-        assertEquals(List.of("simulate", "confirm", "read", "poll", "export", "check"), d.getCapabilitiesList());
+        assertEquals(List.of("simulate", "confirm", "read", "poll", "export", "check", "stream"), d.getCapabilitiesList());
 
         configure("erp-1");
         EndpointConfig cfg = connector.bound.getFirst();
@@ -276,5 +291,123 @@ class ConnectorServiceTest {
         ConnectorServer.build(connector, "127.0.0.1:0", "tok").start().shutdownNow();
         assertThrows(IllegalArgumentException.class, () -> ConnectorServer.build(connector, "nonsense", ""));
         assertThrows(IllegalArgumentException.class, () -> ConnectorServer.build(connector, "unix:///tmp/" + "x".repeat(120) + ".sock", ""));
+    }
+
+    /** A worker's end of a stream: batches arrive in a queue; acks are sent by hand. */
+    static final class Worker implements io.grpc.stub.StreamObserver<dev.turgon.connector.v1.StreamBatch> {
+        final java.util.concurrent.BlockingQueue<Object> got = new java.util.concurrent.LinkedBlockingQueue<>();
+        io.grpc.stub.StreamObserver<dev.turgon.connector.v1.StreamRequest> send;
+
+        @Override
+        public void onNext(dev.turgon.connector.v1.StreamBatch b) {
+            got.add(b);
+        }
+
+        @Override
+        public void onError(Throwable t) {
+            got.add(t);
+        }
+
+        @Override
+        public void onCompleted() {
+            got.add("done");
+        }
+
+        Object next() throws InterruptedException {
+            return got.poll(10, java.util.concurrent.TimeUnit.SECONDS);
+        }
+
+        void ack(long batch) {
+            send.onNext(dev.turgon.connector.v1.StreamRequest.newBuilder()
+                    .setAck(dev.turgon.connector.v1.StreamAck.newBuilder().setBatch(batch)).build());
+        }
+    }
+
+    Worker open(String instance, String event) {
+        Metadata md = new Metadata();
+        md.put(ConnectorServer.AUTHORIZATION, "Bearer tok");
+        var async = ConnectorGrpc.newStub(channel).withInterceptors(MetadataUtils.newAttachHeadersInterceptor(md));
+        Worker w = new Worker();
+        w.send = async.stream(w);
+        w.send.onNext(dev.turgon.connector.v1.StreamRequest.newBuilder().setOpen(
+                dev.turgon.connector.v1.StreamOpen.newBuilder().setInstance(instance).setEvent(event)).build());
+        return w;
+    }
+
+    @Test
+    void streamsPushedEventsUntilTheWorkerStoresThem() throws Exception {
+        Orders.sink = null;
+        Orders.CLOSED.set(0);
+        configure("erp-1");
+        assertEquals(List.of("Order.Shipped"), stub.configure(ConfigureRequest.newBuilder().setInstance("erp-2").setEndpoint("erp")
+                .setSpec(json("{\"name\":\"orders\"}")).setSecret("user:pw").build()).getStreamedEventsList());
+        Worker w = open("erp-1", "Order.Shipped");
+        for (int i = 0; i < 100 && Orders.sink == null; i++) {
+            Thread.sleep(20);
+        }
+        StreamSink sink = Orders.sink;
+        assertTrue(sink != null && sink.open());
+
+        // deliver returns only once the worker acknowledges.
+        var delivered = java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                sink.deliver(List.of(new Event("idoc-1", 0, "Order.Shipped", ConnectorService.JSON.readTree("{\"docnum\":\"1\"}"))), null);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        var batch = (dev.turgon.connector.v1.StreamBatch) w.next();
+        assertEquals("idoc-1", batch.getEvents(0).getId());
+        Thread.sleep(100);
+        assertFalse(delivered.isDone(), "delivered before the worker stored it");
+        w.ack(batch.getBatch());
+        delivered.get(10, java.util.concurrent.TimeUnit.SECONDS);
+
+        // The worker goes away without acknowledging: deliver fails, so the
+        // system keeps the event; the subscription is closed.
+        var lost = java.util.concurrent.CompletableFuture.runAsync(() -> {
+            try {
+                sink.deliver(List.of(new Event("idoc-2", 0, "Order.Shipped", ConnectorService.JSON.nullNode())), null);
+            } catch (Exception e) {
+                throw new RuntimeException(e);
+            }
+        });
+        w.next();
+        w.send.onError(new RuntimeException("worker crashed"));
+        var failed = assertThrows(java.util.concurrent.ExecutionException.class, () -> lost.get(10, java.util.concurrent.TimeUnit.SECONDS));
+        assertTrue(failed.getCause().getMessage().contains("closed"), failed.toString());
+        for (int i = 0; i < 100 && Orders.CLOSED.get() == 0; i++) {
+            Thread.sleep(20);
+        }
+        assertEquals(1, Orders.CLOSED.get());
+        assertFalse(sink.open());
+        assertThrows(Exception.class, () -> sink.deliver(List.of(), null));
+    }
+
+    @Test
+    void ackTimeout() throws Exception {
+        java.time.Duration was = ConnectorService.ackTimeout;
+        ConnectorService.ackTimeout = java.time.Duration.ofMillis(200);
+        try {
+            configure("erp-1");
+            Worker w = open("erp-1", "Order.Shipped");
+            for (int i = 0; i < 100 && (Orders.sink == null || !Orders.sink.open()); i++) {
+                Thread.sleep(20);
+            }
+            var e = assertThrows(IllegalStateException.class, () -> Orders.sink.deliver(List.of(), null));
+            assertTrue(e.getMessage().contains("did not store"), e.getMessage());
+            w.send.onCompleted();
+        } finally {
+            ConnectorService.ackTimeout = was;
+        }
+    }
+
+    @Test
+    void refusesStreamsItCannotOpen() throws Exception {
+        Worker unknown = open("nope", "Order.Shipped");
+        assertEquals(Status.Code.ABORTED, Status.fromThrowable((Throwable) unknown.next()).getCode());
+        configure("erp-1");
+        Worker polled = open("erp-1", "Order.Created");
+        assertEquals(Status.Code.INVALID_ARGUMENT, Status.fromThrowable((Throwable) polled.next()).getCode());
     }
 }

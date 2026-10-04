@@ -3,6 +3,7 @@ package dev.turgon.connector.sdk;
 import com.fasterxml.jackson.databind.JsonNode;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.function.Consumer;
 
 /**
@@ -41,6 +42,21 @@ public interface Endpoint extends AutoCloseable {
     /** Up to {@code limit} events named {@code event} with position &gt; {@code after}, in order. */
     default List<Event> poll(String event, long after, int limit) throws Exception {
         throw new ConnectorException.Unsupported("poll");
+    }
+
+    /** The events the system pushes, delivered by {@link #stream} rather than polled. */
+    default Set<String> streams() {
+        return Set.of();
+    }
+
+    /**
+     * Subscribes to a pushed event until the returned subscription is closed.
+     * Hand what arrives to {@link StreamSink#deliver}, which returns once the
+     * worker has stored it: confirm it to the system only then, and fail the
+     * system's call when deliver throws, so the system sends it again.
+     */
+    default AutoCloseable stream(String event, byte[] resume, StreamSink sink) throws Exception {
+        throw new ConnectorException.Unsupported("stream");
     }
 
     default void export(String name, Consumer<Map<String, String>> each) throws Exception {
