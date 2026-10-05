@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -192,6 +193,56 @@ func (c *Conn) Discover(ctx context.Context, objects []string) (meta.Catalog, er
 	for _, o := range objs {
 		cat.Objects = append(cat.Objects, *o)
 	}
+	outbox := ""
+	if o := c.cfg.Outbox; o != nil {
+		outbox = o.Table
+		if oid, ok := oids[o.Table]; ok {
+			outbox = canonical[oid]
+		}
+	}
+	if err := c.sampleOutbox(ctx, &cat, outbox); err != nil {
+		return cat, err
+	}
 	cat.Normalize()
 	return cat, nil
+}
+
+// outboxSample is how many recent outbox rows describe each event.
+const outboxSample = 500
+
+// sampleOutbox describes each outbox event's payload: the application
+// writes it as JSON, so its fields are those seen in the latest rows. An
+// event's mapping reads them.
+func (c *Conn) sampleOutbox(ctx context.Context, cat *meta.Catalog, table string) error {
+	o := c.cfg.Outbox
+	if o == nil {
+		return nil
+	}
+	rows, err := c.pool.Query(ctx, fmt.Sprintf(`SELECT event, payload FROM %s ORDER BY id DESC LIMIT %d`, ident(o.Table), outboxSample))
+	if err != nil {
+		return nil // the table is missing: the outbox's uses show it
+	}
+	defer rows.Close()
+	byEvent := map[string][]map[string]any{}
+	for rows.Next() {
+		var event string
+		var payload []byte
+		if err := rows.Scan(&event, &payload); err != nil {
+			return fmt.Errorf("postgres: discover outbox: %w", err)
+		}
+		var doc map[string]any
+		if json.Unmarshal(payload, &doc) == nil {
+			byEvent[event] = append(byEvent[event], doc)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("postgres: discover outbox: %w", err)
+	}
+	for event, docs := range byEvent {
+		name := table + "#" + event
+		cat.Objects = append(cat.Objects, meta.Object{Name: name, Kind: "outbox payload", Sampled: true, Fields: meta.SampleFields(docs),
+			Label: fmt.Sprintf("the %s payload in the latest %d outbox rows", event, len(docs))})
+		cat.Events[event] = name
+	}
+	return nil
 }

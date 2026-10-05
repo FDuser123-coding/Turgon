@@ -3,7 +3,7 @@ import { api } from "../api";
 import { Empty, ErrorBanner, Link, Pill } from "../components";
 import { ago, breaks, flags, values, where } from "../format";
 import { navigate, usePoll, useSearch } from "../hooks";
-import type { MetaDetail as Detail, MetaObject, MetaSystem } from "../types";
+import type { MetaChange, MetaDetail as Detail, MetaObject, MetaSystem } from "../types";
 
 export function Metadata() {
   const { data, error } = usePoll(api.meta, 30000);
@@ -179,6 +179,16 @@ function Compare({ data, onSelect }: { data: Detail; onSelect: (param: "from" | 
   );
 }
 
+// verdict says how much a change matters here. A sampled field missing
+// from the latest records needs a look if something reads it: the API may
+// have dropped it, or the sample simply lacked it.
+function verdict(c: MetaChange) {
+  if (breaks(c)) return <Pill tone="bad">breaking</Pill>;
+  if (c.kind === "field-not-seen") return (c.usedBy?.length ?? 0) > 0 ? <Pill tone="warn">check</Pill> : <Pill tone="neutral">not seen</Pill>;
+  if (c.breaking) return <Pill tone="warn">not in use</Pill>;
+  return <Pill tone="neutral">safe</Pill>;
+}
+
 function Changes({ data }: { data: Detail }) {
   if (!data.from) {
     return data.snapshots.length > 1 ? (
@@ -205,7 +215,7 @@ function Changes({ data }: { data: Detail }) {
             <tbody>
               {data.changes.map((c) => (
                 <tr key={c.kind + where(c)}>
-                  <td>{breaks(c) ? <Pill tone="bad">breaking</Pill> : c.breaking ? <Pill tone="warn">not in use</Pill> : <Pill tone="neutral">safe</Pill>}</td>
+                  <td>{verdict(c)}</td>
                   <td>{c.kind.replaceAll("-", " ")}</td>
                   <td className="mono">{where(c)}</td>
                   <td className="mono small">{values(c)}</td>
@@ -233,7 +243,12 @@ function ObjectCard({ object: o, filter, usedOnly }: { object: MetaObject; filte
     <article className="card">
       <div className="card-head">
         <div>
-          <span className="title mono">{o.name}</span> <span className="muted small">{o.kind}{o.label ? ` · ${o.label}` : ""}</span>
+          <span className="title mono">{o.name}</span> <span className="muted small">{o.kind}{o.label ? ` · ${o.label}` : ""}</span>{" "}
+          {o.sampled && (
+            <span title="The system declares no schema for these records: the fields are those seen in recent ones.">
+              <Pill tone="info">sampled</Pill>
+            </span>
+          )}
         </div>
         <div className="muted small">
           {o.fields.length} fields, {used} in use

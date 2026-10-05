@@ -257,6 +257,7 @@ export interface MetaObject {
   fields: MetaField[];
   links?: { name: string; to: string; toField?: string }[];
   usedBy?: string[];
+  sampled?: boolean;
 }
 
 export interface MetaDetail {

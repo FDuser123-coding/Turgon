@@ -235,6 +235,8 @@ func printDiscoveries(w io.Writer, rs []discovery, stored bool) {
 			switch {
 			case c.Breaks():
 				mark = "  BREAKING"
+			case c.Kind == meta.FieldNotSeen && len(c.UsedBy) > 0:
+				mark = "  CHECK   " // a sampled field the latest records lack
 			case c.Breaking:
 				mark = "  breaking"
 			}
