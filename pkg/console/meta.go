@@ -77,8 +77,9 @@ type MetaField struct {
 	UsedBy []string `json:"usedBy,omitempty"`
 }
 
-// specs compiles the catalog's deployable recipes, for the mappings that
-// read each system.
+// specs compiles the catalog's recipes, for the mappings that read each
+// system. A recipe that does not compile (one waiting for mapping review)
+// is sketched: its mappings read fields all the same.
 func (s *Server) specs(ctx context.Context) ([]*compiler.RuntimeSpec, error) {
 	if len(s.cfg.Catalogs) == 0 {
 		return nil, nil
@@ -96,6 +97,8 @@ func (s *Server) specs(ctx context.Context) ([]*compiler.RuntimeSpec, error) {
 		if rec, ok := obj.(*v1alpha1.Recipe); ok {
 			if spec, _, err := compiler.Compile(cat, rec, opts); err == nil {
 				out = append(out, spec)
+			} else {
+				out = append(out, compiler.Sketch(cat, rec))
 			}
 		}
 	}

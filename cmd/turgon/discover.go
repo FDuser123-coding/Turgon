@@ -13,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/spf13/cobra"
 
+	"github.com/fduser123-coding/turgon/apis/v1alpha1"
+	"github.com/fduser123-coding/turgon/pkg/catalog"
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/meta"
@@ -41,7 +43,7 @@ type discovery struct {
 
 func discoverCmd() *cobra.Command {
 	var specPath, dbURL string
-	var endpoints, objects []string
+	var endpoints, objects, catalogs []string
 	var asJSON, failOnBreaking bool
 	cmd := &cobra.Command{
 		Use:   "discover",
@@ -87,7 +89,11 @@ func discoverCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			results, err := discoverAll(ctx, spec, registry, secretsFrom, store, endpoints, extra)
+			others, err := sketches(catalogs)
+			if err != nil {
+				return err
+			}
+			results, err := discoverAll(ctx, spec, registry, secretsFrom, store, endpoints, extra, others...)
 			if err != nil {
 				return err
 			}
@@ -120,15 +126,35 @@ func discoverCmd() *cobra.Command {
 	cmd.Flags().StringVar(&dbURL, "database-url", envOr("TURGON_DATABASE_URL", ""), "Turgon's state database, where snapshots are kept (without it, nothing is stored or compared)")
 	cmd.Flags().StringArrayVar(&endpoints, "endpoint", nil, "discover only this endpoint (repeatable)")
 	cmd.Flags().StringArrayVar(&objects, "object", nil, "also discover an object the configuration does not use, as endpoint=object (repeatable; e.g. erp=public.invoices, erp=public.*, sap-ecc=IDOC:ORDERS05)")
+	cmd.Flags().StringSliceVarP(&catalogs, "catalog", "c", nil, "also count the mappings of every recipe in these catalogs as users, compiled or not")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "print the results as JSON")
 	cmd.Flags().BoolVar(&failOnBreaking, "fail-on-breaking", false, "exit non-zero when a change can break a run, or a used object is missing")
 	return cmd
 }
 
+// sketches are the recipes of catalogs, as far as their mappings go.
+func sketches(dirs []string) ([]*compiler.RuntimeSpec, error) {
+	if len(dirs) == 0 {
+		return nil, nil
+	}
+	cat, err := catalog.Load(dirs...)
+	if err != nil {
+		return nil, err
+	}
+	var out []*compiler.RuntimeSpec
+	for _, obj := range cat.All() {
+		if rec, ok := obj.(*v1alpha1.Recipe); ok {
+			out = append(out, compiler.Sketch(cat, rec))
+		}
+	}
+	return out, nil
+}
+
 // discoverAll discovers each selected endpoint whose connector can, and
 // compares what it holds with its latest snapshot.
 func discoverAll(ctx context.Context, spec *compiler.RuntimeSpec, registry connector.Registry, secretsFrom connector.SecretResolver,
-	store *pgstore.Store, only []string, extra map[string][]string) ([]discovery, error) {
+	store *pgstore.Store, only []string, extra map[string][]string, others ...*compiler.RuntimeSpec) ([]discovery, error) {
+	specs := append([]*compiler.RuntimeSpec{spec}, others...)
 	want := map[string]bool{}
 	for _, e := range only {
 		want[e] = true
@@ -173,7 +199,7 @@ func discoverAll(ctx context.Context, spec *compiler.RuntimeSpec, registry conne
 				if list, err := store.Snapshots(ctx, c.Endpoint); err == nil && len(list) > 1 {
 					d.Previous = &list[1]
 				}
-				d.Changes = meta.Compare(prev, cat, spec)
+				d.Changes = meta.Compare(prev, cat, specs...)
 			}
 		}
 		out = append(out, d)

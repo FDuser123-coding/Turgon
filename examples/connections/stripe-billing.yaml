@@ -23,6 +23,9 @@ spec:
     - { name: unlink-invoice, entity: Invoice, direction: write, interface: rest-api, risk: low }
   config:
     baseURL: https://api.stripe.com
+    # Stripe's OpenAPI description: turgon discover reads what each event,
+    # read and write carries from it.
+    openapi: https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json
     auth: { type: bearer }
     checkPath: /v1/balance
     events:
