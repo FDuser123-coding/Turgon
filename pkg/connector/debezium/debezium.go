@@ -47,8 +47,10 @@ type Config struct {
 	TLS bool `json:"tls,omitempty"`
 	// SASL is plain, scram-sha-256 or scram-sha-512; the connection's
 	// secret is then {"username", "password"}.
-	SASL   string           `json:"sasl,omitempty"`
-	Events map[string]Event `json:"events"`
+	SASL string `json:"sasl,omitempty"`
+	// SchemaRegistry reads changes Debezium wrote with an Avro converter.
+	SchemaRegistry *Registry        `json:"schemaRegistry,omitempty"`
+	Events         map[string]Event `json:"events"`
 }
 
 // Event is a table's changes, as Debezium writes them to a topic
@@ -99,6 +101,11 @@ func (c Config) validate() error {
 	if c.SASL == "plain" && !c.TLS {
 		return errors.New("sasl plain sends the password as it is: it needs tls")
 	}
+	if c.SchemaRegistry != nil {
+		if err := c.SchemaRegistry.validate(); err != nil {
+			return err
+		}
+	}
 	if len(c.Events) == 0 {
 		return errors.New("events are required")
 	}
@@ -132,7 +139,7 @@ func Factory(ctx context.Context, cfg compiler.ConnectorConfig, secrets connecto
 		return nil, fmt.Errorf("debezium %s: config: %w", cfg.Endpoint, err)
 	}
 	var secret string
-	if c.SASL != "" {
+	if c.SASL != "" || (c.SchemaRegistry != nil && c.SchemaRegistry.Auth == "basic") {
 		s, err := secrets.Resolve(ctx, cfg.SecretRef)
 		if err != nil {
 			return nil, fmt.Errorf("debezium %s: %w", cfg.Endpoint, err)
@@ -150,6 +157,8 @@ func Factory(ctx context.Context, cfg compiler.ConnectorConfig, secrets connecto
 type Conn struct {
 	cfg  Config
 	opts []kgo.Opt
+	// reg reads Avro changes; nil without a schema registry.
+	reg *registry
 }
 
 var (
@@ -159,10 +168,22 @@ var (
 	_ connector.Checker  = (*Conn)(nil)
 )
 
-// New returns a connector; secret is {"username", "password"} with SASL.
+// New returns a connector; secret is {"username", "password"} with SASL,
+// and holds {"registry": {"username", "password"}} for a registry with
+// basic authentication.
 func New(cfg Config, secret string) (*Conn, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
+	}
+	var regUser, regPass string
+	if r := cfg.SchemaRegistry; r != nil && r.Auth == "basic" {
+		var s struct {
+			Registry struct{ Username, Password string } `json:"registry"`
+		}
+		if err := json.Unmarshal([]byte(secret), &s); err != nil || s.Registry.Username == "" || s.Registry.Password == "" {
+			return nil, errors.New(`the secret must hold {"registry": {"username": "...", "password": "..."}} for the schema registry's basic auth`)
+		}
+		regUser, regPass = s.Registry.Username, s.Registry.Password
 	}
 	opts := []kgo.Opt{kgo.SeedBrokers(cfg.Brokers...), kgo.ClientID("turgon"), kgo.FetchMaxWait(time.Second)}
 	if cfg.TLS {
@@ -182,7 +203,7 @@ func New(cfg Config, secret string) (*Conn, error) {
 			opts = append(opts, kgo.SASL(scram.Auth{User: creds.Username, Pass: creds.Password}.AsSha512Mechanism()))
 		}
 	}
-	return &Conn{cfg: cfg, opts: opts}, nil
+	return &Conn{cfg: cfg, opts: opts, reg: newRegistry(cfg.SchemaRegistry, regUser, regPass)}, nil
 }
 
 func (c *Conn) Close() {}
@@ -300,7 +321,7 @@ func (c *Conn) Stream(ctx context.Context, event string, resume []byte, deliver 
 			}
 			read = true
 			pos[r.Partition] = r.Offset + 1
-			e, ok, err := convert(event, r.Key, r.Value, keep, ev.Match)
+			e, ok, err := c.convert(ctx, event, r.Key, r.Value, keep, ev.Match)
 			if err != nil {
 				convErr = fmt.Errorf("debezium: %s partition %d offset %d: %w", r.Topic, r.Partition, r.Offset, err)
 				return
@@ -380,6 +401,17 @@ func (c *Conn) Check(ctx context.Context) []connector.CheckResult {
 		return []connector.CheckResult{connector.Fail("kafka", err.Error(), fix)}
 	}
 	out := []connector.CheckResult{connector.Pass("kafka", fmt.Sprintf("%d broker(s)", len(md.Brokers)))}
+	if c.reg != nil {
+		if n, err := c.reg.subjects(ctx); err != nil {
+			fix := connector.NetworkFix(err, c.reg.url)
+			if strings.Contains(err.Error(), "HTTP 401") || strings.Contains(err.Error(), "HTTP 403") {
+				fix = `The registry rejected the credentials: put its API key and secret in the connection's secret as {"registry": {"username": ..., "password": ...}}.`
+			}
+			out = append(out, connector.Fail("schema registry", err.Error(), fix))
+		} else {
+			out = append(out, connector.Pass("schema registry", fmt.Sprintf("%s, %d subject(s)", c.reg.url, n)))
+		}
+	}
 	for _, n := range names {
 		t := c.cfg.Events[n].Topic
 		d, ok := md.Topics[t]
@@ -400,11 +432,11 @@ func (c *Conn) Check(ctx context.Context) []connector.CheckResult {
 
 // convert makes a Debezium change record an event. ok is false for records
 // the event does not take (another operation, a tombstone, no match).
-func convert(event string, key, value []byte, keep map[string]bool, match map[string]any) (connector.Event, bool, error) {
+func (c *Conn) convert(ctx context.Context, event string, key, value []byte, keep map[string]bool, match map[string]any) (connector.Event, bool, error) {
 	if len(value) == 0 {
 		return connector.Event{}, false, nil // a tombstone, for log compaction
 	}
-	env, err := decodeEnvelope(value)
+	env, canonKey, err := c.decode(ctx, key, value)
 	if err != nil {
 		return connector.Event{}, false, err
 	}
@@ -441,7 +473,7 @@ func convert(event string, key, value []byte, keep map[string]bool, match map[st
 	if err != nil {
 		return connector.Event{}, false, err
 	}
-	return connector.Event{ID: changeID(env, key), Name: event, Payload: b}, true, nil
+	return connector.Event{ID: changeID(env, canonKey), Name: event, Payload: b}, true, nil
 }
 
 func opName(op string) string {
@@ -477,8 +509,39 @@ var positionFields = map[string][]string{
 	"mongodb":    {"ord", "lsid", "txnNumber"},
 }
 
-// changeID derives the event ID from the change's log position, key and
-// operation.
+// decode reads a change's envelope, and its key as canonical JSON: Avro
+// in the Confluent wire format with a schema registry, JSON otherwise. An
+// Avro key gives the same JSON as the JSON converter's, so a change keeps
+// its ID if the converter changes.
+func (c *Conn) decode(ctx context.Context, key, value []byte) (envelope, []byte, error) {
+	if _, _, avro := wireFormat(value); avro {
+		if c.reg == nil {
+			return envelope{}, nil, errors.New("this change is Avro in the Confluent wire format: set the connection's schemaRegistry")
+		}
+		_, m, err := c.reg.decodeAvro(ctx, value)
+		if err != nil {
+			return envelope{}, nil, err
+		}
+		env, err := avroEnvelope(m)
+		if err != nil {
+			return envelope{}, nil, err
+		}
+		canon := canonicalKey(key)
+		if _, _, avroKey := wireFormat(key); avroKey {
+			_, km, err := c.reg.decodeAvro(ctx, key)
+			if err != nil {
+				return envelope{}, nil, fmt.Errorf("key: %w", err)
+			}
+			canon, _ = json.Marshal(km) // map keys are sorted
+		}
+		return env, canon, nil
+	}
+	env, err := decodeEnvelope(value)
+	return env, canonicalKey(key), err
+}
+
+// changeID derives the event ID from the change's log position, key (as
+// canonical JSON) and operation.
 func changeID(env envelope, key []byte) string {
 	h := sha256.New()
 	connector, _ := env.Source["connector"].(string)
@@ -506,7 +569,7 @@ func changeID(env envelope, key []byte) string {
 	for _, k := range []string{"db", "schema", "table", "collection"} {
 		fmt.Fprintf(h, "%v\x00", env.Source[k])
 	}
-	h.Write(canonicalKey(key))
+	h.Write(key)
 	return hex.EncodeToString(h.Sum(nil)[:16])
 }
 

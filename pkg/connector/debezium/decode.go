@@ -230,6 +230,12 @@ func toInt(v any) (int64, error) {
 		return n.Int64()
 	case float64:
 		return int64(n), nil
+	case int:
+		return int64(n), nil
+	case int32:
+		return int64(n), nil
+	case int64:
+		return n, nil
 	}
 	return 0, fmt.Errorf("expected a number, got %v", v)
 }
