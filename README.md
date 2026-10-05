@@ -112,6 +112,31 @@ config:
 - **`turgon check`** asks the Pub/Sub API whether each topic exists and whether the
   integration user may subscribe to it.
 
+**Managed subscriptions.** With `managed: <DeveloperName>` on a subscription, Turgon subscribes
+through a managed event subscription (Pub/Sub API `ManagedSubscribe`), and Salesforce keeps the
+position. Each batch's replay ID is committed only after the inbox has stored the batch. A worker
+that starts with an empty database (a new deployment, a restore, another region) resumes after the
+last event Turgon stored, not at the start of the stream. A commit lost to a crash only sends again
+events the inbox already holds, and a failed commit reopens the subscription at the last committed
+position. Where a subscription that never committed starts is the managed subscription's
+`defaultReplay`, so `start` is not set alongside `managed`. Salesforce's `pubsub_api.proto` still
+marks `ManagedSubscribe` as a beta feature; check that your org has it.
+
+`turgon check` reads the managed subscription with the Tooling API: it must exist, follow the
+subscription's topic, and be running. When it is missing, the fix is the Tooling API request that
+creates it:
+
+```sh
+bin/turgon check -s sf-cdc.json
+# FAIL  salesforce-prod  subscription Opportunity.Won: no managed subscription Turgon_Won_Deals
+#       fix: Create it with the Tooling API: POST /services/data/v61.0/tooling/sobjects/ManagedEventSubscription
+#       {"FullName":"Turgon_Won_Deals","Metadata":{"label":"Turgon_Won_Deals","topicName":"/data/OpportunityChangeEvent",
+#       "defaultReplay":"LATEST","errorRecoveryReplay":"LATEST","state":"RUN"}} (a user with Customize Application; ...)
+# after the POST:
+# ok    salesforce-prod  subscription Opportunity.Won: /data/OpportunityChangeEvent through managed subscription
+#       Turgon_Won_Deals (new subscribers start at latest)
+```
+
 The fake org also serves the Pub/Sub API (plaintext gRPC on `127.0.0.1:7443`; Turgon uses
 TLS for every endpoint except a loopback one). Each deal won through `sf.cmds` is published
 as a change event. In a catalog whose connection sets `pubsubEndpoint: 127.0.0.1:7443`:
@@ -121,6 +146,13 @@ bin/turgon compile -c my-catalog salesforce-won-deals-to-erp-cdc -o sf-cdc.json
 bin/turgon run -s sf-cdc.json & bin/turgon run -s sf-cdc.json &   # one subscribes, one stands by
 echo "001000000000001AAA 7800" >> sf.cmds                          # the run starts at once
 ```
+
+For a managed subscription, uncomment `managed: Turgon_Won_Deals` in the connection, and create it
+in the fake org with the Tooling API request `turgon check` prints, or with
+`echo "managed Turgon_Won_Deals /data/OpportunityChangeEvent" >> sf.cmds`.
+`echo "committed Turgon_Won_Deals" >> sf.cmds` prints the position Salesforce holds. Stop the
+workers, delete `turgon_stream_positions`, win another deal, and start a worker: it delivers only
+that deal.
 
 #### Linking accounts at go-live with the Bulk API
 
@@ -1682,10 +1714,11 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 ## Not built yet
 
-In rough roadmap order (§16, §19): Salesforce managed subscriptions (the Pub/Sub API keeping the replay position).
-The metadata graph has discovery, snapshots and drift; the `rest` and `debezium` connectors do not
-discover yet, the console does not show the graph, and a mapping's use of a field is found only when
-it reads the object by the connector's name for it (`salesforce.Opportunity`). Of the Camel/Java connectors, only SAP ECC exists so far. It is
+In rough roadmap order (§16, §19), the rest of the metadata graph comes first. It has discovery,
+snapshots and drift. The `rest` and `debezium` connectors do not discover yet, and the console does not
+show the graph. A mapping's use of a field is found only when it reads the object by the connector's
+name for it (`salesforce.Opportunity`). Managed subscriptions are tested against the fake org's Pub/Sub
+and Tooling APIs, not yet against a real org. Of the Camel/Java connectors, only SAP ECC exists so far. It is
 tested against a fake ECC and a JCo stand-in, not yet against a real SAP system or gateway. It reads
 IDocs as SAP pushes them, but not change pointers. The `shopify` and `powerbi-export` manifests
 still have no runtime.

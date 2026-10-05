@@ -52,6 +52,13 @@ type Subscription struct {
 	Start string `json:"start,omitempty"`
 	// Batch is how many events are requested at a time. Default 100.
 	Batch int `json:"batch,omitempty"`
+	// Managed names a managed event subscription (the DeveloperName of a
+	// ManagedEventSubscription, created in the org with the Tooling API).
+	// Salesforce then keeps the subscription's position: Turgon commits
+	// each batch's replay ID once its inbox holds the batch, and a worker
+	// that starts anywhere resumes there. Its topic must be Topic; where a
+	// new subscription starts is the managed subscription's defaultReplay.
+	Managed string `json:"managed,omitempty"`
 	// Fields, if set, reads each changed record's current values with SOQL
 	// (subqueries allowed) and makes them the payload, next to the
 	// ChangeEventHeader: a change event carries only the fields that
@@ -60,7 +67,10 @@ type Subscription struct {
 	Fields []string `json:"fields,omitempty"`
 }
 
-var topicRE = regexp.MustCompile(`^/(data|event)/[A-Za-z0-9_]+$`)
+var (
+	topicRE         = regexp.MustCompile(`^/(data|event)/[A-Za-z0-9_]+$`)
+	developerNameRE = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]{0,79}$`)
+)
 
 func (s Subscription) validate(name string) error {
 	if !topicRE.MatchString(s.Topic) {
@@ -70,6 +80,14 @@ func (s Subscription) validate(name string) error {
 	case "", "latest", "earliest":
 	default:
 		return fmt.Errorf("subscription %s: start must be latest or earliest", name)
+	}
+	if s.Managed != "" {
+		if !developerNameRE.MatchString(s.Managed) || strings.Contains(s.Managed, "__") || strings.HasSuffix(s.Managed, "_") {
+			return fmt.Errorf("subscription %s: managed %q is not a developer name", name, s.Managed)
+		}
+		if s.Start != "" {
+			return fmt.Errorf("subscription %s: a managed subscription starts at its defaultReplay; remove start", name)
+		}
 	}
 	for _, ct := range s.ChangeTypes {
 		if !identRE.MatchString(ct) {
@@ -136,6 +154,10 @@ func (c *Conn) Stream(ctx context.Context, event string, resume []byte, deliver 
 	if !ok {
 		return fmt.Errorf("salesforce: event %q is not a subscription on this connection", event)
 	}
+	if sub.Managed != "" {
+		// Salesforce keeps the position; the one Turgon stored is not needed.
+		return c.streamManaged(ctx, event, sub, deliver)
+	}
 	err := c.stream(ctx, event, sub, resume, deliver)
 	if resume != nil && isReplayRejected(err) {
 		// The stored position is past Salesforce's retention (the worker was
@@ -195,22 +217,8 @@ func (c *Conn) stream(ctx context.Context, event string, sub Subscription, resum
 		if err != nil {
 			return err
 		}
-		var events []connector.Event
-		for _, ce := range resp.Events {
-			evs, err := c.convert(ctx, cc, event, sub, ce)
-			if err != nil {
-				return fmt.Errorf("salesforce pub/sub %s: event %s: %w", sub.Topic, ce.Event.ID, err)
-			}
-			events = append(events, evs...)
-		}
-		next := resp.LatestReplayID
-		if n := len(resp.Events); n > 0 && len(resp.Events[n-1].ReplayID) > 0 {
-			next = resp.Events[n-1].ReplayID
-		}
-		if len(resp.Events) > 0 || len(next) > 0 {
-			if err := deliver(events, next); err != nil {
-				return err
-			}
+		if _, err := c.handOver(ctx, cc, event, sub, resp.Events, resp.LatestReplayID, deliver); err != nil {
+			return err
 		}
 		// Keep events flowing: ask for more once half the batch arrived.
 		pending -= int32(len(resp.Events))
@@ -218,6 +226,105 @@ func (c *Conn) stream(ctx context.Context, event string, sub Subscription, resum
 			more := pubsub.FetchRequest{TopicName: sub.Topic, NumRequested: batch - pending}.Encode()
 			if err := st.SendMsg(&more); err != nil {
 				return c.rpcErr(token, err)
+			}
+			pending = batch
+		}
+	}
+}
+
+// handOver converts a response's events and delivers them with the
+// position after them (the last event's, or the latest replay ID of an
+// empty response). It returns that position once delivered, or nil.
+func (c *Conn) handOver(ctx context.Context, cc *grpc.ClientConn, event string, sub Subscription, in []pubsub.ConsumerEvent, latest []byte,
+	deliver func([]connector.Event, []byte) error) ([]byte, error) {
+	var events []connector.Event
+	for _, ce := range in {
+		evs, err := c.convert(ctx, cc, event, sub, ce)
+		if err != nil {
+			return nil, fmt.Errorf("salesforce pub/sub %s: event %s: %w", sub.Topic, ce.Event.ID, err)
+		}
+		events = append(events, evs...)
+	}
+	next := latest
+	if n := len(in); n > 0 && len(in[n-1].ReplayID) > 0 {
+		next = in[n-1].ReplayID
+	}
+	if len(in) == 0 && len(next) == 0 {
+		return nil, nil
+	}
+	if err := deliver(events, next); err != nil {
+		return nil, err
+	}
+	return next, nil
+}
+
+// streamManaged subscribes through a managed subscription. After each
+// batch is delivered (the inbox holds it), its replay ID is committed, so
+// Salesforce resumes after it; a commit lost to a crash only repeats
+// events the inbox already holds.
+func (c *Conn) streamManaged(ctx context.Context, event string, sub Subscription, deliver func([]connector.Event, []byte) error) error {
+	cc, err := c.pubsubConn()
+	if err != nil {
+		return err
+	}
+	token, instance, org, err := c.sess.identity(ctx)
+	if err != nil {
+		return err
+	}
+	if org == "" {
+		return errors.New("salesforce pub/sub: the token response named no org (identity URL missing)")
+	}
+	ctx, cancel := context.WithCancel(metadata.NewOutgoingContext(ctx,
+		metadata.Pairs("accesstoken", token, "instanceurl", instance, "tenantid", org)))
+	defer cancel()
+	st, err := cc.NewStream(ctx, pubsub.ManagedSubscribeStream, pubsub.ManagedSubscribe)
+	if err != nil {
+		return c.rpcErr(token, err)
+	}
+	batch := int32(sub.Batch)
+	if batch <= 0 {
+		batch = 100
+	}
+	send := func(r pubsub.ManagedFetchRequest) error {
+		f := r.Encode()
+		if err := st.SendMsg(&f); err != nil {
+			return c.rpcErr(token, err)
+		}
+		return nil
+	}
+	if err := send(pubsub.ManagedFetchRequest{DeveloperName: sub.Managed, NumRequested: batch}); err != nil {
+		return err
+	}
+	pending, commits := batch, 0
+	for {
+		var in pubsub.Frame
+		if err := st.RecvMsg(&in); err != nil {
+			return c.rpcErr(token, err)
+		}
+		resp, err := pubsub.DecodeManagedFetchResponse(in)
+		if err != nil {
+			return err
+		}
+		if cr := resp.Commit; cr != nil && cr.Failed() {
+			// Salesforce keeps the last position it committed; reopening
+			// resumes there, and the inbox drops what it already holds.
+			return fmt.Errorf("salesforce pub/sub: managed subscription %s: commit %s failed: %s", sub.Managed, cr.CommitRequestID, cr.ErrorMessage)
+		}
+		next, err := c.handOver(ctx, cc, event, sub, resp.Events, resp.LatestReplayID, deliver)
+		if err != nil {
+			return err
+		}
+		if next != nil {
+			commits++
+			if err := send(pubsub.ManagedFetchRequest{Commit: &pubsub.CommitReplayRequest{
+				CommitRequestID: fmt.Sprintf("turgon-%s-%d", event, commits), ReplayID: next}}); err != nil {
+				return err
+			}
+		}
+		pending -= int32(len(resp.Events))
+		if pending <= batch/2 {
+			if err := send(pubsub.ManagedFetchRequest{NumRequested: batch - pending}); err != nil {
+				return err
 			}
 			pending = batch
 		}

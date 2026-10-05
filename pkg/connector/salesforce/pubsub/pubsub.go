@@ -1,5 +1,6 @@
 // Package pubsub speaks the part of Salesforce's Pub/Sub API (gRPC service
-// eventbus.v1.PubSub) that subscribers use: Subscribe and GetSchema. Its
+// eventbus.v1.PubSub) that subscribers use: Subscribe, ManagedSubscribe,
+// GetSchema and GetTopic. Its
 // few messages are encoded by hand with protowire, which keeps generated
 // code and protoc out of the build; field numbers follow Salesforce's
 // pubsub_api.proto.
@@ -19,6 +20,9 @@ const (
 	Subscribe = "/" + Service + "/Subscribe"
 	GetSchema = "/" + Service + "/GetSchema"
 	GetTopic  = "/" + Service + "/GetTopic"
+	// ManagedSubscribe subscribes through a managed subscription: Salesforce
+	// keeps the position the subscriber commits.
+	ManagedSubscribe = "/" + Service + "/ManagedSubscribe"
 )
 
 // Replay presets.
@@ -98,6 +102,9 @@ func CallOption() grpc.CallOption { return grpc.ForceCodec(Codec{}) }
 
 // SubscribeStream describes the bidirectional Subscribe stream.
 var SubscribeStream = &grpc.StreamDesc{StreamName: "Subscribe", ServerStreams: true, ClientStreams: true}
+
+// ManagedSubscribeStream describes the bidirectional ManagedSubscribe stream.
+var ManagedSubscribeStream = &grpc.StreamDesc{StreamName: "ManagedSubscribe", ServerStreams: true, ClientStreams: true}
 
 func appendString(b []byte, num protowire.Number, s string) []byte {
 	if s == "" {
@@ -187,16 +194,47 @@ func (e ProducerEvent) encode() []byte {
 	return appendBytes(b, 3, e.Payload)
 }
 
-func (r FetchResponse) Encode() Frame {
-	var b []byte
-	for _, ev := range r.Events {
-		var e []byte
-		e = protowire.AppendTag(e, 1, protowire.BytesType)
-		e = protowire.AppendBytes(e, ev.Event.encode())
-		e = appendBytes(e, 2, ev.ReplayID)
+func (ce ConsumerEvent) encode() []byte {
+	var e []byte
+	e = protowire.AppendTag(e, 1, protowire.BytesType)
+	e = protowire.AppendBytes(e, ce.Event.encode())
+	return appendBytes(e, 2, ce.ReplayID)
+}
+
+func decodeConsumerEvent(b []byte) (ConsumerEvent, error) {
+	var ce ConsumerEvent
+	err := fields(b, func(num protowire.Number, _ protowire.Type, raw []byte, _ uint64) error {
+		switch num {
+		case 1:
+			return fields(raw, func(num protowire.Number, _ protowire.Type, raw []byte, _ uint64) error {
+				switch num {
+				case 1:
+					ce.Event.ID = string(raw)
+				case 2:
+					ce.Event.SchemaID = string(raw)
+				case 3:
+					ce.Event.Payload = append([]byte{}, raw...)
+				}
+				return nil
+			})
+		case 2:
+			ce.ReplayID = append([]byte{}, raw...)
+		}
+		return nil
+	})
+	return ce, err
+}
+
+func appendEvents(b []byte, evs []ConsumerEvent) []byte {
+	for _, ev := range evs {
 		b = protowire.AppendTag(b, 1, protowire.BytesType)
-		b = protowire.AppendBytes(b, e)
+		b = protowire.AppendBytes(b, ev.encode())
 	}
+	return b
+}
+
+func (r FetchResponse) Encode() Frame {
+	b := appendEvents(nil, r.Events)
 	b = appendBytes(b, 2, r.LatestReplayID)
 	b = appendString(b, 3, r.RPCID)
 	b = appendVarint(b, 4, uint64(r.PendingNumRequested))
@@ -208,26 +246,7 @@ func DecodeFetchResponse(b []byte) (FetchResponse, error) {
 	err := fields(b, func(num protowire.Number, _ protowire.Type, raw []byte, v uint64) error {
 		switch num {
 		case 1:
-			var ce ConsumerEvent
-			err := fields(raw, func(num protowire.Number, _ protowire.Type, raw []byte, _ uint64) error {
-				switch num {
-				case 1:
-					return fields(raw, func(num protowire.Number, _ protowire.Type, raw []byte, _ uint64) error {
-						switch num {
-						case 1:
-							ce.Event.ID = string(raw)
-						case 2:
-							ce.Event.SchemaID = string(raw)
-						case 3:
-							ce.Event.Payload = append([]byte{}, raw...)
-						}
-						return nil
-					})
-				case 2:
-					ce.ReplayID = append([]byte{}, raw...)
-				}
-				return nil
-			})
+			ce, err := decodeConsumerEvent(raw)
 			if err != nil {
 				return err
 			}
@@ -320,4 +339,157 @@ func DecodeTopicInfo(b []byte) (TopicInfo, error) {
 		return nil
 	})
 	return t, err
+}
+
+// ManagedFetchRequest opens a managed subscription (the first names it),
+// asks for more events, or commits a position.
+type ManagedFetchRequest struct {
+	SubscriptionID string
+	DeveloperName  string
+	NumRequested   int32
+	Commit         *CommitReplayRequest
+}
+
+// CommitReplayRequest asks Salesforce to keep a position: the last event
+// processed, or the latest replay ID of an empty batch.
+type CommitReplayRequest struct {
+	CommitRequestID string
+	ReplayID        []byte
+}
+
+// ManagedFetchResponse carries events, or none with the latest position,
+// and may answer commits.
+type ManagedFetchResponse struct {
+	Events              []ConsumerEvent
+	LatestReplayID      []byte
+	RPCID               string
+	PendingNumRequested int32
+	Commit              *CommitReplayResponse
+}
+
+// CommitReplayResponse answers the latest of one or more commits.
+type CommitReplayResponse struct {
+	CommitRequestID string
+	ReplayID        []byte
+	// ErrorCode and ErrorMessage are set for a failed commit (code 2,
+	// COMMIT, cannot be retried).
+	ErrorCode    int
+	ErrorMessage string
+	ProcessTime  int64
+}
+
+// Failed reports whether the commit failed.
+func (c CommitReplayResponse) Failed() bool { return c.ErrorCode != 0 || c.ErrorMessage != "" }
+
+func (c CommitReplayRequest) encode() []byte {
+	return appendBytes(appendString(nil, 1, c.CommitRequestID), 2, c.ReplayID)
+}
+
+func (r ManagedFetchRequest) Encode() Frame {
+	var b []byte
+	b = appendString(b, 1, r.SubscriptionID)
+	b = appendString(b, 2, r.DeveloperName)
+	b = appendVarint(b, 3, uint64(r.NumRequested))
+	if r.Commit != nil {
+		b = protowire.AppendTag(b, 5, protowire.BytesType)
+		b = protowire.AppendBytes(b, r.Commit.encode())
+	}
+	return b
+}
+
+func DecodeManagedFetchRequest(b []byte) (ManagedFetchRequest, error) {
+	var r ManagedFetchRequest
+	err := fields(b, func(num protowire.Number, _ protowire.Type, raw []byte, v uint64) error {
+		switch num {
+		case 1:
+			r.SubscriptionID = string(raw)
+		case 2:
+			r.DeveloperName = string(raw)
+		case 3:
+			r.NumRequested = int32(v)
+		case 5:
+			c := &CommitReplayRequest{}
+			r.Commit = c
+			return fields(raw, func(num protowire.Number, _ protowire.Type, raw []byte, _ uint64) error {
+				switch num {
+				case 1:
+					c.CommitRequestID = string(raw)
+				case 2:
+					c.ReplayID = append([]byte{}, raw...)
+				}
+				return nil
+			})
+		}
+		return nil
+	})
+	return r, err
+}
+
+func (c CommitReplayResponse) encode() []byte {
+	b := appendString(nil, 1, c.CommitRequestID)
+	b = appendBytes(b, 2, c.ReplayID)
+	if c.Failed() {
+		e := appendString(appendVarint(nil, 1, uint64(c.ErrorCode)), 2, c.ErrorMessage)
+		b = protowire.AppendTag(b, 3, protowire.BytesType)
+		b = protowire.AppendBytes(b, e)
+	}
+	return appendVarint(b, 4, uint64(c.ProcessTime))
+}
+
+func (r ManagedFetchResponse) Encode() Frame {
+	b := appendEvents(nil, r.Events)
+	b = appendBytes(b, 2, r.LatestReplayID)
+	b = appendString(b, 3, r.RPCID)
+	b = appendVarint(b, 4, uint64(r.PendingNumRequested))
+	if r.Commit != nil {
+		b = protowire.AppendTag(b, 5, protowire.BytesType)
+		b = protowire.AppendBytes(b, r.Commit.encode())
+	}
+	return b
+}
+
+func DecodeManagedFetchResponse(b []byte) (ManagedFetchResponse, error) {
+	var r ManagedFetchResponse
+	err := fields(b, func(num protowire.Number, _ protowire.Type, raw []byte, v uint64) error {
+		switch num {
+		case 1:
+			ce, err := decodeConsumerEvent(raw)
+			if err != nil {
+				return err
+			}
+			r.Events = append(r.Events, ce)
+		case 2:
+			r.LatestReplayID = append([]byte{}, raw...)
+		case 3:
+			r.RPCID = string(raw)
+		case 4:
+			r.PendingNumRequested = int32(v)
+		case 5:
+			c := &CommitReplayResponse{}
+			r.Commit = c
+			return fields(raw, func(num protowire.Number, _ protowire.Type, raw []byte, v uint64) error {
+				switch num {
+				case 1:
+					c.CommitRequestID = string(raw)
+				case 2:
+					c.ReplayID = append([]byte{}, raw...)
+				case 3:
+					return fields(raw, func(num protowire.Number, _ protowire.Type, raw []byte, v uint64) error {
+						switch num {
+						case 1:
+							c.ErrorCode = int(v)
+						case 2:
+							c.ErrorMessage = string(raw)
+						}
+						return nil
+					})
+				case 4:
+					c.ProcessTime = int64(v)
+				}
+				return nil
+			})
+		}
+		return nil
+	})
+	return r, err
 }

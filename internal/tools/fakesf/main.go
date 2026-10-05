@@ -61,6 +61,20 @@ func main() {
 			fmt.Fprintf(os.Stderr, "updates to %s are rejected by a validation rule\n", f[1])
 			continue
 		}
+		if (len(f) == 3 || len(f) == 4) && f[0] == "managed" {
+			replay := "LATEST"
+			if len(f) == 4 {
+				replay = strings.ToUpper(f[3])
+			}
+			sf.CreateManaged(f[1], f[2], replay)
+			fmt.Fprintf(os.Stderr, "managed subscription %s on %s (new subscribers start at %s)\n", f[1], f[2], replay)
+			continue
+		}
+		if len(f) == 2 && f[0] == "committed" {
+			m, ok := sf.Managed(f[1])
+			fmt.Fprintf(os.Stderr, "managed subscription %s: found %v, %d commits, committed %x\n", f[1], ok, m.Commits, m.Committed)
+			continue
+		}
 		if len(f) == 2 && f[0] == "readonly" {
 			sf.SetReadOnly(f[1])
 			fmt.Fprintf(os.Stderr, "%s is read-only for the integration user\n", f[1])
@@ -76,7 +90,7 @@ func main() {
 			continue
 		}
 		if len(f) != 2 {
-			fmt.Fprintln(os.Stderr, "usage: <AccountId> <Amount> | account <AccountId> <ERP number> <name> | accounts <n> | reject <RecordId> | readonly <SObject.Field>")
+			fmt.Fprintln(os.Stderr, "usage: <AccountId> <Amount> | account <AccountId> <ERP number> <name> | accounts <n> | reject <RecordId> | readonly <SObject.Field> | managed <Name> <topic> [EARLIEST] | committed <Name>")
 			continue
 		}
 		amount, _ := strconv.ParseFloat(f[1], 64)

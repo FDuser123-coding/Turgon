@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -132,11 +133,67 @@ func (c *Conn) checkSubscriptions(ctx context.Context) []connector.CheckResult {
 		case !info.CanSubscribe:
 			out = append(out, connector.Fail(label, "the integration user cannot subscribe to "+sub.Topic,
 				"Give the integration user read access to the object (change events) or the platform event in a permission set."))
+		case sub.Managed != "":
+			out = append(out, c.checkManaged(ctx, label, sub))
 		default:
 			out = append(out, connector.Pass(label, sub.Topic))
 		}
 	}
 	return out
+}
+
+// ManagedEventSubscription is a managed subscription as the Tooling API
+// returns it.
+type ManagedEventSubscription struct {
+	ID            string `json:"Id"`
+	DeveloperName string `json:"DeveloperName"`
+	Metadata      struct {
+		Label               string `json:"label"`
+		TopicName           string `json:"topicName"`
+		DefaultReplay       string `json:"defaultReplay"`
+		ErrorRecoveryReplay string `json:"errorRecoveryReplay"`
+		State               string `json:"state"`
+	} `json:"Metadata"`
+}
+
+// managedSubscription reads a managed subscription by developer name.
+func (c *Conn) managedSubscription(ctx context.Context, name string) (*ManagedEventSubscription, error) {
+	var res struct {
+		Records []ManagedEventSubscription `json:"records"`
+	}
+	soql := "SELECT Id, DeveloperName, Metadata FROM ManagedEventSubscription WHERE DeveloperName = '" + name + "'" // name is a validated developer name
+	if err := c.do(ctx, http.MethodGet, c.base()+"/tooling/query?q="+url.QueryEscape(soql), nil, &res); err != nil {
+		return nil, err
+	}
+	if len(res.Records) == 0 {
+		return nil, nil
+	}
+	return &res.Records[0], nil
+}
+
+// checkManaged verifies that the managed subscription exists, runs, and
+// follows the subscription's topic.
+func (c *Conn) checkManaged(ctx context.Context, label string, sub Subscription) connector.CheckResult {
+	create := fmt.Sprintf(`Create it with the Tooling API: POST %s/tooling/sobjects/ManagedEventSubscription `+
+		`{"FullName":"%s","Metadata":{"label":"%s","topicName":"%s","defaultReplay":"LATEST","errorRecoveryReplay":"LATEST","state":"RUN"}} `+
+		`(a user with Customize Application; the integration user needs read access to the topic).`, c.base(), sub.Managed, sub.Managed, sub.Topic)
+	m, err := c.managedSubscription(ctx, sub.Managed)
+	switch {
+	case err != nil:
+		return connector.Fail(label, err.Error(), "The integration user must be able to read ManagedEventSubscription with the Tooling API "+
+			"(View Setup and Configuration), and the org must have managed event subscriptions. "+create)
+	case m == nil:
+		return connector.Fail(label, "no managed subscription "+sub.Managed, create)
+	case m.Metadata.TopicName != sub.Topic:
+		return connector.Fail(label, fmt.Sprintf("managed subscription %s follows %s, not %s", sub.Managed, m.Metadata.TopicName, sub.Topic),
+			"Point the connection's topic and the managed subscription at the same channel; a managed subscription's topic cannot change, so create a new one for another topic.")
+	case !strings.EqualFold(m.Metadata.State, "RUN"):
+		return connector.Fail(label, fmt.Sprintf("managed subscription %s is %s", sub.Managed, m.Metadata.State),
+			fmt.Sprintf("Set it running: PATCH %s/tooling/sobjects/ManagedEventSubscription/%s with its Metadata and state RUN.",
+				c.base(), m.ID))
+	}
+	return connector.Pass(label, fmt.Sprintf("%s through managed subscription %s (new subscribers start at %s)", sub.Topic, sub.Managed,
+		strings.ToLower(or(m.Metadata.DefaultReplay, "LATEST"))))
 }
 
 func loginFix(err error, c Credentials) string {

@@ -28,6 +28,9 @@ spec:
     subscriptions:
       Opportunity.Won:
         topic: /data/OpportunityChangeEvent
+        # With a managed subscription, Salesforce keeps the position Turgon
+        # commits (see `turgon check` for creating it):
+        # managed: Turgon_Won_Deals
         changeTypes: [UPDATE]
         match: { StageName: Closed Won }
         # A change event carries only what changed: read what the flow needs.

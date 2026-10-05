@@ -98,6 +98,8 @@ func (s *Server) PubSub() string {
 		},
 		Streams: []grpc.StreamDesc{{StreamName: "Subscribe", ServerStreams: true, ClientStreams: true, Handler: func(_ any, st grpc.ServerStream) error {
 			return s.subscribe(st)
+		}}, {StreamName: "ManagedSubscribe", ServerStreams: true, ClientStreams: true, Handler: func(_ any, st grpc.ServerStream) error {
+			return s.managedSubscribe(st)
 		}}},
 	}, struct{}{})
 	go func() { _ = ps.srv.Serve(lis) }()

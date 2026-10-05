@@ -144,3 +144,47 @@ func TestOneWorkerSubscribesPerEvent(t *testing.T) {
 	sf.PublishChange(sftest.Change{Type: "UPDATE", RecordIDs: []string{wonDeal}, Fields: map[string]any{"StageName": "Closed Won"}})
 	wait(t, delivered)
 }
+
+// With a managed subscription, Salesforce keeps the position: a worker
+// whose database lost it (a new deployment, a restore) resumes after the
+// last event Turgon stored, not from the start.
+func TestManagedSubscriptionResumesWhereSalesforceKeptIt(t *testing.T) {
+	sf := sftest.New()
+	t.Cleanup(sf.Close)
+	t.Cleanup(sf.ClosePubSub)
+	addr := sf.PubSub()
+	sf.CreateManaged("Turgon_Won_Deals", "/data/OpportunityChangeEvent", "LATEST")
+	f := newFixtureFor(t, "salesforce-won-deals-to-erp-cdc", connector.StaticSecrets{"openbao://salesforce/prod-jwt": sf.Credentials()},
+		func(cfg string) string {
+			cfg = strings.Replace(cfg, `"subscriptions":`, `"pubsubEndpoint":"`+addr+`","subscriptions":`, 1)
+			return strings.Replace(cfg, `"topic":"/data/OpportunityChangeEvent"`, `"managed":"Turgon_Won_Deals","topic":"/data/OpportunityChangeEvent"`, 1)
+		})
+	delivered, stop := subscribe(t, f)
+	waitFor(t, "the managed subscription", func() bool { return sf.ManagedSubscribers() == 1 })
+	putDeal(sf, wonDeal, 1200.5)
+	first := sf.PublishChange(sftest.Change{Type: "UPDATE", RecordIDs: []string{wonDeal}, Fields: map[string]any{"StageName": "Closed Won"}})
+	wait(t, delivered)
+	waitFor(t, "the commit", func() bool { m, _ := sf.Managed("Turgon_Won_Deals"); return string(m.Committed) == string(first) })
+
+	stop()
+	if _, err := f.pool.Exec(context.Background(), `DELETE FROM turgon_stream_positions`); err != nil {
+		t.Fatal(err)
+	}
+	other := "006000000000002AAA"
+	putDeal(sf, other, 99)
+	sf.PublishChange(sftest.Change{Type: "UPDATE", RecordIDs: []string{other}, Fields: map[string]any{"StageName": "Closed Won"}})
+	delivered, _ = subscribe(t, f)
+	wait(t, delivered)
+
+	d := &Dispatcher{Runtime: f.rt, Cursors: f.store, Starter: &recorder{}, Inbox: f.store}
+	if _, err := d.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rec := d.Starter.(*recorder)
+	if len(rec.ids) != 2 {
+		t.Fatalf("runs = %v", rec.ids)
+	}
+	if fetches := sf.Fetches(); len(fetches) != 0 {
+		t.Fatalf("an unmanaged subscription was opened: %+v", fetches)
+	}
+}
