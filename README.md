@@ -791,8 +791,27 @@ database as a snapshot. The connectors read it from the system's own catalog:
 | `sap-odata` | entity sets, with properties, keys, `MaxLength`, `sap:label`, `sap:creatable`/`updatable`, navigation targets | each service's `$metadata` |
 | `sap-ecc` | BAPI interfaces, the dictionary structures the BAPIs take, IDoc segments | `RFC_GET_FUNCTION_INTERFACE`, `DDIF_FIELDINFO_GET`, `IDOCTYPE_READ_COMPLETE` |
 | `debezium` | each captured table, with its columns' Connect types (`decimal(12,2)`, `Date`, `Json`), optional or not, defaults, the key, and, with Debezium's `column.propagate.source.type`, the database's own type and length | the newest change on each topic: its Kafka Connect schema, or its values when schemas are off |
-| `rest` | each event's list items, sampled | one page of the event's list request |
+| `rest` with `openapi` | each event's list items, each read's record, each write's request body, with types and formats, maximum lengths, required and read-only properties | the API's OpenAPI 3 description (JSON or YAML) |
+| `rest` without one | each event's list items, sampled | one page of the event's list request |
 | `postgres` outbox | each outbox event's payload, sampled | the latest 500 outbox rows |
+
+A REST connection's `openapi` names the API's OpenAPI 3 description, such as Stripe's
+`https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json`. Each event, read and
+write is matched to its operation by method and path, `{{orderId}}` to `{order_id}`, with or without
+the server's base path. A schema the description names becomes an object of that name (`invoice`,
+`event`); an inline one is named after its request. A write counts as a user of every property of
+its request body, so a property the API makes required breaks it, marked **(writes)**. Against
+Stripe's published description, with a version served locally that removed `invoice.amount_paid`
+and required `description` on an invoice update:
+
+```
+BREAKING became-required POST /v1/invoices/{invoice} request.description; used by operation link-invoice (writes)
+BREAKING field-removed invoice.amount_paid (was integer); used by operation get-invoice
+```
+
+`turgon discover --catalog` (`-c`) also counts the mappings of every recipe in a catalog, compiled
+or not, and so does the console. A recipe waiting for mapping review does not compile yet, but its
+mappings read fields all the same.
 
 An API without a schema, or a JSON payload, is **sampled**: its fields are those seen in recent
 records, with their JSON types (`string`, `number`, `datetime`, `array`...). A field missing from a
@@ -837,7 +856,7 @@ psql "$ERP_DSN" -c "ALTER TABLE erp.sales_orders ALTER COLUMN currency TYPE char
   ALTER TABLE erp.sales_orders ADD COLUMN channel text NOT NULL"
 bin/turgon discover -s shop.json --database-url "$TURGON_DATABASE_URL" --fail-on-breaking   # exits 1
 # erp-db (postgres 1.0.0): 3 objects, 22 fields; changed: snapshot 3, previous 1 (2026-10-04T17:05:21Z)
-#   BREAKING field-added erp.sales_orders.channel (text); used by operation create-sales-order (creates)
+#   BREAKING field-added erp.sales_orders.channel (text); used by operation create-sales-order (writes)
 #   BREAKING length-shrunk erp.sales_orders.currency (3 -> 2); used by operation create-sales-order, operation get-sales-order
 #            field-added erp.customers.vat_id (text)
 # shop-db (postgres 1.0.0): 2 objects, 9 fields; unchanged since snapshot 2 (2026-10-04T17:05:21Z)
@@ -1768,10 +1787,9 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 ## Not built yet
 
-In rough roadmap order (§16, §19), the metadata graph's remaining gaps come first. Recipes that do
-not compile, such as those waiting for mapping review, are left out of what uses each field. A REST
-API's write targets are not discovered, only its events' lists. Debezium topics in Protobuf or JSON
-Schema (with a registry) are not read, only Avro and plain JSON. Managed subscriptions are tested against the fake org's Pub/Sub
+In rough roadmap order (§16, §19): a REST API without an OpenAPI description has only its events'
+lists discovered (sampled), not its write targets. Debezium topics in Protobuf or JSON Schema (with
+a registry) are not read, only Avro and plain JSON. Managed subscriptions are tested against the fake org's Pub/Sub
 and Tooling APIs, not yet against a real org. Of the Camel/Java connectors, only SAP ECC exists so far. It is
 tested against a fake ECC and a JCo stand-in, not yet against a real SAP system or gateway. It reads
 IDocs as SAP pushes them, but not change pointers. The `shopify` and `powerbi-export` manifests

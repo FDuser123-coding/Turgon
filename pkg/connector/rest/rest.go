@@ -48,7 +48,11 @@ type Config struct {
 	// secrets come from the connection's secret reference.
 	Headers map[string]string `json:"headers,omitempty"`
 	// CheckPath is fetched by `turgon check` to prove access, e.g. /shop.json.
-	CheckPath  string               `json:"checkPath,omitempty"`
+	CheckPath string `json:"checkPath,omitempty"`
+	// OpenAPI is the URL of the API's OpenAPI 3 description (JSON or
+	// YAML). Discovery then reads from it what each operation sends and
+	// receives and what each event's list returns, instead of sampling.
+	OpenAPI    string               `json:"openapi,omitempty"`
 	Events     map[string]Event     `json:"events,omitempty"`
 	Operations map[string]Operation `json:"operations,omitempty"`
 }
@@ -185,6 +189,12 @@ func (c Config) validate() error {
 	}
 	if err := c.Auth.validate(); err != nil {
 		return err
+	}
+	if c.OpenAPI != "" {
+		o, err := url.Parse(c.OpenAPI)
+		if err != nil || (o.Scheme != "https" && o.Scheme != "http") || o.Host == "" {
+			return fmt.Errorf("openapi %q must be an http(s) URL", c.OpenAPI)
+		}
 	}
 	if err := c.checkHeaders("", c.Headers); err != nil {
 		return err

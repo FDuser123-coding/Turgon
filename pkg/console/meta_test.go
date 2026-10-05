@@ -3,12 +3,17 @@ package console
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/fduser123-coding/turgon/pkg/catalog"
+	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/meta"
+	"github.com/fduser123-coding/turgon/pkg/verifier"
 )
 
 // fakeMeta keeps snapshots in memory, newest last.
@@ -116,5 +121,38 @@ func TestMetaWithoutDatabase(t *testing.T) {
 	}
 	if rec := do(t, s, "GET", "/api/meta/erp-db", "", nil); rec.Code != 404 {
 		t.Fatalf("detail %d", rec.Code)
+	}
+}
+
+// A mapping waiting for review still reads the fields it names: the
+// recipes using it do not compile, but their mappings count as users.
+func TestMetaUsageFromRecipesInReview(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.CopyFS(dir, os.DirFS("../../examples")); err != nil {
+		t.Fatal(err)
+	}
+	m := filepath.Join(dir, "mappings", "sf-opportunity-to-order.yaml")
+	data, _ := os.ReadFile(m)
+	held := strings.Replace(string(data), "origin: certified, confidence: 0.98", "origin: ai, confidence: 0.80", 1) // netValue
+	if held == string(data) {
+		t.Fatal("the mapping changed: update this test")
+	}
+	_ = os.WriteFile(m, []byte(held), 0o644)
+	cat, err := catalog.Load(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, _ := cat.Recipe("salesforce-won-deals-to-erp")
+	if _, _, err := compiler.Compile(cat, rec, verifier.Options{}); err == nil || !strings.Contains(err.Error(), "awaiting review") {
+		t.Fatalf("the recipe compiled: %v", err)
+	}
+	store := &fakeMeta{cats: []meta.Catalog{opportunity("currency"), opportunity("double")}}
+	s := New(Config{Runs: newRuns(), Auth: DevAuth{User: "dev"}, Catalogs: []string{dir}, Meta: store})
+	var d MetaDetail
+	if err := json.Unmarshal(do(t, s, "GET", "/api/meta/salesforce-prod", "", nil).Body.Bytes(), &d); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Changes) != 1 || !strings.Contains(strings.Join(d.Changes[0].UsedBy, ";"), "mapping sf-opportunity-to-order@3.0.0 (netValue)") {
+		t.Fatalf("changes %+v", d.Changes)
 	}
 }
