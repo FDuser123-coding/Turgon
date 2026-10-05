@@ -43,6 +43,9 @@ func TestDiscover(t *testing.T) {
 			t.Errorf("%s used by %v, want %s", key, u[key], want)
 		}
 	}
+	if cat.Events["SalesOrder.Changed"] != "A_SalesOrder" {
+		t.Fatalf("events %v", cat.Events)
+	}
 	cr := meta.Creators(cat)
 	if strings.Join(cr["A_SalesOrder"], ";") != "operation create-sales-order" || strings.Join(cr["A_SalesOrderItem"], ";") != "operation create-sales-order (items)" {
 		t.Fatalf("creators %v", cr)

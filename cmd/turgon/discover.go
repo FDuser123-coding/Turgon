@@ -33,14 +33,11 @@ type discovery struct {
 	// Previous is the snapshot the changes are measured from.
 	Previous *pgstore.Snapshot `json:"previous,omitempty"`
 	Changes  []meta.Change     `json:"changes,omitempty"`
-	// Missing are objects the configuration uses that the system lacks.
-	Missing []string     `json:"missing,omitempty"`
-	Catalog meta.Catalog `json:"-"`
+	// Missing are objects and fields the configuration uses that the
+	// system lacks.
+	Missing []meta.Missing `json:"missing,omitempty"`
+	Catalog meta.Catalog   `json:"-"`
 }
-
-// breaking reports whether a change can fail this deployment's runs: it
-// breaks, and something uses what changed.
-func breaking(c meta.Change) bool { return c.Breaking && len(c.UsedBy) > 0 }
 
 func discoverCmd() *cobra.Command {
 	var specPath, dbURL string
@@ -110,7 +107,7 @@ func discoverCmd() *cobra.Command {
 					failed = true
 				}
 				for _, c := range r.Changes {
-					failed = failed || (failOnBreaking && breaking(c))
+					failed = failed || (failOnBreaking && c.Breaks())
 				}
 			}
 			if failed {
@@ -161,8 +158,7 @@ func discoverAll(ctx context.Context, spec *compiler.RuntimeSpec, registry conne
 		for _, o := range cat.Objects {
 			d.Fields += len(o.Fields)
 		}
-		usage := meta.Usage(cat, spec)
-		d.Missing = missing(cat)
+		d.Missing = meta.MissingUses(cat)
 		if store != nil {
 			prev, had, err := store.LatestCatalog(ctx, c.Endpoint)
 			if err != nil {
@@ -177,7 +173,7 @@ func discoverAll(ctx context.Context, spec *compiler.RuntimeSpec, registry conne
 				if list, err := store.Snapshots(ctx, c.Endpoint); err == nil && len(list) > 1 {
 					d.Previous = &list[1]
 				}
-				d.Changes = sortChanges(meta.Annotate(meta.Diff(prev, cat), usage, meta.Creators(cat)))
+				d.Changes = meta.Compare(prev, cat, spec)
 			}
 		}
 		out = append(out, d)
@@ -211,44 +207,6 @@ func discoverOne(ctx context.Context, c compiler.ConnectorConfig, registry conne
 	return cat, nil
 }
 
-// missing lists the objects and fields the configuration uses that the
-// system does not hold.
-func missing(c meta.Catalog) []string {
-	by := map[string][]string{}
-	var keys []string
-	for _, u := range c.Uses {
-		o, ok := c.Object(u.Object)
-		key := u.Object
-		if ok {
-			if u.Field == "" {
-				continue
-			}
-			if _, ok := o.Field(u.Field); ok {
-				continue
-			}
-			key += "." + u.Field
-		}
-		if _, seen := by[key]; !seen {
-			keys = append(keys, key)
-		}
-		if !slices.Contains(by[key], u.By) {
-			by[key] = append(by[key], u.By)
-		}
-	}
-	out := make([]string, 0, len(keys))
-	for _, k := range keys {
-		sort.Strings(by[k])
-		out = append(out, k+"; used by "+strings.Join(by[k], ", "))
-	}
-	return out
-}
-
-// sortChanges puts the changes that can break a run first.
-func sortChanges(cs []meta.Change) []meta.Change {
-	sort.SliceStable(cs, func(i, j int) bool { return breaking(cs[i]) && !breaking(cs[j]) })
-	return cs
-}
-
 func printDiscoveries(w io.Writer, rs []discovery, stored bool) {
 	for i, r := range rs {
 		if i > 0 {
@@ -275,7 +233,7 @@ func printDiscoveries(w io.Writer, rs []discovery, stored bool) {
 		for _, c := range r.Changes {
 			mark := "          "
 			switch {
-			case breaking(c):
+			case c.Breaks():
 				mark = "  BREAKING"
 			case c.Breaking:
 				mark = "  breaking"

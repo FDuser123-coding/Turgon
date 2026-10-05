@@ -137,7 +137,9 @@ func (c *Conn) Discover(ctx context.Context, objects []string) (meta.Catalog, er
 			}
 		}
 	}
+	cat.Events = map[string]string{}
 	for name, e := range c.cfg.Events {
+		cat.Events[name] = e.EntitySet
 		add(e.Service, e.EntitySet, "event "+name, append([]string{e.Key, e.Changed}, e.Select...)...)
 	}
 	itemUses := map[string][]string{} // "service/set/navigation" -> item properties, resolved below
@@ -170,6 +172,7 @@ func (c *Conn) Discover(ctx context.Context, objects []string) (meta.Catalog, er
 	}
 	for name, sub := range c.cfg.Subscriptions {
 		if r := sub.Read; r != nil {
+			cat.Events[name] = r.EntitySet // the event's payload is the entity it names, read
 			add(r.Service, r.EntitySet, "subscription "+name, append([]string{r.Key}, r.Select...)...)
 		}
 	}

@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/fduser123-coding/turgon/pkg/connector/salesforce/sftest"
 	"github.com/fduser123-coding/turgon/pkg/meta"
 )
 
@@ -47,5 +48,38 @@ func TestDiscover(t *testing.T) {
 	}
 	if got := strings.Join(u["Opportunity.ERP_Order_Number__c"], ";"); got != "operation update-opportunity" {
 		t.Fatalf("ERP_Order_Number__c used by %q", got)
+	}
+	if cat.Events["Opportunity.ClosedWon"] != "Opportunity" {
+		t.Fatalf("events %v", cat.Events)
+	}
+}
+
+func TestChangeEventObject(t *testing.T) {
+	for topic, want := range map[string]string{
+		"/data/OpportunityChangeEvent": "Opportunity", "/data/Invoice__ChangeEvent": "Invoice__c",
+		"/data/ChangeEvents": "", "/event/Order_Placed__e": "", "/data/ChangeEvent": "",
+	} {
+		if got := changeEventObject(topic); got != want {
+			t.Errorf("%s: %q, want %q", topic, got, want)
+		}
+	}
+}
+
+// A subscription's sObject is discovered, with what the subscription reads.
+func TestDiscoverSubscription(t *testing.T) {
+	org := sftest.New()
+	defer org.Close()
+	org.Fields = map[string][]string{"Opportunity": {"StageName", "AccountId", "Amount"}}
+	c := streamConn(t, org, Subscription{Topic: oppTopic, Match: map[string]any{"StageName": "Closed Won"}, Fields: []string{"AccountId", "Amount"}})
+	cat, err := c.Discover(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := cat.Object("Opportunity"); !ok || cat.Events["Opportunity.Changed"] != "Opportunity" {
+		t.Fatalf("objects %+v events %v", cat.Objects, cat.Events)
+	}
+	u := meta.Usage(cat)
+	if strings.Join(u["Opportunity.StageName"], ";") != "subscription Opportunity.Changed (match)" || len(u["Opportunity.Amount"]) != 1 {
+		t.Fatalf("usage %v", u)
 	}
 }

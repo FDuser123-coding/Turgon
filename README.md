@@ -768,8 +768,21 @@ database as a snapshot. The connectors read it from the system's own catalog:
 
 A connector reports the objects its configuration uses, and what uses each field: an
 operation, an event, an export. Turgon adds the spec's mappings that read the object, so a field
-links to everything that relies on it. `--object` adds objects nothing uses yet: `erp-db=public.*`,
-`salesforce-prod=Contract`, `ecc-prod=IDOC:DEBMAS07`.
+links to everything that relies on it. A mapping reads an object when it maps from
+`<connector>.<object>` (`salesforce.Opportunity`), or from the event that starts its flow: the
+connector says which object each event's records come from. That is a change capture's table, a
+polled sObject or entity set, or the sObject a change event channel follows. So
+`shop-order-to-sales-order`, mapping from `shop-db.Order` in a flow started by change capture on
+`shop.orders`, reads that table's `total`, `currency` and the other columns its expressions name.
+A field a change removed is matched against the previous snapshot, so its removal still names what
+read it. `--object` adds objects nothing uses yet: `erp-db=public.*`, `salesforce-prod=Contract`,
+`ecc-prod=IDOC:DEBMAS07`.
+
+The console's **Metadata** page shows the same graph (with `--database-url`): each system's
+latest snapshot and how many of its changes break something in use, then per system the
+changes between any two snapshots, what is used but missing, and every object's fields with what
+uses each. A filter and "only fields in use" narrow long objects. What uses a field includes the
+mappings of every recipe in `--catalog` that compiles.
 
 A snapshot is stored only when the system changed (its digest covers objects and fields).
 Each later discovery lists the changes since the previous one. A removed field, a type change, a
@@ -861,10 +874,15 @@ to what, drawn from `--catalog`:
 
 `turgon integrations -c <catalog>` prints the same map in a terminal.
 
-The other pages are the approval queue (each pending write with its
-dry-run preview, the reasons policy asked for a person, and approve/reject with a note that
-goes into the audit log), the data-steward queue, runs with their writes and failures, the audit logs with live chain
-verification, and verifier reports for the catalog including the mapping review queue.
+The other pages are:
+
+- the approval queue: each pending write with its dry-run preview, the reasons policy asked for
+  a person, and approve or reject with a note that goes into the audit log;
+- the data-steward queue;
+- runs, with their writes and failures;
+- the audit logs, with live chain verification;
+- verifier reports for the catalog, including the mapping review queue;
+- the metadata graph, with what each system holds and what changed (see `turgon discover`).
 
 ```sh
 make console build                  # builds the React app and embeds it in bin/turgon
@@ -1670,7 +1688,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/agent` | §7.7, §8 | MCP server and A2A agent: business read tools, and write tools that start approval-gated writes; gateway identity, per-call policy and audit; agentgateway configuration |
 | `pkg/notify` | §7.3, §8 | Notifications when a run needs a person: Slack, Microsoft Teams, or a signed JSON webhook, with console links |
 | `pkg/identity` | §7.3 | Record matching: normalized identifying attributes, Fellegi-Sunter scoring with Jaro-Winkler names, suggestions and the automatic-match decision |
-| `pkg/console` | §7.3, §12 | Console API (runs and retries, approvals, the data-steward queue, audit, catalog), OpenID Connect sign-in or proxy authentication, embedded web app |
+| `pkg/console` | §7.2, §7.3, §12 | Console API (runs and retries, approvals, the data-steward queue, audit, catalog, the metadata graph), OpenID Connect sign-in or proxy authentication, embedded web app |
 | `console/` | §12 | The web console: React + TypeScript, built with Vite |
 | `deploy/` | §9, §11 | Helm chart, Flux example, Kyverno signature policy, Troubleshoot preflight spec |
 | `cmd/turgon` | §12 CLI | `validate`, `verify`, `compile`, `audit verify`, `run`, `pending`, `approve`, `retry`, `xref set`, `secrets`, `console`, `check`, `discover`, `mcp`, `gateway-config` |
@@ -1714,10 +1732,10 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 ## Not built yet
 
-In rough roadmap order (§16, §19), the rest of the metadata graph comes first. It has discovery,
-snapshots and drift. The `rest` and `debezium` connectors do not discover yet, and the console does not
-show the graph. A mapping's use of a field is found only when it reads the object by the connector's
-name for it (`salesforce.Opportunity`). Managed subscriptions are tested against the fake org's Pub/Sub
+In rough roadmap order (§16, §19), the rest of the metadata graph comes first. The `rest` and
+`debezium` connectors do not discover yet. A mapping that reads an outbox event's payload (JSON the
+application writes, not a table's row) is not linked to fields. Recipes that do not compile, such as
+those waiting for mapping review, are left out of what uses each field. Managed subscriptions are tested against the fake org's Pub/Sub
 and Tooling APIs, not yet against a real org. Of the Camel/Java connectors, only SAP ECC exists so far. It is
 tested against a fake ECC and a JCo stand-in, not yet against a real SAP system or gateway. It reads
 IDocs as SAP pushes them, but not change pointers. The `shopify` and `powerbi-export` manifests

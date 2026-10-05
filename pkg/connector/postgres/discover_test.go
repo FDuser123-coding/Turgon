@@ -32,6 +32,7 @@ func TestDiscover(t *testing.T) {
 			"create-sales-order": {Table: "sales_orders", Action: "insert", Key: "external_id", Columns: []string{"external_id", "customer_id", "net_value"}},
 			"cancel-sales-order": {Table: "sales_orders", Action: "update", Key: "external_id", Set: map[string]any{"status": "cancelled"}},
 		},
+		Changes: map[string]Change{"Customer.Created": {Table: "customers"}},
 	})
 	cat, err := c.Discover(ctx, []string{"customers"})
 	if err != nil {
@@ -81,6 +82,9 @@ func TestDiscover(t *testing.T) {
 	}
 	if got := strings.Join(meta.Creators(cat)[orders.Name], ","); got != "operation create-sales-order" {
 		t.Fatalf("orders created by %q", got)
+	}
+	if ev := cat.Events["Customer.Created"]; ev != cat.Objects[0].Name {
+		t.Fatalf("events %v", cat.Events)
 	}
 
 	// The table changes: a column dropped, one narrowed.

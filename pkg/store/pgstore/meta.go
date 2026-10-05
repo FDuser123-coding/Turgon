@@ -12,17 +12,7 @@ import (
 )
 
 // Snapshot describes one stored catalog of an endpoint.
-type Snapshot struct {
-	ID        int64  `json:"id"`
-	Endpoint  string `json:"endpoint"`
-	Connector string `json:"connector"`
-	Digest    string `json:"digest"`
-	// DiscoveredAt is when the endpoint first held this catalog;
-	// CheckedAt, when a discovery last found it unchanged.
-	DiscoveredAt time.Time `json:"discoveredAt"`
-	CheckedAt    time.Time `json:"checkedAt"`
-	Objects      int       `json:"objects"`
-}
+type Snapshot = meta.Snapshot
 
 // SaveCatalog stores an endpoint's catalog. When the endpoint still holds
 // what its latest snapshot holds (the same digest), that snapshot is kept,
