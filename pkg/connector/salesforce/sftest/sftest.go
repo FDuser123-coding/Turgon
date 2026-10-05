@@ -61,6 +61,7 @@ type Server struct {
 	// PubSubAddr is where PubSub listens (default a free loopback port).
 	PubSubAddr string
 	ps         *pubSub
+	ms         *managedSubs
 }
 
 // New starts a fake org.
@@ -150,6 +151,8 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch {
+	case parts[3] == "tooling" && len(parts) >= 5:
+		s.tooling(w, r, parts)
 	case parts[3] == "jobs" && len(parts) >= 5 && parts[4] == "query":
 		s.bulk(w, r, parts)
 	case parts[3] == "query" && len(parts) == 4:

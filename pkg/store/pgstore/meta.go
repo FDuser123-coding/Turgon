@@ -43,7 +43,7 @@ func (s *Store) SaveCatalog(ctx context.Context, c meta.Catalog) (snap Snapshot,
 	defer cancel()
 	err = pgx.BeginFunc(ctx, s.pool, func(tx pgx.Tx) error {
 		// Two discoveries of one endpoint at once store one snapshot.
-		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(7071, hashtext($1))`, c.Endpoint); err != nil {
+		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(7073, hashtext($1))`, c.Endpoint); err != nil {
 			return err
 		}
 		var id int64

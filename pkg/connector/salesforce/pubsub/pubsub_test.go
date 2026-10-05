@@ -17,6 +17,7 @@ func descriptors(t *testing.T) protoreflect.FileDescriptor {
 	t.Helper()
 	str, byt, i32, enum, msg := descriptorpb.FieldDescriptorProto_TYPE_STRING, descriptorpb.FieldDescriptorProto_TYPE_BYTES,
 		descriptorpb.FieldDescriptorProto_TYPE_INT32, descriptorpb.FieldDescriptorProto_TYPE_ENUM, descriptorpb.FieldDescriptorProto_TYPE_MESSAGE
+	i64 := descriptorpb.FieldDescriptorProto_TYPE_INT64
 	one, rep := descriptorpb.FieldDescriptorProto_LABEL_OPTIONAL, descriptorpb.FieldDescriptorProto_LABEL_REPEATED
 	field := func(name string, num int32, typ descriptorpb.FieldDescriptorProto_Type, label descriptorpb.FieldDescriptorProto_Label, typeName string) *descriptorpb.FieldDescriptorProto {
 		f := &descriptorpb.FieldDescriptorProto{Name: proto.String(name), Number: proto.Int32(num), Type: typ.Enum(), Label: label.Enum()}
@@ -31,7 +32,9 @@ func descriptors(t *testing.T) protoreflect.FileDescriptor {
 	file := &descriptorpb.FileDescriptorProto{
 		Name: proto.String("pubsub_api.proto"), Package: proto.String("eventbus.v1"), Syntax: proto.String("proto3"),
 		EnumType: []*descriptorpb.EnumDescriptorProto{{Name: proto.String("ReplayPreset"), Value: []*descriptorpb.EnumValueDescriptorProto{
-			{Name: proto.String("LATEST"), Number: proto.Int32(0)}, {Name: proto.String("EARLIEST"), Number: proto.Int32(1)}, {Name: proto.String("CUSTOM"), Number: proto.Int32(2)}}}},
+			{Name: proto.String("LATEST"), Number: proto.Int32(0)}, {Name: proto.String("EARLIEST"), Number: proto.Int32(1)}, {Name: proto.String("CUSTOM"), Number: proto.Int32(2)}}},
+			{Name: proto.String("ErrorCode"), Value: []*descriptorpb.EnumValueDescriptorProto{
+				{Name: proto.String("UNKNOWN"), Number: proto.Int32(0)}, {Name: proto.String("PUBLISH"), Number: proto.Int32(1)}, {Name: proto.String("COMMIT"), Number: proto.Int32(2)}}}},
 		MessageType: []*descriptorpb.DescriptorProto{
 			message("EventHeader", field("key", 1, str, one, ""), field("value", 2, byt, one, "")),
 			message("ProducerEvent", field("id", 1, str, one, ""), field("schema_id", 2, str, one, ""), field("payload", 3, byt, one, ""),
@@ -43,6 +46,16 @@ func descriptors(t *testing.T) protoreflect.FileDescriptor {
 				field("rpc_id", 3, str, one, ""), field("pending_num_requested", 4, i32, one, "")),
 			message("SchemaRequest", field("schema_id", 1, str, one, "")),
 			message("SchemaInfo", field("schema_json", 1, str, one, ""), field("schema_id", 2, str, one, ""), field("rpc_id", 3, str, one, "")),
+			message("Error", field("code", 1, enum, one, ".eventbus.v1.ErrorCode"), field("msg", 2, str, one, "")),
+			message("CommitReplayRequest", field("commit_request_id", 1, str, one, ""), field("replay_id", 2, byt, one, "")),
+			message("CommitReplayResponse", field("commit_request_id", 1, str, one, ""), field("replay_id", 2, byt, one, ""),
+				field("error", 3, msg, one, ".eventbus.v1.Error"), field("process_time", 4, i64, one, "")),
+			message("ManagedFetchRequest", field("subscription_id", 1, str, one, ""), field("developer_name", 2, str, one, ""),
+				field("num_requested", 3, i32, one, ""), field("auth_refresh", 4, str, one, ""),
+				field("commit_replay_id_request", 5, msg, one, ".eventbus.v1.CommitReplayRequest")),
+			message("ManagedFetchResponse", field("events", 1, msg, rep, ".eventbus.v1.ConsumerEvent"), field("latest_replay_id", 2, byt, one, ""),
+				field("rpc_id", 3, str, one, ""), field("pending_num_requested", 4, i32, one, ""),
+				field("commit_response", 5, msg, one, ".eventbus.v1.CommitReplayResponse")),
 		},
 	}
 	fd, err := protodesc.NewFile(file, nil)
@@ -120,5 +133,61 @@ func TestEncodingMatchesTheProto(t *testing.T) {
 	}
 	if _, err := DecodeFetchResponse([]byte{0x0a, 0xff}); err == nil {
 		t.Fatal("truncated message accepted")
+	}
+}
+
+func TestManagedEncodingMatchesTheProto(t *testing.T) {
+	fd := descriptors(t)
+	md := func(name string) protoreflect.MessageDescriptor { return fd.Messages().ByName(protoreflect.Name(name)) }
+	fieldOf := func(m protoreflect.Message, f string) protoreflect.FieldDescriptor {
+		return m.Descriptor().Fields().ByName(protoreflect.Name(f))
+	}
+
+	// A commit, as ours encodes it, read by protobuf.
+	req := ManagedFetchRequest{DeveloperName: "Turgon_Won_Deals", NumRequested: 50, Commit: &CommitReplayRequest{CommitRequestID: "c-1", ReplayID: []byte{0x5f, 9}}}
+	m := dynamicpb.NewMessage(md("ManagedFetchRequest"))
+	if err := proto.Unmarshal(req.Encode(), m); err != nil {
+		t.Fatal(err)
+	}
+	commit := m.Get(fieldOf(m, "commit_replay_id_request")).Message()
+	if m.Get(fieldOf(m, "developer_name")).String() != "Turgon_Won_Deals" || m.Get(fieldOf(m, "num_requested")).Int() != 50 ||
+		commit.Get(fieldOf(commit, "commit_request_id")).String() != "c-1" || !bytes.Equal(commit.Get(fieldOf(commit, "replay_id")).Bytes(), []byte{0x5f, 9}) {
+		t.Fatalf("ManagedFetchRequest decoded by protobuf: %v", m)
+	}
+	if back, err := DecodeManagedFetchRequest(req.Encode()); err != nil || back.DeveloperName != req.DeveloperName || back.Commit == nil || back.Commit.CommitRequestID != "c-1" {
+		t.Fatalf("ManagedFetchRequest round trip: %+v %v", back, err)
+	}
+
+	// A response with an event and a failed commit, encoded by protobuf.
+	resp := dynamicpb.NewMessage(md("ManagedFetchResponse"))
+	ce := dynamicpb.NewMessage(md("ConsumerEvent"))
+	pe := dynamicpb.NewMessage(md("ProducerEvent"))
+	pe.Set(fieldOf(pe, "id"), protoreflect.ValueOfString("e1"))
+	ce.Set(fieldOf(ce, "event"), protoreflect.ValueOfMessage(pe))
+	ce.Set(fieldOf(ce, "replay_id"), protoreflect.ValueOfBytes([]byte("r-e1")))
+	resp.Mutable(fieldOf(resp, "events")).List().Append(protoreflect.ValueOfMessage(ce))
+	resp.Set(fieldOf(resp, "latest_replay_id"), protoreflect.ValueOfBytes([]byte("r-e1")))
+	cr := dynamicpb.NewMessage(md("CommitReplayResponse"))
+	cr.Set(fieldOf(cr, "commit_request_id"), protoreflect.ValueOfString("c-1"))
+	cr.Set(fieldOf(cr, "replay_id"), protoreflect.ValueOfBytes([]byte("r-e0")))
+	e := dynamicpb.NewMessage(md("Error"))
+	e.Set(fieldOf(e, "code"), protoreflect.ValueOfEnum(2))
+	e.Set(fieldOf(e, "msg"), protoreflect.ValueOfString("commit failed"))
+	cr.Set(fieldOf(cr, "error"), protoreflect.ValueOfMessage(e))
+	cr.Set(fieldOf(cr, "process_time"), protoreflect.ValueOfInt64(1791100000000))
+	resp.Set(fieldOf(resp, "commit_response"), protoreflect.ValueOfMessage(cr))
+	wire, err := proto.Marshal(resp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := DecodeManagedFetchResponse(wire)
+	if err != nil || len(got.Events) != 1 || got.Events[0].Event.ID != "e1" || string(got.LatestReplayID) != "r-e1" || got.Commit == nil ||
+		got.Commit.CommitRequestID != "c-1" || string(got.Commit.ReplayID) != "r-e0" || got.Commit.ErrorCode != 2 ||
+		got.Commit.ErrorMessage != "commit failed" || got.Commit.ProcessTime != 1791100000000 || !got.Commit.Failed() {
+		t.Fatalf("ManagedFetchResponse: %+v %+v %v", got, got.Commit, err)
+	}
+	back := dynamicpb.NewMessage(md("ManagedFetchResponse"))
+	if err := proto.Unmarshal(got.Encode(), back); err != nil || !proto.Equal(back, resp) {
+		t.Fatalf("re-encoded: %v %v", back, err)
 	}
 }
