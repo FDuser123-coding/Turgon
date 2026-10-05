@@ -18,6 +18,7 @@ import (
 	"unicode"
 
 	"github.com/fduser123-coding/turgon/pkg/compiler"
+	"github.com/fduser123-coding/turgon/pkg/meta"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
 )
 
@@ -70,6 +71,13 @@ type Streamer interface {
 	// only a newer position. deliver must return before more is read; if it
 	// fails, Stream returns its error.
 	Stream(ctx context.Context, event string, resume []byte, deliver func(events []Event, resume []byte) error) error
+}
+
+// Discoverer is implemented by connectors that can read what their system
+// holds: the objects their configuration uses, and those named in objects
+// (table, sObject or entity set names). It feeds the metadata graph.
+type Discoverer interface {
+	Discover(ctx context.Context, objects []string) (meta.Catalog, error)
 }
 
 // Exporter is implemented by sources that read a large set of records at

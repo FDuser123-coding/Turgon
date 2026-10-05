@@ -511,18 +511,20 @@ func random() string {
 var metadata = map[string]string{
 	"API_SALES_ORDER_SRV": edmx("API_SALES_ORDER_SRV", `
 <EntityType Name="A_SalesOrderType"><Key><PropertyRef Name="SalesOrder"/></Key>
- <Property Name="SalesOrder" Type="Edm.String"/><Property Name="SalesOrderType" Type="Edm.String"/>
- <Property Name="SalesOrganization" Type="Edm.String"/><Property Name="DistributionChannel" Type="Edm.String"/>
+ <Property Name="SalesOrder" Type="Edm.String" Nullable="false" MaxLength="10" sap:label="Sales Order" sap:creatable="false" sap:updatable="false"/><Property Name="SalesOrderType" Type="Edm.String" MaxLength="4" sap:label="Sales Order Type"/>
+ <Property Name="SalesOrganization" Type="Edm.String" MaxLength="4"/><Property Name="DistributionChannel" Type="Edm.String"/>
  <Property Name="OrganizationDivision" Type="Edm.String"/><Property Name="SoldToParty" Type="Edm.String"/>
- <Property Name="PurchaseOrderByCustomer" Type="Edm.String"/><Property Name="SalesOrderDate" Type="Edm.DateTime"/>
+ <Property Name="PurchaseOrderByCustomer" Type="Edm.String" MaxLength="35" sap:label="Customer Reference"/><Property Name="SalesOrderDate" Type="Edm.DateTime"/>
  <Property Name="TransactionCurrency" Type="Edm.String"/><Property Name="TotalNetAmount" Type="Edm.Decimal"/>
  <Property Name="OverallSDProcessStatus" Type="Edm.String"/><Property Name="CreationDate" Type="Edm.DateTime"/>
  <Property Name="LastChangeDateTime" Type="Edm.DateTimeOffset"/>
- <NavigationProperty Name="to_Item"/></EntityType>
+ <NavigationProperty Name="to_Item" Relationship="API_SALES_ORDER_SRV.assoc_SalesOrder_Item" FromRole="FromRole_assoc" ToRole="ToRole_assoc"/></EntityType>
 <EntityType Name="A_SalesOrderItemType"><Key><PropertyRef Name="SalesOrder"/><PropertyRef Name="SalesOrderItem"/></Key>
  <Property Name="SalesOrder" Type="Edm.String"/><Property Name="SalesOrderItem" Type="Edm.String"/>
  <Property Name="Material" Type="Edm.String"/><Property Name="RequestedQuantity" Type="Edm.Decimal"/>
- <Property Name="NetAmount" Type="Edm.Decimal"/></EntityType>`,
+ <Property Name="NetAmount" Type="Edm.Decimal"/></EntityType>
+<Association Name="assoc_SalesOrder_Item"><End Type="API_SALES_ORDER_SRV.A_SalesOrderType" Multiplicity="1" Role="FromRole_assoc"/>
+ <End Type="API_SALES_ORDER_SRV.A_SalesOrderItemType" Multiplicity="*" Role="ToRole_assoc"/></Association>`,
 		`<EntitySet Name="A_SalesOrder" EntityType="API_SALES_ORDER_SRV.A_SalesOrderType"/>
 <EntitySet Name="A_SalesOrderItem" EntityType="API_SALES_ORDER_SRV.A_SalesOrderItemType"/>`),
 	"API_SALES_ORDER_SIMULATION_SRV": edmx("API_SALES_ORDER_SIMULATION_SRV", `
@@ -538,7 +540,7 @@ var metadata = map[string]string{
 
 func edmx(ns, types, sets string) string {
 	return `<?xml version="1.0" encoding="utf-8"?>
-<edmx:Edmx Version="1.0" xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata">
+<edmx:Edmx Version="1.0" xmlns:edmx="http://schemas.microsoft.com/ado/2007/06/edmx" xmlns:m="http://schemas.microsoft.com/ado/2007/08/dataservices/metadata" xmlns:sap="http://www.sap.com/Protocols/SAPData">
 <edmx:DataServices m:DataServiceVersion="2.0">
 <Schema Namespace="` + ns + `" xmlns="http://schemas.microsoft.com/ado/2008/09/edm">` + types + `
 <EntityContainer Name="` + ns + `_Entities" m:IsDefaultEntityContainer="true">` + sets + `</EntityContainer>

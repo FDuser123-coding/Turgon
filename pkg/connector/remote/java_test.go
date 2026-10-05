@@ -193,3 +193,58 @@ func TestJavaSidecarStream(t *testing.T) {
 		t.Fatalf("events %s %s %+v", got[0].ID, got[1].ID, p)
 	}
 }
+
+// TestJavaSidecarDiscover: the worker reads what ECC holds through the
+// sidecar (BAPI interfaces, dictionary structures, IDoc segments).
+func TestJavaSidecarDiscover(t *testing.T) {
+	bin := os.Getenv("TURGON_TEST_CONNECTOR_SAP_ECC")
+	if bin == "" {
+		t.Skip("TURGON_TEST_CONNECTOR_SAP_ECC is not set (connectors: gradle :sap-ecc-fake:installDist)")
+	}
+	sock := filepath.Join(t.TempDir(), "sap-ecc.sock")
+	sidecar(t, bin, sock)
+	pool := NewPool()
+	defer pool.Close()
+	ctx := context.Background()
+	cfg := compiler.ConnectorConfig{Endpoint: "sap-ecc", Name: "sap-ecc", Version: "0.4.0", Runtime: "camel-java", SecretRef: "s",
+		Config: json.RawMessage(`{"rfc":{"provider":"fake","destination":{"ashost":"ecc-discover"}}}`)}
+	inst, err := pool.Factory(Address{Target: "unix://" + sock, Token: "tok"})(ctx, cfg, connector.StaticSecrets{"s": "TURGON:pw"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Close()
+	d, ok := inst.(connector.Discoverer)
+	if !ok {
+		t.Fatal("sap-ecc does not discover")
+	}
+	cat, err := d.Discover(ctx, []string{"IDOC:ORDERS05"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cat.Connector != "sap-ecc" || cat.Endpoint != "sap-ecc" || cat.Version != "0.4.0" {
+		t.Fatalf("catalog %s/%s %s", cat.Endpoint, cat.Connector, cat.Version)
+	}
+	hd, ok := cat.Object("BAPISDHD1")
+	if !ok {
+		t.Fatal("no BAPISDHD1")
+	}
+	if f, _ := hd.Field("PURCH_NO_C"); f.Length != 35 || f.Type != "CHAR" {
+		t.Fatalf("PURCH_NO_C %+v", f)
+	}
+	if fn, _ := cat.Object("BAPI_SALESORDER_CREATEFROMDAT2"); fn.Kind != "function" {
+		t.Fatalf("function %+v", fn)
+	}
+	if seg, _ := cat.Object("ORDERS05/E1EDK01"); seg.Kind != "idoc-segment" {
+		t.Fatalf("segment %+v", seg)
+	}
+	used := false
+	for _, u := range cat.Uses {
+		used = used || (u.Object == "BAPISDHD1" && u.Field == "PURCH_NO_C" && u.By == "operation create-sales-order" && u.Creates)
+	}
+	if !used {
+		t.Fatalf("uses %+v", cat.Uses)
+	}
+	if _, err := d.Discover(ctx, []string{"FUNCTION:Z_NOPE"}); err == nil {
+		t.Fatal("an unknown function discovered")
+	}
+}

@@ -50,7 +50,7 @@ func newRoot(stdout, stderr io.Writer) *cobra.Command {
 	root.PersistentFlags().StringVar(&trustedKeysPath, "trusted-keys", os.Getenv("TURGON_TRUSTED_KEYS"),
 		"PEM file of public keys; when set, commands load only runtime specs one of them signed")
 	root.AddCommand(validateCmd(), verifyCmd(), compileCmd(), auditCmd(), versionCmd(), keygenCmd(), signCmd(), integrationCmd(), applianceCmd(), integrationsCmd(),
-		runCmd(), approveCmd(), pendingCmd(), retryCmd(), xrefCmd(), identityCmd(), secretsCmd(), consoleCmd(), checkCmd(), mcpCmd(), gatewayConfigCmd())
+		runCmd(), approveCmd(), pendingCmd(), retryCmd(), xrefCmd(), identityCmd(), secretsCmd(), consoleCmd(), checkCmd(), discoverCmd(), mcpCmd(), gatewayConfigCmd())
 	return root
 }
 

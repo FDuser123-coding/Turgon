@@ -482,3 +482,43 @@ func TestRemoteStream(t *testing.T) {
 		t.Fatalf("got %v, %v", got, err)
 	}
 }
+
+func (f *fakeConnector) Discover(ctx context.Context, r *pb.DiscoverRequest) (*pb.DiscoverResponse, error) {
+	if err := f.instance(ctx, r.GetInstance()); err != nil {
+		return nil, err
+	}
+	cat := `{"objects":[{"name":"BAPISDHD1","kind":"structure","fields":[{"name":"PURCH_NO_C","type":"CHAR","length":35},{"name":"DOC_TYPE","type":"CHAR","length":4}]}` +
+		`],"uses":[{"object":"BAPISDHD1","field":"PURCH_NO_C","by":"operation create-sales-order"}]}`
+	if len(r.GetObjects()) > 0 {
+		cat = strings.Replace(cat, `]}],`, `]},{"name":"`+r.GetObjects()[0]+`","kind":"bapi","fields":[]}],`, 1)
+	}
+	return &pb.DiscoverResponse{Catalog: []byte(cat)}, nil
+}
+
+func TestRemoteDiscover(t *testing.T) {
+	ctx := context.Background()
+	pool := NewPool()
+	defer pool.Close()
+	inst, err := pool.Factory(Address{Target: serve(t, &fakeConnector{name: "sap-ecc", version: "0.4.0", caps: []string{CapDiscover}})})(ctx, spec, secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inst.Close()
+	cat, err := inst.(connector.Discoverer).Discover(ctx, []string{"BAPI_X"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cat.Objects) != 2 || cat.Objects[0].Name != "BAPISDHD1" || cat.Objects[0].Fields[0].Name != "DOC_TYPE" ||
+		cat.Objects[1].Name != "BAPI_X" || cat.DiscoveredAt.IsZero() || len(cat.Uses) != 1 {
+		t.Fatalf("catalog %+v", cat)
+	}
+
+	none, err := pool.Factory(Address{Target: serve(t, &fakeConnector{name: "sap-ecc", version: "0.4.0"})})(ctx, spec, secrets)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer none.Close()
+	if _, err := none.(connector.Discoverer).Discover(ctx, nil); !errors.Is(err, ErrUnsupported) {
+		t.Fatalf("no capability: %v", err)
+	}
+}

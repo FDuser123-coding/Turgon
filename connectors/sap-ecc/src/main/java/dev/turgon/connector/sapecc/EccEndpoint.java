@@ -59,6 +59,111 @@ final class EccEndpoint extends CamelEndpoint {
         this.idocs = new Idocs(rfc, cfg.idocEvents());
     }
 
+    /** The structure fields each operation fills or reads, for the metadata graph. */
+    static final Map<String, Map<String, List<String>>> USED = Map.of(
+            "BAPISDHD1", Map.of("operation create-sales-order", List.of("DOC_TYPE", "SALES_ORG", "DISTR_CHAN", "DIVISION",
+                    "PURCH_NO_C", "REQ_DATE_H", "CURRENCY")),
+            "BAPISDITM", Map.of("operation create-sales-order", List.of("ITM_NUMBER", "MATERIAL", "TARGET_QTY")),
+            "BAPIPARNR", Map.of("operation create-sales-order", List.of("PARTN_ROLE", "PARTN_NUMB")),
+            "BAPISCHDL", Map.of("operation create-sales-order", List.of("ITM_NUMBER", "REQ_QTY")),
+            "BAPISDH1X", Map.of("operation cancel-sales-order", List.of("UPDATEFLAG")),
+            "BAPICUSTOMER_04", Map.of("operation get-customer", List.of("NAME", "STREET", "POSTL_COD1", "CITY", "COUNTRY")));
+
+    /**
+     * What the system holds: the interfaces of the BAPIs the connector
+     * calls (RFC_GET_FUNCTION_INTERFACE), the fields of the structures it
+     * fills (DDIF_FIELDINFO_GET), and the segments of the configured IDoc
+     * types (IDOCTYPE_READ_COMPLETE). More objects are named
+     * FUNCTION:name, STRUCTURE:name or IDOC:type.
+     */
+    @Override
+    public JsonNode discover(List<String> objects) throws Exception {
+        ObjectNode cat = JSON.createObjectNode();
+        ArrayNode objs = cat.putArray("objects"), uses = cat.putArray("uses");
+        java.util.Set<String> functions = new java.util.TreeSet<>(FUNCTIONS), structures = new java.util.TreeSet<>(USED.keySet()),
+                idocTypes = new java.util.TreeSet<>();
+        cfg.idocEvents().values().forEach(e -> idocTypes.addAll(e.idocTypes()));
+        for (String o : objects) {
+            if (o.startsWith("FUNCTION:")) {
+                functions.add(o.substring(9));
+            } else if (o.startsWith("IDOC:")) {
+                idocTypes.add(o.substring(5));
+            } else {
+                structures.add(o.startsWith("STRUCTURE:") ? o.substring(10) : o);
+            }
+        }
+        for (String f : functions) {
+            Map<String, Object> r = rfc.call("RFC_GET_FUNCTION_INTERFACE", Map.of("FUNCNAME", f));
+            ObjectNode o = objs.addObject().put("name", f).put("kind", "function");
+            ArrayNode fields = o.putArray("fields");
+            for (Map<String, String> p : Rfc.table(r, "PARAMS")) {
+                if (p.getOrDefault("FIELDNAME", "").isBlank()) { // a parameter, not one of its fields
+                    String cls = p.getOrDefault("PARAMCLASS", "");
+                    String tab = p.getOrDefault("TABNAME", "").trim();
+                    fields.addObject().put("name", p.get("PARAMETER").trim())
+                            .put("type", tab.isEmpty() ? p.getOrDefault("EXID", "").trim() : tab)
+                            .put("label", p.getOrDefault("PARAMTEXT", "").trim())
+                            .put("required", cls.equals("I") && !"X".equals(p.getOrDefault("OPTIONAL", "").trim()))
+                            .put("readOnly", cls.equals("E"));
+                }
+            }
+        }
+        for (String st : structures) {
+            Map<String, Object> r = rfc.call("DDIF_FIELDINFO_GET", Map.of("TABNAME", st));
+            var rows = Rfc.table(r, "DFIES_TAB");
+            if (rows.isEmpty()) {
+                continue; // not in this system: drift shows what uses it
+            }
+            ObjectNode o = objs.addObject().put("name", st).put("kind", "structure");
+            ArrayNode fields = o.putArray("fields");
+            for (Map<String, String> f : rows) {
+                fields.addObject().put("name", f.get("FIELDNAME").trim()).put("type", f.getOrDefault("DATATYPE", "").trim())
+                        .put("length", parseInt(f.getOrDefault("LENG", "0")))
+                        .put("label", f.getOrDefault("FIELDTEXT", "").trim())
+                        .put("key", "X".equals(f.getOrDefault("KEYFLAG", "").trim()));
+            }
+        }
+        for (var u : USED.entrySet()) {
+            for (var by : u.getValue().entrySet()) {
+                for (String field : by.getValue()) {
+                    // The create fills these structures: a field that becomes required breaks it.
+                    uses.addObject().put("object", u.getKey()).put("field", field).put("by", by.getKey())
+                            .put("creates", by.getKey().equals("operation create-sales-order"));
+                }
+            }
+        }
+        for (String type : idocTypes) {
+            Map<String, Object> r = rfc.call("IDOCTYPE_READ_COMPLETE", Map.of("PI_IDOCTYP", type, "PI_CIMTYP", ""));
+            Map<String, ArrayNode> segs = new java.util.TreeMap<>();
+            for (Map<String, String> f : Rfc.table(r, "PT_FIELDS")) {
+                String seg = f.get("SEGMENTTYP").trim();
+                ArrayNode fields = segs.computeIfAbsent(seg, k -> {
+                    ObjectNode o = objs.addObject().put("name", type + "/" + k).put("kind", "idoc-segment");
+                    return o.putArray("fields");
+                });
+                fields.addObject().put("name", f.get("FIELDNAME").trim()).put("type", f.getOrDefault("DATATYPE", "CHAR").trim())
+                        .put("length", parseInt(f.getOrDefault("EXTLEN", "0")))
+                        .put("label", f.getOrDefault("DESCRP", "").trim());
+            }
+            for (var e : cfg.idocEvents().entrySet()) {
+                if (e.getValue().idocTypes().contains(type)) {
+                    for (String seg : segs.keySet()) {
+                        uses.addObject().put("object", type + "/" + seg).put("field", "").put("by", "event " + e.getKey());
+                    }
+                }
+            }
+        }
+        return cat;
+    }
+
+    private static int parseInt(String s) {
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (NumberFormatException e) {
+            return 0;
+        }
+    }
+
     @Override
     public java.util.Set<String> streams() {
         return cfg.idocEvents().keySet();

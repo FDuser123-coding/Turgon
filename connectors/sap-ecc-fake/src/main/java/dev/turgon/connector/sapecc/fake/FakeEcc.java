@@ -28,7 +28,36 @@ public final class FakeEcc {
     private static final Map<String, FakeEcc> SYSTEMS = new ConcurrentHashMap<>();
     static final Set<String> FUNCTIONS = Set.of("RFC_PING", "BAPI_SALESORDER_CREATEFROMDAT2", "BAPI_SALESORDER_GETLIST",
             "BAPI_SALESORDER_GETSTATUS", "BAPI_SALESORDER_CHANGE", "BAPI_TRANSACTION_COMMIT", "BAPI_TRANSACTION_ROLLBACK",
-            "BAPI_CUSTOMER_GETDETAIL2", "IDOCTYPE_READ_COMPLETE");
+            "BAPI_CUSTOMER_GETDETAIL2", "IDOCTYPE_READ_COMPLETE", "RFC_GET_FUNCTION_INTERFACE", "DDIF_FIELDINFO_GET");
+
+    /** Dictionary structures: field -> {type, length, text}. Tests change them to see drift. */
+    public final Map<String, Map<String, Object[]>> structures = new ConcurrentHashMap<>();
+
+    /** The BAPIs' parameters: {class, name, structure or type, optional}. */
+    static final Map<String, List<String[]>> INTERFACES = Map.of(
+            "BAPI_SALESORDER_CREATEFROMDAT2", List.<String[]>of(new String[] {"I", "ORDER_HEADER_IN", "BAPISDHD1", ""},
+                    new String[] {"I", "TESTRUN", "BAPIFLAG-BAPIFLAG", "X"}, new String[] {"E", "SALESDOCUMENT", "BAPIVBELN-VBELN", ""},
+                    new String[] {"T", "RETURN", "BAPIRET2", "X"}, new String[] {"T", "ORDER_ITEMS_IN", "BAPISDITM", "X"},
+                    new String[] {"T", "ORDER_PARTNERS", "BAPIPARNR", ""}, new String[] {"T", "ORDER_SCHEDULES_IN", "BAPISCHDL", "X"}),
+            "BAPI_SALESORDER_GETLIST", List.<String[]>of(new String[] {"I", "CUSTOMER_NUMBER", "BAPI1007-CUSTOMER", ""},
+                    new String[] {"I", "SALES_ORGANIZATION", "VBAK-VKORG", ""}, new String[] {"I", "PURCHASE_ORDER_NUMBER", "VBKD-BSTKD", "X"},
+                    new String[] {"E", "RETURN", "BAPIRETURN", ""}, new String[] {"T", "SALES_ORDERS", "BAPIORDERS", ""}),
+            "BAPI_SALESORDER_GETSTATUS", List.<String[]>of(new String[] {"I", "SALESDOCUMENT", "BAPIVBELN-VBELN", ""},
+                    new String[] {"E", "RETURN", "BAPIRETURN", ""}, new String[] {"T", "STATUSINFO", "BAPISDSTAT", ""}),
+            "BAPI_SALESORDER_CHANGE", List.<String[]>of(new String[] {"I", "SALESDOCUMENT", "BAPIVBELN-VBELN", ""},
+                    new String[] {"I", "ORDER_HEADER_INX", "BAPISDH1X", ""}, new String[] {"T", "RETURN", "BAPIRET2", ""}),
+            "BAPI_TRANSACTION_COMMIT", List.<String[]>of(new String[] {"I", "WAIT", "BAPITA-WAIT", "X"}, new String[] {"E", "RETURN", "BAPIRET2", ""}),
+            "BAPI_TRANSACTION_ROLLBACK", List.<String[]>of(new String[] {"E", "RETURN", "BAPIRET2", ""}),
+            "BAPI_CUSTOMER_GETDETAIL2", List.<String[]>of(new String[] {"I", "CUSTOMERNO", "BAPI1007-CUSTOMER", ""},
+                    new String[] {"E", "CUSTOMERADDRESS", "BAPICUSTOMER_04", ""}, new String[] {"E", "RETURN", "BAPIRETURN1", ""}));
+
+    private static Map<String, Object[]> structure(Object... f) {
+        Map<String, Object[]> m = new LinkedHashMap<>();
+        for (int i = 0; i < f.length; i += 4) {
+            m.put((String) f[i], new Object[] {f[i + 1], f[i + 2], f[i + 3]});
+        }
+        return m;
+    }
 
     public record Customer(String name, String street, String postalCode, String city, String country, boolean blocked) {}
 
@@ -179,6 +208,17 @@ public final class FakeEcc {
         customers.put("0000001001", new Customer("Hopper Labs", "1 Navy Way", "20301", "Arlington", "US", false));
         customers.put("0000001002", new Customer("Blocked Trading Ltd", "1 Main St", "EC1A", "London", "GB", true));
         materials.addAll(List.of("M-1", "M-7", "M-8", "M-9"));
+        structures.put("BAPISDHD1", structure("DOC_TYPE", "CHAR", 4, "Sales Document Type", "SALES_ORG", "CHAR", 4, "Sales Organization",
+                "DISTR_CHAN", "CHAR", 2, "Distribution Channel", "DIVISION", "CHAR", 2, "Division",
+                "PURCH_NO_C", "CHAR", 35, "Customer purchase order number", "REQ_DATE_H", "DATS", 8, "Requested delivery date",
+                "CURRENCY", "CUKY", 5, "Currency"));
+        structures.put("BAPISDITM", structure("ITM_NUMBER", "NUMC", 6, "Item number", "MATERIAL", "CHAR", 18, "Material",
+                "TARGET_QTY", "QUAN", 13, "Target quantity"));
+        structures.put("BAPIPARNR", structure("PARTN_ROLE", "CHAR", 2, "Partner function", "PARTN_NUMB", "CHAR", 10, "Customer number"));
+        structures.put("BAPISCHDL", structure("ITM_NUMBER", "NUMC", 6, "Item number", "REQ_QTY", "QUAN", 13, "Order quantity"));
+        structures.put("BAPISDH1X", structure("UPDATEFLAG", "CHAR", 1, "Update indicator"));
+        structures.put("BAPICUSTOMER_04", structure("NAME", "CHAR", 35, "Name", "STREET", "CHAR", 35, "Street",
+                "POSTL_COD1", "CHAR", 10, "Postal code", "CITY", "CHAR", 35, "City", "COUNTRY", "CHAR", 3, "Country"));
     }
 
     /** The system behind a destination host, shared by every connection to it. */
@@ -364,6 +404,29 @@ public final class FakeEcc {
                             "CITY", c.city(), "COUNTRY", c.country()));
                 }
             }
+            case "RFC_GET_FUNCTION_INTERFACE" -> {
+                allow(function, p, "FUNCNAME", "LANGUAGE", "NONE_UNICODE_LENGTH");
+                List<String[]> params = INTERFACES.get(get(p, "FUNCNAME", ""));
+                if (params == null) {
+                    throw new IllegalStateException("ABAP exception FU_NOT_FOUND");
+                }
+                List<Map<String, String>> rows = new ArrayList<>();
+                for (String[] q : params) {
+                    rows.add(Map.of("PARAMCLASS", q[0], "PARAMETER", q[1], "TABNAME", q[2].contains("-") ? "" : q[2],
+                            "EXID", q[2].contains("-") ? "C" : "u", "OPTIONAL", q[3], "FIELDNAME", "", "PARAMTEXT", q[1]));
+                }
+                out.put("PARAMS", rows);
+            }
+            case "DDIF_FIELDINFO_GET" -> {
+                allow(function, p, "TABNAME", "LANGU", "ALL_TYPES");
+                Map<String, Object[]> st = structures.get(get(p, "TABNAME", ""));
+                List<Map<String, String>> rows = new ArrayList<>();
+                if (st != null) {
+                    st.forEach((f, d) -> rows.add(Map.of("FIELDNAME", f, "DATATYPE", (String) d[0], "LENG", String.format("%06d", (Integer) d[1]),
+                            "FIELDTEXT", (String) d[2], "KEYFLAG", "")));
+                }
+                out.put("DFIES_TAB", rows);
+            }
             case "IDOCTYPE_READ_COMPLETE" -> {
                 allow(function, p, "PI_IDOCTYP", "PI_CIMTYP", "PI_RELEASE", "PI_APPLREL");
                 List<Map<String, String>> segments = new ArrayList<>(), fields = new ArrayList<>();
@@ -373,7 +436,7 @@ public final class FakeEcc {
                         segments.add(Map.of("SEGMENTTYP", seg.getKey(), "NR", String.format("%04d", ++nr)));
                         int at = 64; // SDATA starts after the data record's 63-byte header
                         for (Object[] f : seg.getValue()) {
-                            fields.add(Map.of("SEGMENTTYP", seg.getKey(), "FIELDNAME", (String) f[0],
+                            fields.add(Map.of("SEGMENTTYP", seg.getKey(), "FIELDNAME", (String) f[0], "DATATYPE", "CHAR",
                                     "BYTE_FIRST", String.format("%06d", at), "EXTLEN", String.format("%06d", (Integer) f[1])));
                             at += (Integer) f[1];
                         }

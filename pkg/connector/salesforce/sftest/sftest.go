@@ -35,6 +35,11 @@ type Server struct {
 	PageSize int
 	// ReadOnly lists "SObject.Field" names the integration user cannot edit.
 	ReadOnly map[string]bool
+	// Types overrides the type describe reports for "SObject.Field".
+	Types map[string]string
+	// Fields declares an sObject's fields, which describe reports with
+	// those seen on stored records (an org's schema exists without data).
+	Fields map[string][]string
 	// FailPatch, if set, can reject an update with a Salesforce error code.
 	FailPatch func(sobject, id string, fields map[string]any) (status int, code, msg string)
 
@@ -353,16 +358,32 @@ func (s *Server) patch(w http.ResponseWriter, r *http.Request, sobject, id strin
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// describe lists the fields seen on stored records of the sObject.
+// SetReadOnly takes away the integration user's edit access to a field
+// ("SObject.Field"), as an admin changing its field-level security would.
+func (s *Server) SetReadOnly(field string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ReadOnly == nil {
+		s.ReadOnly = map[string]bool{}
+	}
+	s.ReadOnly[field] = true
+}
+
+// describe lists the sObject's declared fields and those seen on its
+// stored records.
 func (s *Server) describe(w http.ResponseWriter, sobject string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	recs, ok := s.records[sobject]
-	if !ok {
+	declared, known := s.Fields[sobject]
+	if !ok && !known {
 		writeErr(w, http.StatusNotFound, "NOT_FOUND", "The requested resource does not exist")
 		return
 	}
 	names := map[string]bool{"Id": true, "SystemModstamp": true}
+	for _, n := range declared {
+		names[n] = true
+	}
 	for _, rec := range recs {
 		for k := range rec {
 			names[k] = true
@@ -371,7 +392,21 @@ func (s *Server) describe(w http.ResponseWriter, sobject string) {
 	var fields []map[string]any
 	for n := range names {
 		upd := n != "Id" && n != "SystemModstamp" && !s.ReadOnly[sobject+"."+n]
-		fields = append(fields, map[string]any{"name": n, "updateable": upd})
+		f := map[string]any{"name": n, "label": n, "type": "string", "length": 255, "nillable": n != "Id",
+			"updateable": upd, "createable": upd, "defaultedOnCreate": false, "referenceTo": []string{}}
+		switch {
+		case n == "Id":
+			f["type"], f["length"] = "id", 18
+		case n == "SystemModstamp":
+			f["type"], f["length"] = "datetime", 0
+		case strings.HasSuffix(n, "Id") && len(n) > 2: // a lookup, such as AccountId
+			f["type"], f["length"] = "reference", 18
+			f["referenceTo"], f["relationshipName"] = []string{strings.TrimSuffix(n, "Id")}, strings.TrimSuffix(n, "Id")
+		}
+		if v, ok := s.Types[sobject+"."+n]; ok {
+			f["type"] = v
+		}
+		fields = append(fields, f)
 	}
-	_ = json.NewEncoder(w).Encode(map[string]any{"name": sobject, "fields": fields})
+	_ = json.NewEncoder(w).Encode(map[string]any{"name": sobject, "label": sobject, "fields": fields})
 }

@@ -107,6 +107,19 @@ CREATE TABLE IF NOT EXISTS turgon_match_models (
 	trained_by text NOT NULL,
 	trained_at timestamptz NOT NULL DEFAULT now()
 );
+
+-- What each endpoint holds, as its connector discovered it: a snapshot per
+-- distinct catalog, so drift is the difference between the last two.
+CREATE TABLE IF NOT EXISTS turgon_meta_snapshots (
+	id            bigserial PRIMARY KEY,
+	endpoint      text NOT NULL,
+	connector     text NOT NULL,
+	digest        text NOT NULL,
+	discovered_at timestamptz NOT NULL,
+	checked_at    timestamptz NOT NULL,
+	catalog       jsonb NOT NULL
+);
+CREATE INDEX IF NOT EXISTS turgon_meta_snapshots_endpoint ON turgon_meta_snapshots (endpoint, id DESC);
 `
 
 // Migrate creates or upgrades Turgon's schema.

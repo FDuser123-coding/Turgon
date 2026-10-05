@@ -53,6 +53,9 @@ service Connector {
   // batch the worker did not acknowledge is delivered again (the system
   // retries); the worker drops events whose IDs it already has.
   rpc Stream(stream StreamRequest) returns (stream StreamBatch);
+  // Discover reads what the system holds for the metadata graph: the
+  // objects the configuration uses, and those named.
+  rpc Discover(DiscoverRequest) returns (DiscoverResponse);
 }
 
 // The protocol version this file describes.
@@ -71,7 +74,7 @@ message DescribeResponse {
   string connector = 2;
   string version = 3;
   // What it implements beyond Commit: "simulate", "confirm", "read",
-  // "poll", "export", "check", "stream".
+  // "poll", "export", "check", "stream", "discover".
   repeated string capabilities = 4;
 }
 
@@ -198,4 +201,18 @@ message StreamBatch {
   repeated Event events = 2;
   // Where to resume after this batch, if the system has positions.
   bytes resume = 3;
+}
+
+message DiscoverRequest {
+  string instance = 1;
+  // More objects to read, by the system's names.
+  repeated string objects = 2;
+}
+
+message DiscoverResponse {
+  // JSON: {"objects": [{"name", "kind", "label", "fields": [{"name",
+  // "type", "label", "length", "required", "key", "readOnly"}], "links":
+  // [{"name", "to", "toField"}]}], "uses": [{"object", "field", "by"}]}
+  // (pkg/meta.Catalog).
+  bytes catalog = 1;
 }
