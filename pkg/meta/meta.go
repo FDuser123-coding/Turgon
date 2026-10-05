@@ -56,6 +56,11 @@ type Object struct {
 	Label  string  `json:"label,omitempty"`
 	Fields []Field `json:"fields"`
 	Links  []Link  `json:"links,omitempty"`
+	// Sampled: the system declares no schema for these records (a REST
+	// API's list, an outbox's JSON payload), so the fields are those seen
+	// in recent records. A field missing from a later sample is "not
+	// seen", not removed.
+	Sampled bool `json:"sampled,omitempty"`
 }
 
 // Field is one field of an object.
@@ -156,6 +161,9 @@ const (
 	LengthShrunk    = "length-shrunk"
 	BecameReadOnly  = "became-read-only"
 	RequiredDropped = "no-longer-required"
+	// FieldNotSeen: a sampled object's field is absent from the latest
+	// sample. It may have been removed, or the sampled records lacked it.
+	FieldNotSeen = "field-not-seen"
 )
 
 // Change is one difference between two snapshots of an endpoint.
@@ -205,6 +213,7 @@ func Diff(old, new Catalog) []Change {
 			out = append(out, Change{Kind: ObjectRemoved, Object: name, Breaking: true})
 			continue
 		}
+		sampled := o.Sampled || n.Sampled
 		oldFields := map[string]Field{}
 		for _, f := range o.Fields {
 			oldFields[f.Name] = f
@@ -216,7 +225,7 @@ func Diff(old, new Catalog) []Change {
 				out = append(out, Change{Kind: FieldAdded, Object: name, Field: f.Name, New: f.Type, Breaking: f.Required})
 				continue
 			}
-			if was.Type != f.Type {
+			if was.Type != f.Type && !(sampled && (was.Type == "" || f.Type == "")) { // a sample of nulls has no type
 				out = append(out, Change{Kind: TypeChanged, Object: name, Field: f.Name, Old: was.Type, New: f.Type, Breaking: true})
 			}
 			if !was.Required && f.Required {
@@ -234,6 +243,10 @@ func Diff(old, new Catalog) []Change {
 			}
 		}
 		for _, f := range oldFields {
+			if sampled {
+				out = append(out, Change{Kind: FieldNotSeen, Object: name, Field: f.Name, Old: f.Type})
+				continue
+			}
 			out = append(out, Change{Kind: FieldRemoved, Object: name, Field: f.Name, Old: f.Type, Breaking: true})
 		}
 	}
@@ -255,6 +268,56 @@ func Diff(old, new Catalog) []Change {
 }
 
 var identRE = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
+
+// SampleFields describes the top-level fields of records that declare no
+// schema (JSON from a REST API, an outbox payload, a change event without
+// its schema): each field's JSON type, or the types seen, joined with |.
+// A field that was always null has no type.
+func SampleFields(records []map[string]any) []Field {
+	types := map[string]map[string]bool{}
+	for _, r := range records {
+		for k, v := range r {
+			if types[k] == nil {
+				types[k] = map[string]bool{}
+			}
+			if t := jsonType(v); t != "" {
+				types[k][t] = true
+			}
+		}
+	}
+	out := make([]Field, 0, len(types))
+	for k, ts := range types {
+		list := make([]string, 0, len(ts))
+		for t := range ts {
+			list = append(list, t)
+		}
+		sort.Strings(list)
+		out = append(out, Field{Name: k, Type: strings.Join(list, "|")})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+func jsonType(v any) string {
+	switch v := v.(type) {
+	case nil:
+		return ""
+	case bool:
+		return "boolean"
+	case float64, json.Number, int, int64:
+		return "number"
+	case string:
+		if _, err := time.Parse(time.RFC3339, v); err == nil {
+			return "datetime"
+		}
+		return "string"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	}
+	return fmt.Sprintf("%T", v)
+}
 
 // Usage lists, by "object.field", what relies on each field of an
 // endpoint: the uses its connector reports, and the mappings in the specs

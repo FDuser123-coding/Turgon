@@ -439,30 +439,7 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 	}
 	idField := or(e.ID, "id")
 	posField := or(e.Position, idField)
-	fill := func(v string) string {
-		return varRE.ReplaceAllStringFunc(v, func(m string) string {
-			switch varRE.FindStringSubmatch(m)[1] {
-			case "position":
-				return formatPosition(after, e.PositionFormat)
-			case "positionMillis":
-				return strconv.FormatInt(after, 10)
-			case "limit":
-				return strconv.Itoa(limit)
-			}
-			return m
-		})
-	}
-	q := url.Values{}
-	for k, v := range e.Params {
-		q.Set(k, fill(v))
-	}
-	method, body := http.MethodGet, any(nil)
-	if e.Method == http.MethodPost {
-		method, body = http.MethodPost, fillBody(e.Body, fill, limit)
-		if body == nil {
-			body = map[string]any{}
-		}
-	}
+	method, q, body := e.listRequest(after, limit)
 	desc := e.Order == "desc"
 	maxPages := 1
 	if e.Pagination != nil && desc {
@@ -535,6 +512,35 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 		}
 	}
 	return events, nil
+}
+
+// listRequest is the first list request for items after a position.
+func (e Event) listRequest(after int64, limit int) (string, url.Values, any) {
+	fill := func(v string) string {
+		return varRE.ReplaceAllStringFunc(v, func(m string) string {
+			switch varRE.FindStringSubmatch(m)[1] {
+			case "position":
+				return formatPosition(after, e.PositionFormat)
+			case "positionMillis":
+				return strconv.FormatInt(after, 10)
+			case "limit":
+				return strconv.Itoa(limit)
+			}
+			return m
+		})
+	}
+	q := url.Values{}
+	for k, v := range e.Params {
+		q.Set(k, fill(v))
+	}
+	method, body := http.MethodGet, any(nil)
+	if e.Method == http.MethodPost {
+		method, body = http.MethodPost, fillBody(e.Body, fill, limit)
+		if body == nil {
+			body = map[string]any{}
+		}
+	}
+	return method, q, body
 }
 
 // fillBody copies a list request's body template with its variables set.

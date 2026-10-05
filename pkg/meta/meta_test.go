@@ -1,6 +1,8 @@
 package meta
 
 import (
+	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -169,5 +171,32 @@ func TestCompareKnowsWhatUsedARemovedField(t *testing.T) {
 	if len(changes) != 2 || changes[0].Kind != FieldRemoved || changes[0].Field != "total" || !changes[0].Breaks() ||
 		strings.Join(changes[0].UsedBy, ";") != "mapping shop-order-to-sales-order@1.0.0 (netValue)" || changes[1].Breaks() {
 		t.Fatalf("changes %+v", changes)
+	}
+}
+
+func TestSampledObjects(t *testing.T) {
+	fields := SampleFields([]map[string]any{
+		{"id": json.Number("7"), "total": "12.50", "customer": map[string]any{"email": "a@b"}, "note": nil, "created_at": "2026-10-01T09:00:00Z"},
+		{"id": 8.0, "total": 12.5, "tags": []any{"x"}, "note": nil, "created_at": "2026-10-01T09:05:00Z"},
+	})
+	got := map[string]string{}
+	for _, f := range fields {
+		got[f.Name] = f.Type
+	}
+	want := map[string]string{"id": "number", "total": "number|string", "customer": "object", "note": "", "created_at": "datetime", "tags": "array"}
+	if fmt.Sprint(got) != fmt.Sprint(want) {
+		t.Fatalf("fields %v", got)
+	}
+
+	// A field missing from a later sample is not seen, not removed; a field
+	// first seen with a value is not a type change.
+	old := Catalog{Objects: []Object{{Name: "Order.Created", Sampled: true, Fields: []Field{{Name: "id", Type: "number"}, {Name: "note"}, {Name: "coupon", Type: "string"}}}}}
+	new := Catalog{Objects: []Object{{Name: "Order.Created", Sampled: true, Fields: []Field{{Name: "id", Type: "string"}, {Name: "note", Type: "string"}}}}}
+	var kinds []string
+	for _, c := range Diff(old, new) {
+		kinds = append(kinds, fmt.Sprintf("%s %s %v", c.Kind, c.Field, c.Breaking))
+	}
+	if strings.Join(kinds, ",") != "field-not-seen coupon false,type-changed id true" {
+		t.Fatalf("changes %v", kinds)
 	}
 }

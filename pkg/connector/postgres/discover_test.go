@@ -23,6 +23,10 @@ func TestDiscover(t *testing.T) {
 			status text NOT NULL DEFAULT 'open',
 			total_cents bigint GENERATED ALWAYS AS ((net_value * 100)::bigint) STORED);
 		CREATE TABLE outbox (id bigserial PRIMARY KEY, event text, payload jsonb);
+		INSERT INTO outbox (event, payload) VALUES
+			('Order.Created', '{"order_number": 1, "total": "9.50", "customer": {"email": "a@b"}}'),
+			('Order.Created', '{"order_number": 2, "total": "12.00", "coupon": null}'),
+			('Order.Cancelled', '{"order_number": 1}');
 		CREATE TABLE unrelated (x int)`); err != nil {
 		t.Fatal(err)
 	}
@@ -39,13 +43,17 @@ func TestDiscover(t *testing.T) {
 		t.Fatal(err)
 	}
 	var names []string
+	var tables []meta.Object
 	for _, o := range cat.Objects {
-		names = append(names, o.Name)
+		if !o.Sampled {
+			names = append(names, o.Name)
+			tables = append(tables, o)
+		}
 	}
 	if len(names) != 3 || !strings.HasSuffix(names[0], ".customers") || !strings.HasSuffix(names[2], ".sales_orders") {
 		t.Fatalf("objects %v", names)
 	}
-	orders := cat.Objects[2]
+	orders := tables[2]
 	f := func(name string) meta.Field {
 		t.Helper()
 		v, ok := orders.Field(name)
@@ -69,7 +77,7 @@ func TestDiscover(t *testing.T) {
 	if len(orders.Links) != 1 || !strings.HasSuffix(orders.Links[0].To, ".customers") || orders.Links[0].ToField != "id" {
 		t.Fatalf("links %+v", orders.Links)
 	}
-	customers := cat.Objects[0]
+	customers := tables[0]
 	if n, _ := customers.Field("name"); n.Length != 80 || n.Label != "Customer name" {
 		t.Fatalf("name %+v", n)
 	}
@@ -77,13 +85,20 @@ func TestDiscover(t *testing.T) {
 	if got := strings.Join(usage[orders.Name+".status"], ","); got != "operation cancel-sales-order" {
 		t.Fatalf("status used by %q (%v)", got, usage)
 	}
-	if got := strings.Join(usage[cat.Objects[1].Name+".payload"], ","); got != "outbox" {
+	if got := strings.Join(usage[tables[1].Name+".payload"], ","); got != "outbox" {
 		t.Fatalf("payload used by %q", got)
 	}
 	if got := strings.Join(meta.Creators(cat)[orders.Name], ","); got != "operation create-sales-order" {
 		t.Fatalf("orders created by %q", got)
 	}
-	if ev := cat.Events["Customer.Created"]; ev != cat.Objects[0].Name {
+	payload, ok := cat.Object(cat.Events["Order.Created"])
+	if !ok || !payload.Sampled || !strings.HasSuffix(payload.Name, ".outbox#Order.Created") || len(payload.Fields) != 4 {
+		t.Fatalf("outbox payload %+v (events %v)", payload, cat.Events)
+	}
+	if total, _ := payload.Field("total"); total.Type != "string" {
+		t.Fatalf("total %+v", total)
+	}
+	if ev := cat.Events["Customer.Created"]; ev != tables[0].Name {
 		t.Fatalf("events %v", cat.Events)
 	}
 

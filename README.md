@@ -765,13 +765,24 @@ database as a snapshot. The connectors read it from the system's own catalog:
 | `salesforce` | sObjects, with fields, types, lengths, required, field-level security, lookups | the REST API's `describe` |
 | `sap-odata` | entity sets, with properties, keys, `MaxLength`, `sap:label`, `sap:creatable`/`updatable`, navigation targets | each service's `$metadata` |
 | `sap-ecc` | BAPI interfaces, the dictionary structures the BAPIs take, IDoc segments | `RFC_GET_FUNCTION_INTERFACE`, `DDIF_FIELDINFO_GET`, `IDOCTYPE_READ_COMPLETE` |
+| `debezium` | each captured table, with its columns' Connect types (`decimal(12,2)`, `Date`, `Json`), optional or not, defaults, the key, and, with Debezium's `column.propagate.source.type`, the database's own type and length | the newest change on each topic: its Kafka Connect schema, or its values when schemas are off |
+| `rest` | each event's list items, sampled | one page of the event's list request |
+| `postgres` outbox | each outbox event's payload, sampled | the latest 500 outbox rows |
+
+An API without a schema, or a JSON payload, is **sampled**: its fields are those seen in recent
+records, with their JSON types (`string`, `number`, `datetime`, `array`...). A field missing from a
+later sample is reported as `field-not-seen`, not as removed. The API may have dropped it, or the
+latest records simply lacked it. When something reads that field, `turgon discover` marks it
+**CHECK** and the console marks it **check**. A Debezium topic with no change yet is left out until
+one arrives. A topic that no longer exists is **MISSING**, because the table is no longer captured.
 
 A connector reports the objects its configuration uses, and what uses each field: an
 operation, an event, an export. Turgon adds the spec's mappings that read the object, so a field
 links to everything that relies on it. A mapping reads an object when it maps from
 `<connector>.<object>` (`salesforce.Opportunity`), or from the event that starts its flow: the
-connector says which object each event's records come from. That is a change capture's table, a
-polled sObject or entity set, or the sObject a change event channel follows. So
+connector says which object each event's records come from: a change capture's table, a Debezium
+topic's table, an outbox event's payload, a REST event's list items, a polled sObject or entity set,
+or the sObject a change event channel follows. So
 `shop-order-to-sales-order`, mapping from `shop-db.Order` in a flow started by change capture on
 `shop.orders`, reads that table's `total`, `currency` and the other columns its expressions name.
 A field a change removed is matched against the previous snapshot, so its removal still names what
@@ -1732,10 +1743,10 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 ## Not built yet
 
-In rough roadmap order (§16, §19), the rest of the metadata graph comes first. The `rest` and
-`debezium` connectors do not discover yet. A mapping that reads an outbox event's payload (JSON the
-application writes, not a table's row) is not linked to fields. Recipes that do not compile, such as
-those waiting for mapping review, are left out of what uses each field. Managed subscriptions are tested against the fake org's Pub/Sub
+In rough roadmap order (§16, §19), the metadata graph's remaining gaps come first. Recipes that do
+not compile, such as those waiting for mapping review, are left out of what uses each field. A REST
+API's write targets are not discovered, only its events' lists. Debezium topics written with Avro
+and a schema registry are not read: Turgon reads the JSON converter's output. Managed subscriptions are tested against the fake org's Pub/Sub
 and Tooling APIs, not yet against a real org. Of the Camel/Java connectors, only SAP ECC exists so far. It is
 tested against a fake ECC and a JCo stand-in, not yet against a real SAP system or gateway. It reads
 IDocs as SAP pushes them, but not change pointers. The `shopify` and `powerbi-export` manifests

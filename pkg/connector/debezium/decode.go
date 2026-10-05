@@ -27,6 +27,8 @@ type field struct {
 	Type       string            `json:"type"`
 	Name       string            `json:"name"`
 	Field      string            `json:"field"`
+	Optional   bool              `json:"optional"`
+	Default    any               `json:"default"`
 	Parameters map[string]string `json:"parameters"`
 	Fields     []field           `json:"fields"`
 }
