@@ -259,8 +259,28 @@ spec:
 
   Tombstones are skipped. A flattened event (the `ExtractNewRecordState` transform) is refused
   with an explanation, because Turgon needs the envelope.
-- **`turgon check`** connects to the brokers and finds each topic. If a topic is missing, it
-  explains Debezium's naming and the Kafka ACLs the user needs.
+- **Avro with a schema registry.** When Debezium writes Avro, set the connection's
+  `schemaRegistry`. The converter is Confluent's `AvroConverter`, or Apicurio's with
+  `apicurio.registry.as-confluent=true`, `headers.enabled=false` and `use-id=contentId`. The
+  registry URL is a Confluent-compatible API: Confluent Schema Registry, Apicurio's
+  `/apis/ccompat/v7`, Karapace or Redpanda.
+  - Each record's schema is fetched once by its ID and kept.
+  - Values are decoded into the same JSON as the JSON converter gives, keys too. So switching
+    converters changes neither the payloads nor the change IDs, and the inbox still drops replays.
+  - Discovery reads the columns from the Avro schema, named as Connect names them.
+  - A registry that needs credentials (Confluent Cloud's API key) takes `auth: basic`, with
+    `{"registry": {"username": ..., "password": ...}}` in the connection's secret.
+  - An Avro record on a connection without a registry is refused with that explanation.
+
+  ```yaml
+  config:
+    brokers: [kafka-1.internal:9093]
+    tls: true
+    schemaRegistry: { url: https://schema-registry.internal:8081, auth: basic }
+  ```
+- **`turgon check`** connects to the brokers and finds each topic, and lists the schema
+  registry's subjects. If a topic is missing, it explains Debezium's naming and the Kafka ACLs
+  the user needs.
 
 Measured with Postgres 16, Debezium Server 3.7.0 (Kafka sink), Apache Kafka 4.3.1 (KRaft)
 and two workers:
@@ -272,6 +292,11 @@ and two workers:
 - **Replays.** After Debezium's own `kill -9`, and with 4 changes replayed onto the topic, the
   inbox held 9 events with 9 distinct IDs.
 - **Throughput.** A burst of 1,000 inserted rows reached the inbox in 3.3 s.
+- **Avro.** Kafka Connect 4.3.1 ran Debezium's Postgres connector 3.7.0 with Apicurio Registry
+  2.6.13's `AvroConverter` (Confluent wire format), and Turgon read through Apicurio's ccompat API:
+  - `turgon check` listed the registry's 2 subjects;
+  - `turgon discover` described the table exactly as from JSON changes;
+  - an inserted order became an ERP order with its `NUMERIC`, `DATE` and `JSONB` columns decoded.
 
 ### Any HTTP API: Shopify to ERP
 
@@ -1745,8 +1770,8 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 In rough roadmap order (§16, §19), the metadata graph's remaining gaps come first. Recipes that do
 not compile, such as those waiting for mapping review, are left out of what uses each field. A REST
-API's write targets are not discovered, only its events' lists. Debezium topics written with Avro
-and a schema registry are not read: Turgon reads the JSON converter's output. Managed subscriptions are tested against the fake org's Pub/Sub
+API's write targets are not discovered, only its events' lists. Debezium topics in Protobuf or JSON
+Schema (with a registry) are not read, only Avro and plain JSON. Managed subscriptions are tested against the fake org's Pub/Sub
 and Tooling APIs, not yet against a real org. Of the Camel/Java connectors, only SAP ECC exists so far. It is
 tested against a fake ECC and a JCo stand-in, not yet against a real SAP system or gateway. It reads
 IDocs as SAP pushes them, but not change pointers. The `shopify` and `powerbi-export` manifests

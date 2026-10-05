@@ -16,7 +16,8 @@ spec:
     secretRef: openbao://kafka/turgon
   interfaces:
     events:
-      # Debezium's change events (JSON converter), read from Kafka with the
+      # Debezium's change events (the JSON converter, or Avro with a
+      # Confluent-compatible schema registry), read from Kafka with the
       # offsets stored in Turgon's inbox transaction.
       - kind: debezium
   limits:

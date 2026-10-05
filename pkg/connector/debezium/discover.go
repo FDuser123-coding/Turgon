@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/iskorotkov/avro/v2"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -75,7 +76,7 @@ func (c *Conn) Discover(ctx context.Context, _ []string) (meta.Catalog, error) {
 			cat.Uses = kept
 			continue
 		}
-		o, err := describe(ev.Topic, recs)
+		o, err := c.describe(ctx, ev.Topic, recs)
 		if err != nil {
 			return cat, fmt.Errorf("debezium: discover %s: %w", ev.Topic, err)
 		}
@@ -135,11 +136,34 @@ func (c *Conn) newest(ctx context.Context, topic string, starts, ends position) 
 
 // describe makes the table's object from its newest changes (newest
 // first): the schema of the newest one, or the values of all of them.
-func describe(topic string, recs []*kgo.Record) (meta.Object, error) {
+func (c *Conn) describe(ctx context.Context, topic string, recs []*kgo.Record) (meta.Object, error) {
 	o := meta.Object{Name: topic, Kind: "change topic"}
 	keys := map[string]bool{}
 	for _, f := range keySchema(recs[0].Key) {
 		keys[f] = true
+	}
+	if _, _, isAvro := wireFormat(recs[0].Value); isAvro && c.reg != nil {
+		if _, _, avroKey := wireFormat(recs[0].Key); avroKey {
+			if ks, _, err := c.reg.decodeAvro(ctx, recs[0].Key); err == nil {
+				if kr, ok := ks.(*avro.RecordSchema); ok {
+					for _, f := range kr.Fields() {
+						keys[f.Name()] = true
+					}
+				}
+			}
+		}
+		s, _, err := c.reg.decodeAvro(ctx, recs[0].Value)
+		if err != nil {
+			return o, err
+		}
+		cols, ok := avroColumns(s, keys)
+		if !ok {
+			return o, errors.New("the Avro schema has no before or after row")
+		}
+		for _, col := range cols {
+			o.Fields = append(o.Fields, column(col.f, col.key))
+		}
+		return o, nil
 	}
 	var top struct {
 		Schema *field `json:"schema"`
@@ -158,7 +182,7 @@ func describe(topic string, recs []*kgo.Record) (meta.Object, error) {
 	// No schema: the values say what there is.
 	var rows []map[string]any
 	for _, r := range recs {
-		env, err := decodeEnvelope(r.Value)
+		env, _, err := c.decode(ctx, r.Key, r.Value)
 		if err != nil {
 			return o, err
 		}
