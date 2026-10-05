@@ -90,6 +90,14 @@ func (c *Conn) Discover(ctx context.Context, objects []string) (meta.Catalog, er
 	if err := rows.Err(); err != nil {
 		return cat, fmt.Errorf("postgres: discover: %w", err)
 	}
+	cat.Events = map[string]string{}
+	for name, ch := range c.cfg.Changes { // a change event carries its table's row
+		if oid, ok := oids[ch.Table]; ok {
+			cat.Events[name] = canonical[oid]
+		} else {
+			cat.Events[name] = ch.Table
+		}
+	}
 	for _, u := range uses {
 		if oid, ok := oids[u.table]; ok {
 			cat.Uses = append(cat.Uses, meta.Use{Object: canonical[oid], Field: u.column, By: u.by, Creates: u.creates})

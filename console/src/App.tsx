@@ -6,6 +6,7 @@ import { Approvals } from "./pages/Approvals";
 import { Audit } from "./pages/Audit";
 import { Catalog } from "./pages/Catalog";
 import { Integrations } from "./pages/Integrations";
+import { Metadata, MetadataDetail } from "./pages/Metadata";
 import { RunDetail, Runs } from "./pages/Runs";
 import { Steward } from "./pages/Steward";
 import type { User } from "./types";
@@ -36,6 +37,8 @@ export function App() {
   else if (path.startsWith("/runs/")) page = <RunDetail id={decodeURIComponent(path.slice("/runs/".length))} user={user} />;
   else if (path === "/audit") page = <Audit />;
   else if (path === "/catalog") page = <Catalog user={user} />;
+  else if (path === "/metadata") page = <Metadata />;
+  else if (path.startsWith("/metadata/")) page = <MetadataDetail endpoint={decodeURIComponent(path.slice("/metadata/".length))} />;
   else page = <p>Not found.</p>;
 
   const tab = (to: string, label: string, badge?: number) => {
@@ -58,6 +61,7 @@ export function App() {
         {tab("/runs", "Runs")}
         {tab("/audit", "Audit")}
         {tab("/catalog", "Catalog")}
+        {tab("/metadata", "Metadata")}
         <span className="spacer" />
         {user && (
           <span className="muted small" title={user.roles.join(", ")}>

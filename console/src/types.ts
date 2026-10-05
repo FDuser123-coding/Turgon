@@ -194,3 +194,81 @@ export interface FlowStep {
   compensation?: string;
   plugins?: string[];
 }
+
+// The metadata graph: what each system holds, as `turgon discover` found it.
+export interface MetaSnapshot {
+  id: number;
+  endpoint: string;
+  connector: string;
+  digest: string;
+  discoveredAt: string;
+  checkedAt: string;
+  objects: number;
+}
+
+export interface MetaSystem {
+  endpoint: string;
+  connector: string;
+  version?: string;
+  latest: MetaSnapshot;
+  snapshots: number;
+  fields: number;
+  changes: number;
+  breaking: number;
+  missing: number;
+}
+
+export interface MetaOverview {
+  error?: string;
+  systems: MetaSystem[];
+}
+
+export interface MetaChange {
+  kind: string;
+  object: string;
+  field?: string;
+  old?: string;
+  new?: string;
+  breaking: boolean;
+  usedBy?: string[];
+}
+
+export interface MetaMissing {
+  object: string;
+  field?: string;
+  usedBy: string[];
+}
+
+export interface MetaField {
+  name: string;
+  type: string;
+  label?: string;
+  length?: number;
+  required?: boolean;
+  key?: boolean;
+  readOnly?: boolean;
+  usedBy?: string[];
+}
+
+export interface MetaObject {
+  name: string;
+  kind: string;
+  label?: string;
+  fields: MetaField[];
+  links?: { name: string; to: string; toField?: string }[];
+  usedBy?: string[];
+}
+
+export interface MetaDetail {
+  error?: string;
+  endpoint: string;
+  connector: string;
+  version?: string;
+  snapshots: MetaSnapshot[];
+  to: MetaSnapshot;
+  from?: MetaSnapshot;
+  changes: MetaChange[];
+  missing: MetaMissing[];
+  objects: MetaObject[];
+  events?: Record<string, string>;
+}

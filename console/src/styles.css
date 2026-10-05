@@ -243,3 +243,6 @@ ol.pipeline { list-style: none; display: flex; flex-wrap: wrap; align-items: str
 @media (max-width: 640px) {
   .cmap svg { min-width: 620px; }
 }
+
+/* Wide tables keep their columns on a phone and scroll inside .table-wrap. */
+table.wide { min-width: 640px; }

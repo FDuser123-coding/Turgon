@@ -1,5 +1,5 @@
 import { createDemoApi } from "./demo";
-import type { AuditLog, CatalogReport, LinkResult, RunDetail, RunSummary, StewardItem, User, Integrations } from "./types";
+import type { AuditLog, CatalogReport, LinkResult, MetaDetail, MetaOverview, RunDetail, RunSummary, StewardItem, User, Integrations } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -38,6 +38,14 @@ const liveApi = {
   audit: () => request<AuditLog[]>("/api/audit"),
   catalog: () => request<CatalogReport>("/api/catalog"),
   integrations: () => request<Integrations>("/api/integrations"),
+  meta: () => request<MetaOverview>("/api/meta"),
+  metaDetail: (endpoint: string, from?: string | null, to?: string | null) => {
+    const q = new URLSearchParams();
+    if (from) q.set("from", from);
+    if (to) q.set("to", to);
+    const qs = q.toString();
+    return request<MetaDetail>(`/api/meta/${encodeURIComponent(endpoint)}${qs ? `?${qs}` : ""}`);
+  },
   decide: (d: { runId: string; step: string; digest: string; decision: "approve" | "reject"; note?: string }) =>
     request<{ status: string }>("/api/decisions", {
       method: "POST",

@@ -51,13 +51,29 @@ func (c *Conn) Discover(ctx context.Context, objects []string) (meta.Catalog, er
 		}
 	}
 	where := map[string][]string{} // sObject -> "condition\x00by"
+	cat.Events = map[string]string{}
 	for name, q := range c.cfg.Events {
+		cat.Events[name] = q.SObject
 		use(q.SObject, "", "event "+name)
 		if q.Where != "" {
 			where[q.SObject] = append(where[q.SObject], q.Where+"\x00event "+name)
 		}
 		for _, f := range q.Fields {
 			use(q.SObject, f, "event "+name)
+		}
+	}
+	for name, sub := range c.cfg.Subscriptions {
+		sobject := changeEventObject(sub.Topic)
+		if sobject == "" {
+			continue // a platform event, or all change events
+		}
+		cat.Events[name] = sobject
+		use(sobject, "", "subscription "+name)
+		for _, f := range sub.Fields {
+			use(sobject, f, "subscription "+name)
+		}
+		for f := range sub.Match {
+			use(sobject, f, "subscription "+name+" (match)")
 		}
 	}
 	for name, e := range c.cfg.Exports {
@@ -116,4 +132,21 @@ func (c *Conn) Discover(ctx context.Context, objects []string) (meta.Catalog, er
 	}
 	cat.Normalize()
 	return cat, nil
+}
+
+// changeEventObject is the sObject a change event channel follows:
+// /data/AccountChangeEvent is Account, /data/Invoice__ChangeEvent is
+// Invoice__c. Other topics follow none.
+func changeEventObject(topic string) string {
+	ch, ok := strings.CutPrefix(topic, "/data/")
+	if !ok {
+		return ""
+	}
+	if custom, ok := strings.CutSuffix(ch, "__ChangeEvent"); ok && custom != "" {
+		return custom + "__c"
+	}
+	if std, ok := strings.CutSuffix(ch, "ChangeEvent"); ok && std != "" && !strings.HasSuffix(ch, "ChangeEvents") {
+		return std
+	}
+	return ""
 }

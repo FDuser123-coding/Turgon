@@ -30,6 +30,23 @@ type Catalog struct {
 	Objects      []Object  `json:"objects"`
 	// Uses are the fields the connection's configuration relies on.
 	Uses []Use `json:"uses,omitempty"`
+	// Events names, by event, the object whose records the event carries
+	// (a change capture's table, a polled sObject or entity set), so a
+	// mapping reading the event reads that object's fields.
+	Events map[string]string `json:"events,omitempty"`
+}
+
+// Snapshot describes one stored catalog of an endpoint.
+type Snapshot struct {
+	ID        int64  `json:"id"`
+	Endpoint  string `json:"endpoint"`
+	Connector string `json:"connector"`
+	Digest    string `json:"digest"`
+	// DiscoveredAt is when the endpoint first held this catalog;
+	// CheckedAt, when a discovery last found it unchanged.
+	DiscoveredAt time.Time `json:"discoveredAt"`
+	CheckedAt    time.Time `json:"checkedAt"`
+	Objects      int       `json:"objects"`
 }
 
 // Object is a table, sObject, entity set, BAPI or IDoc segment.
@@ -240,18 +257,18 @@ func Diff(old, new Catalog) []Change {
 var identRE = regexp.MustCompile(`[A-Za-z_][A-Za-z0-9_]*`)
 
 // Usage lists, by "object.field", what relies on each field of an
-// endpoint: the uses its connector reports, and the mappings in spec that
-// read the endpoint's objects (a mapping from "salesforce.Opportunity"
-// reads Opportunity's fields its expressions name).
-func Usage(c Catalog, spec *compiler.RuntimeSpec) map[string][]string {
+// endpoint: the uses its connector reports, and the mappings in the specs
+// that read the endpoint's objects. A mapping reads an object when it maps
+// from "<endpoint or connector>.<object>" ("salesforce.Opportunity"), or
+// from the endpoint's event that triggers the workflow, whose records come
+// from the object the catalog names for that event. Its expressions name
+// the fields it reads.
+func Usage(c Catalog, specs ...*compiler.RuntimeSpec) map[string][]string {
 	out := map[string][]string{}
 	add := func(key, by string) {
-		for _, b := range out[key] {
-			if b == by {
-				return
-			}
+		if !slices.Contains(out[key], by) {
+			out[key] = append(out[key], by)
 		}
-		out[key] = append(out[key], by)
 	}
 	for _, u := range c.Uses {
 		add(u.Object+"."+u.Field, u.By)
@@ -259,7 +276,10 @@ func Usage(c Catalog, spec *compiler.RuntimeSpec) map[string][]string {
 			add(u.Object, u.By)
 		}
 	}
-	if spec != nil {
+	for _, spec := range specs {
+		if spec == nil {
+			continue
+		}
 		for _, wf := range spec.Spec.Workflows {
 			for _, st := range wf.Steps {
 				m := st.Map
@@ -271,6 +291,9 @@ func Usage(c Catalog, spec *compiler.RuntimeSpec) map[string][]string {
 					continue
 				}
 				o, ok := c.Object(entity)
+				if !ok && wf.Trigger.Endpoint == c.Endpoint {
+					o, ok = c.Object(c.Events[wf.Trigger.Event])
+				}
 				if !ok {
 					continue
 				}
@@ -293,6 +316,80 @@ func Usage(c Catalog, spec *compiler.RuntimeSpec) map[string][]string {
 		sort.Strings(out[k])
 	}
 	return out
+}
+
+// Missing is an object or field the configuration uses that the system
+// does not hold.
+type Missing struct {
+	Object string   `json:"object"`
+	Field  string   `json:"field,omitempty"`
+	UsedBy []string `json:"usedBy"`
+}
+
+func (m Missing) String() string {
+	where := m.Object
+	if m.Field != "" {
+		where += "." + m.Field
+	}
+	return where + "; used by " + strings.Join(m.UsedBy, ", ")
+}
+
+// MissingUses lists what the configuration uses that the catalog lacks.
+func MissingUses(c Catalog) []Missing {
+	var out []Missing
+	at := map[string]int{}
+	for _, u := range c.Uses {
+		m := Missing{Object: u.Object}
+		if o, ok := c.Object(u.Object); ok {
+			if u.Field == "" {
+				continue
+			}
+			if _, ok := o.Field(u.Field); ok {
+				continue
+			}
+			m.Field = u.Field
+		}
+		key := m.Object + "." + m.Field
+		i, seen := at[key]
+		if !seen {
+			i = len(out)
+			at[key] = i
+			out = append(out, m)
+		}
+		if !slices.Contains(out[i].UsedBy, u.By) {
+			out[i].UsedBy = append(out[i].UsedBy, u.By)
+		}
+	}
+	for i := range out {
+		sort.Strings(out[i].UsedBy)
+	}
+	return out
+}
+
+// Compare lists the changes from old to new, with what uses each: the
+// uses of both catalogs, so a field the new one lacks is still known to be
+// read by the mappings that read it before. Changes that can break a run
+// come first.
+func Compare(old, new Catalog, specs ...*compiler.RuntimeSpec) []Change {
+	usage := Usage(new, specs...)
+	for k, by := range Usage(old, specs...) {
+		for _, b := range by {
+			if !slices.Contains(usage[k], b) {
+				usage[k] = append(usage[k], b)
+			}
+		}
+	}
+	return SortChanges(Annotate(Diff(old, new), usage, Creators(new)))
+}
+
+// Breaks reports whether a change can fail this deployment's runs: it
+// breaks, and something uses what changed.
+func (c Change) Breaks() bool { return c.Breaking && len(c.UsedBy) > 0 }
+
+// SortChanges puts the changes that can break a run first.
+func SortChanges(cs []Change) []Change {
+	sort.SliceStable(cs, func(i, j int) bool { return cs[i].Breaks() && !cs[j].Breaks() })
+	return cs
 }
 
 // Creators lists, by object, what creates its records (see Use.Creates).

@@ -1,4 +1,5 @@
 // Pure helpers, unit-tested in format.test.ts.
+import type { MetaChange, MetaField } from "./types";
 
 export function ago(iso: string | undefined, now: Date = new Date()): string {
   if (!iso) return "";
@@ -93,4 +94,28 @@ export function statusTone(status: string): "ok" | "bad" | "warn" | "neutral" {
     default:
       return "neutral";
   }
+}
+
+// breaks: the change can fail a run, because something uses what changed.
+export function breaks(c: MetaChange): boolean {
+  return c.breaking && (c.usedBy?.length ?? 0) > 0;
+}
+
+export function where(c: { object: string; field?: string }): string {
+  return c.field ? `${c.object}.${c.field}` : c.object;
+}
+
+export function values(c: MetaChange): string {
+  if (c.old && c.new) return `${c.old} → ${c.new}`;
+  if (c.old) return `was ${c.old}`;
+  return c.new ?? "";
+}
+
+// flags lists what a field's schema says about it.
+export function flags(f: MetaField): string[] {
+  const out: string[] = [];
+  if (f.key) out.push("key");
+  if (f.required) out.push("required");
+  if (f.readOnly) out.push("read-only");
+  return out;
 }

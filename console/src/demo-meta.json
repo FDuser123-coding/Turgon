@@ -1,0 +1,479 @@
+{
+ "overview": {
+  "systems": [
+   {
+    "endpoint": "erp-db",
+    "connector": "postgres",
+    "version": "1.0.0",
+    "latest": {
+     "id": 3,
+     "endpoint": "erp-db",
+     "connector": "postgres",
+     "digest": "71a94b96e43962b37d0e63af876517d64a87b9d909bef8d1f904c9dc0fe82194",
+     "discoveredAt": "2026-10-05T14:34:10.035091Z",
+     "checkedAt": "2026-10-05T14:34:10.035091Z",
+     "objects": 3
+    },
+    "snapshots": 2,
+    "fields": 21,
+    "changes": 2,
+    "breaking": 2,
+    "missing": 0
+   },
+   {
+    "endpoint": "shop-db",
+    "connector": "postgres",
+    "version": "1.0.0",
+    "latest": {
+     "id": 4,
+     "endpoint": "shop-db",
+     "connector": "postgres",
+     "digest": "fdf282d1fae90c3673be6d63178c1e037ec651e0c9222dc7e373ef9006bf4d3e",
+     "discoveredAt": "2026-10-05T14:34:10.054551Z",
+     "checkedAt": "2026-10-05T14:34:10.054551Z",
+     "objects": 2
+    },
+    "snapshots": 2,
+    "fields": 10,
+    "changes": 3,
+    "breaking": 1,
+    "missing": 0
+   }
+  ]
+ },
+ "details": {
+  "erp-db": {
+   "endpoint": "erp-db",
+   "connector": "postgres",
+   "version": "1.0.0",
+   "snapshots": [
+    {
+     "id": 3,
+     "endpoint": "erp-db",
+     "connector": "postgres",
+     "digest": "71a94b96e43962b37d0e63af876517d64a87b9d909bef8d1f904c9dc0fe82194",
+     "discoveredAt": "2026-10-05T14:34:10.035091Z",
+     "checkedAt": "2026-10-05T14:34:10.035091Z",
+     "objects": 3
+    },
+    {
+     "id": 1,
+     "endpoint": "erp-db",
+     "connector": "postgres",
+     "digest": "7bad7e707eb4528f8dfca812830eba5ae8e59b7cfe15e9d0dd39204dfd42239e",
+     "discoveredAt": "2026-10-05T14:34:09.84031Z",
+     "checkedAt": "2026-10-05T14:34:09.84031Z",
+     "objects": 3
+    }
+   ],
+   "to": {
+    "id": 3,
+    "endpoint": "erp-db",
+    "connector": "postgres",
+    "digest": "71a94b96e43962b37d0e63af876517d64a87b9d909bef8d1f904c9dc0fe82194",
+    "discoveredAt": "2026-10-05T14:34:10.035091Z",
+    "checkedAt": "2026-10-05T14:34:10.035091Z",
+    "objects": 3
+   },
+   "from": {
+    "id": 1,
+    "endpoint": "erp-db",
+    "connector": "postgres",
+    "digest": "7bad7e707eb4528f8dfca812830eba5ae8e59b7cfe15e9d0dd39204dfd42239e",
+    "discoveredAt": "2026-10-05T14:34:09.84031Z",
+    "checkedAt": "2026-10-05T14:34:09.84031Z",
+    "objects": 3
+   },
+   "changes": [
+    {
+     "kind": "length-shrunk",
+     "object": "erp.sales_orders",
+     "field": "currency",
+     "old": "3",
+     "new": "2",
+     "breaking": true,
+     "usedBy": [
+      "operation create-sales-order",
+      "operation get-sales-order"
+     ]
+    },
+    {
+     "kind": "field-added",
+     "object": "erp.sales_orders",
+     "field": "region",
+     "new": "text",
+     "breaking": true,
+     "usedBy": [
+      "operation create-sales-order (creates)"
+     ]
+    }
+   ],
+   "missing": [],
+   "objects": [
+    {
+     "name": "erp.customers",
+     "kind": "table",
+     "fields": [
+      {
+       "name": "credit_limit",
+       "type": "numeric"
+      },
+      {
+       "name": "id",
+       "type": "text",
+       "required": true,
+       "key": true,
+       "usedBy": [
+        "operation get-customer"
+       ]
+      },
+      {
+       "name": "name",
+       "type": "text",
+       "required": true
+      }
+     ]
+    },
+    {
+     "name": "erp.payments",
+     "kind": "table",
+     "links": [
+      {
+       "name": "payments_customer_id_fkey.customer_id",
+       "to": "erp.customers",
+       "toField": "id"
+      }
+     ],
+     "fields": [
+      {
+       "name": "amount",
+       "type": "numeric",
+       "required": true,
+       "usedBy": [
+        "operation get-payment",
+        "operation record-payment"
+       ]
+      },
+      {
+       "name": "currency",
+       "type": "character",
+       "length": 3,
+       "required": true,
+       "usedBy": [
+        "operation get-payment",
+        "operation record-payment"
+       ]
+      },
+      {
+       "name": "customer_id",
+       "type": "text",
+       "required": true,
+       "usedBy": [
+        "operation get-payment",
+        "operation record-payment"
+       ]
+      },
+      {
+       "name": "external_id",
+       "type": "text",
+       "required": true,
+       "usedBy": [
+        "operation get-payment",
+        "operation record-payment",
+        "operation void-payment"
+       ]
+      },
+      {
+       "name": "id",
+       "type": "bigint",
+       "key": true
+      },
+      {
+       "name": "invoice_ref",
+       "type": "text",
+       "required": true,
+       "usedBy": [
+        "operation get-payment",
+        "operation record-payment"
+       ]
+      },
+      {
+       "name": "paid_on",
+       "type": "date",
+       "required": true,
+       "usedBy": [
+        "operation get-payment",
+        "operation record-payment"
+       ]
+      },
+      {
+       "name": "status",
+       "type": "text",
+       "usedBy": [
+        "operation get-payment",
+        "operation void-payment"
+       ]
+      }
+     ]
+    },
+    {
+     "name": "erp.sales_orders",
+     "kind": "table",
+     "links": [
+      {
+       "name": "sales_orders_customer_id_fkey.customer_id",
+       "to": "erp.customers",
+       "toField": "id"
+      }
+     ],
+     "fields": [
+      {
+       "name": "credit_status",
+       "type": "text",
+       "usedBy": [
+        "operation get-sales-order",
+        "operation update-sales-order"
+       ]
+      },
+      {
+       "name": "currency",
+       "type": "character",
+       "length": 2,
+       "required": true,
+       "usedBy": [
+        "operation create-sales-order",
+        "operation get-sales-order"
+       ]
+      },
+      {
+       "name": "customer_id",
+       "type": "text",
+       "required": true,
+       "usedBy": [
+        "operation create-sales-order",
+        "operation get-sales-order"
+       ]
+      },
+      {
+       "name": "external_id",
+       "type": "text",
+       "required": true,
+       "usedBy": [
+        "operation cancel-sales-order",
+        "operation create-sales-order",
+        "operation get-sales-order",
+        "operation update-sales-order"
+       ]
+      },
+      {
+       "name": "id",
+       "type": "bigint",
+       "key": true
+      },
+      {
+       "name": "lines",
+       "type": "jsonb",
+       "usedBy": [
+        "operation create-sales-order",
+        "operation get-sales-order"
+       ]
+      },
+      {
+       "name": "net_value",
+       "type": "numeric",
+       "required": true,
+       "usedBy": [
+        "operation create-sales-order",
+        "operation get-sales-order"
+       ]
+      },
+      {
+       "name": "order_date",
+       "type": "date",
+       "required": true,
+       "usedBy": [
+        "operation create-sales-order",
+        "operation get-sales-order"
+       ]
+      },
+      {
+       "name": "region",
+       "type": "text",
+       "required": true
+      },
+      {
+       "name": "status",
+       "type": "text",
+       "usedBy": [
+        "operation cancel-sales-order",
+        "operation get-sales-order"
+       ]
+      }
+     ]
+    }
+   ]
+  },
+  "shop-db": {
+   "endpoint": "shop-db",
+   "connector": "postgres",
+   "version": "1.0.0",
+   "snapshots": [
+    {
+     "id": 4,
+     "endpoint": "shop-db",
+     "connector": "postgres",
+     "digest": "fdf282d1fae90c3673be6d63178c1e037ec651e0c9222dc7e373ef9006bf4d3e",
+     "discoveredAt": "2026-10-05T14:34:10.054551Z",
+     "checkedAt": "2026-10-05T14:34:10.054551Z",
+     "objects": 2
+    },
+    {
+     "id": 2,
+     "endpoint": "shop-db",
+     "connector": "postgres",
+     "digest": "016aef18f5c30435d26d41c35aea6143a624e43e02fa3984437a095067397862",
+     "discoveredAt": "2026-10-05T14:34:09.921719Z",
+     "checkedAt": "2026-10-05T14:34:09.921719Z",
+     "objects": 2
+    }
+   ],
+   "to": {
+    "id": 4,
+    "endpoint": "shop-db",
+    "connector": "postgres",
+    "digest": "fdf282d1fae90c3673be6d63178c1e037ec651e0c9222dc7e373ef9006bf4d3e",
+    "discoveredAt": "2026-10-05T14:34:10.054551Z",
+    "checkedAt": "2026-10-05T14:34:10.054551Z",
+    "objects": 2
+   },
+   "from": {
+    "id": 2,
+    "endpoint": "shop-db",
+    "connector": "postgres",
+    "digest": "016aef18f5c30435d26d41c35aea6143a624e43e02fa3984437a095067397862",
+    "discoveredAt": "2026-10-05T14:34:09.921719Z",
+    "checkedAt": "2026-10-05T14:34:09.921719Z",
+    "objects": 2
+   },
+   "changes": [
+    {
+     "kind": "field-removed",
+     "object": "shop.orders",
+     "field": "total",
+     "old": "numeric",
+     "breaking": true,
+     "usedBy": [
+      "mapping shop-order-to-sales-order@1.0.0 (netValue)"
+     ]
+    },
+    {
+     "kind": "field-added",
+     "object": "shop.orders",
+     "field": "channel",
+     "new": "text",
+     "breaking": false
+    },
+    {
+     "kind": "field-added",
+     "object": "shop.orders",
+     "field": "total_amount",
+     "new": "numeric",
+     "breaking": true
+    }
+   ],
+   "missing": [],
+   "objects": [
+    {
+     "name": "shop.orders",
+     "kind": "table",
+     "fields": [
+      {
+       "name": "channel",
+       "type": "text"
+      },
+      {
+       "name": "created_at",
+       "type": "timestamp with time zone",
+       "usedBy": [
+        "mapping shop-order-to-sales-order@1.0.0 (orderDate)"
+       ]
+      },
+      {
+       "name": "currency",
+       "type": "text",
+       "required": true,
+       "usedBy": [
+        "mapping shop-order-to-sales-order@1.0.0 (currency)"
+       ]
+      },
+      {
+       "name": "customer",
+       "type": "jsonb",
+       "required": true,
+       "usedBy": [
+        "mapping shop-order-to-sales-order@1.0.0 (customerRef)"
+       ]
+      },
+      {
+       "name": "items",
+       "type": "jsonb",
+       "usedBy": [
+        "mapping shop-order-to-sales-order@1.0.0 (lines)"
+       ]
+      },
+      {
+       "name": "order_number",
+       "type": "bigint",
+       "required": true,
+       "key": true,
+       "usedBy": [
+        "mapping shop-order-to-sales-order@1.0.0 (externalId)"
+       ]
+      },
+      {
+       "name": "total_amount",
+       "type": "numeric",
+       "required": true
+      }
+     ],
+     "usedBy": [
+      "change event Order.Placed"
+     ]
+    },
+    {
+     "name": "shop.outbox",
+     "kind": "table",
+     "fields": [
+      {
+       "name": "event",
+       "type": "text",
+       "required": true,
+       "usedBy": [
+        "outbox"
+       ]
+      },
+      {
+       "name": "id",
+       "type": "bigint",
+       "key": true,
+       "usedBy": [
+        "outbox"
+       ]
+      },
+      {
+       "name": "payload",
+       "type": "jsonb",
+       "required": true,
+       "usedBy": [
+        "outbox"
+       ]
+      }
+     ]
+    }
+   ],
+   "events": {
+    "Order.Placed": "shop.orders"
+   }
+  }
+ }
+}

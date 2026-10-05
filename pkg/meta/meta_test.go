@@ -127,3 +127,47 @@ func TestUsageAndAnnotate(t *testing.T) {
 		t.Fatalf("optional field used by %v", changes[1].UsedBy)
 	}
 }
+
+// A mapping reading an event reads the object the event's records come
+// from, whatever the mapping calls the entity.
+func TestUsageThroughTheTriggeringEvent(t *testing.T) {
+	c := Catalog{Endpoint: "erp-db", Connector: "postgres", Events: map[string]string{"Customer.Changed": "erp.customers"},
+		Objects: []Object{{Name: "erp.customers", Fields: []Field{{Name: "id"}, {Name: "name"}, {Name: "vat_id"}}}}}
+	spec := &compiler.RuntimeSpec{}
+	spec.Spec.Workflows = []compiler.Workflow{
+		{Trigger: compiler.WorkflowSource{Endpoint: "erp-db", Event: "Customer.Changed"}, Steps: []compiler.WorkflowStep{
+			{Map: &compiler.MapConfig{Mapping: "customer-to-account@1", From: "erp-db.Customer", Fields: map[string]string{"Name": "name", "VAT": "$trim(vat_id)"}}},
+		}},
+		// Another endpoint's event: its mapping does not read erp-db.
+		{Trigger: compiler.WorkflowSource{Endpoint: "shop-db", Event: "Customer.Changed"}, Steps: []compiler.WorkflowStep{
+			{Map: &compiler.MapConfig{Mapping: "other@1", From: "erp-db.Customer", Fields: map[string]string{"x": "id"}}},
+		}},
+	}
+	u := Usage(c, spec, nil)
+	if strings.Join(u["erp.customers.name"], ";") != "mapping customer-to-account@1 (Name)" ||
+		strings.Join(u["erp.customers.vat_id"], ";") != "mapping customer-to-account@1 (VAT)" || u["erp.customers.id"] != nil {
+		t.Fatalf("usage %v", u)
+	}
+	missing := MissingUses(Catalog{Uses: []Use{{Object: "erp.orders", Field: "x", By: "operation b"}, {Object: "erp.orders", Field: "y", By: "operation a"},
+		{Object: "erp.customers", Field: "nope", By: "operation a"}}, Objects: c.Objects})
+	if len(missing) != 2 || missing[0].String() != "erp.orders; used by operation a, operation b" || missing[1].String() != "erp.customers.nope; used by operation a" {
+		t.Fatalf("missing %v", missing)
+	}
+}
+
+// A field the new catalog lacks is still known to be read by the mappings
+// that read it in the old one: its removal breaks them.
+func TestCompareKnowsWhatUsedARemovedField(t *testing.T) {
+	old := Catalog{Endpoint: "shop-db", Connector: "postgres", Events: map[string]string{"Order.Placed": "shop.orders"},
+		Objects: []Object{{Name: "shop.orders", Fields: []Field{{Name: "order_number"}, {Name: "total", Type: "numeric"}}}}}
+	new := old
+	new.Objects = []Object{{Name: "shop.orders", Fields: []Field{{Name: "order_number"}, {Name: "total_amount", Type: "numeric"}}}}
+	spec := &compiler.RuntimeSpec{}
+	spec.Spec.Workflows = []compiler.Workflow{{Trigger: compiler.WorkflowSource{Endpoint: "shop-db", Event: "Order.Placed"}, Steps: []compiler.WorkflowStep{
+		{Map: &compiler.MapConfig{Mapping: "shop-order-to-sales-order@1.0.0", From: "shop-db.Order", Fields: map[string]string{"netValue": "$number(total)"}}}}}}
+	changes := Compare(old, new, spec)
+	if len(changes) != 2 || changes[0].Kind != FieldRemoved || changes[0].Field != "total" || !changes[0].Breaks() ||
+		strings.Join(changes[0].UsedBy, ";") != "mapping shop-order-to-sales-order@1.0.0 (netValue)" || changes[1].Breaks() {
+		t.Fatalf("changes %+v", changes)
+	}
+}

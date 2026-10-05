@@ -48,6 +48,9 @@ type Config struct {
 	// Reviews keeps stewards' decisions on the catalog's mapping review
 	// queue (audited in Recorder).
 	Reviews ReviewStore
+	// Meta reads the metadata graph: what each system holds, as `turgon
+	// discover` found it, and how it changed.
+	Meta MetaStore
 	// Assets overrides the embedded web app; for tests and development.
 	Assets fs.FS
 }
@@ -76,6 +79,8 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("GET /api/steward", s.stewardQueue)
 	s.mux.HandleFunc("POST /api/steward/links", s.stewardLink)
 	s.mux.HandleFunc("POST /api/reviews", s.reviewField)
+	s.mux.HandleFunc("GET /api/meta", s.metaOverview)
+	s.mux.HandleFunc("GET /api/meta/{endpoint}", s.metaDetail)
 	s.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "no such endpoint")
 	})
