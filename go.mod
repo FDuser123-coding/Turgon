@@ -1,6 +1,6 @@
 module github.com/fduser123-coding/turgon
 
-go 1.26.0
+go 1.26.9
 
 require (
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.23.1
