@@ -268,13 +268,17 @@ jobs:
           scripts/gen-proto.sh
           git diff --exit-code pkg/connector/remote/connectorpb
       - name: Build and test the Java connectors
-        run: gradle -p connectors build :sap-ecc-fake:installDist
-      - name: Drive the Java sidecar from Go over the protocol
+        run: gradle -p connectors build :sap-ecc-fake:installDist :powerbi-export:installDist :powerbi-fake:installDist
+      - name: Drive the Java sidecars from Go over the protocol
         run: |
           TURGON_TEST_CONNECTOR_SAP_ECC=$PWD/connectors/sap-ecc-fake/build/install/turgon-connector-sap-ecc-demo/bin/turgon-connector-sap-ecc-demo \
+          TURGON_TEST_CONNECTOR_POWERBI=$PWD/connectors/powerbi-export/build/install/turgon-connector-powerbi-export/bin/turgon-connector-powerbi-export \
+          TURGON_TEST_FAKE_POWERBI=$PWD/connectors/powerbi-fake/build/install/turgon-fake-powerbi/bin/turgon-fake-powerbi \
             go test -race -count=1 -run TestJavaSidecar -v ./pkg/connector/remote/
-      - name: Build the SAP ECC connector image
-        run: docker build -f connectors/Dockerfile --build-arg CONNECTOR=sap-ecc -t turgon-connector-sap-ecc:ci .
+      - name: Build the connector images
+        run: |
+          docker build -f connectors/Dockerfile --build-arg CONNECTOR=sap-ecc -t turgon-connector-sap-ecc:ci .
+          docker build -f connectors/Dockerfile --build-arg CONNECTOR=powerbi-export -t turgon-connector-powerbi-export:ci .
 
   splink:
     runs-on: ubuntu-latest

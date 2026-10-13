@@ -157,7 +157,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        connector: [sap-ecc]
+        connector: [sap-ecc, powerbi-export]
     permissions:
       contents: read
       packages: write

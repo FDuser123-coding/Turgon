@@ -3,4 +3,4 @@
 // connectors built on it. Each runs as a sidecar next to the worker.
 rootProject.name = "turgon-connectors"
 
-include("sdk", "sap-ecc", "sap-ecc-fake")
+include("sdk", "sap-ecc", "sap-ecc-fake", "powerbi-export", "powerbi-fake")

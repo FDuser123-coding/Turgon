@@ -267,6 +267,9 @@ connectors:
   #   volumeMounts: [{ name: sapjco, mountPath: /opt/turgon/lib, readOnly: true }]
   #   env: []                # e.g. SAP_ROUTER settings, or JAVA_TOOL_OPTIONS
   #   resources: {}          # default: connectors.resources
+  # - name: powerbi-export   # Power BI push datasets; needs outbound HTTPS to
+  #   image: { repository: ghcr.io/fduser123-coding/turgon-connector-powerbi-export, tag: "" }
+  #                          # login.microsoftonline.com and api.powerbi.com
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { memory: 768Mi }
