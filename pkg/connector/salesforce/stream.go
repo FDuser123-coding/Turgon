@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
@@ -204,7 +205,7 @@ func (c *Conn) stream(ctx context.Context, event string, sub Subscription, resum
 		req.ReplayPreset = pubsub.Earliest
 	}
 	frame := req.Encode()
-	if err := st.SendMsg(&frame); err != nil {
+	if err := sendMsg(st, &frame); err != nil {
 		return c.rpcErr(token, err)
 	}
 	pending := batch
@@ -224,7 +225,7 @@ func (c *Conn) stream(ctx context.Context, event string, sub Subscription, resum
 		pending -= int32(len(resp.Events))
 		if pending <= batch/2 {
 			more := pubsub.FetchRequest{TopicName: sub.Topic, NumRequested: batch - pending}.Encode()
-			if err := st.SendMsg(&more); err != nil {
+			if err := sendMsg(st, &more); err != nil {
 				return c.rpcErr(token, err)
 			}
 			pending = batch
@@ -287,7 +288,7 @@ func (c *Conn) streamManaged(ctx context.Context, event string, sub Subscription
 	}
 	send := func(r pubsub.ManagedFetchRequest) error {
 		f := r.Encode()
-		if err := st.SendMsg(&f); err != nil {
+		if err := sendMsg(st, &f); err != nil {
 			return c.rpcErr(token, err)
 		}
 		return nil
@@ -329,6 +330,21 @@ func (c *Conn) streamManaged(ctx context.Context, event string, sub Subscription
 			pending = batch
 		}
 	}
+}
+
+// sendMsg sends on a stream. A stream the server already ended (it
+// rejected the token as the stream opened) fails the send with io.EOF;
+// the server's status, which rpcErr acts on, comes from receiving.
+func sendMsg(st grpc.ClientStream, m any) error {
+	err := st.SendMsg(m)
+	if !errors.Is(err, io.EOF) {
+		return err
+	}
+	var in pubsub.Frame
+	if rerr := st.RecvMsg(&in); rerr != nil && !errors.Is(rerr, io.EOF) {
+		return rerr
+	}
+	return err
 }
 
 // rpcErr drops a token the API rejected, so the reopened subscription logs
