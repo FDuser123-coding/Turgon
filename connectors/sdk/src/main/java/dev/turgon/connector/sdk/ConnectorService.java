@@ -91,7 +91,13 @@ public final class ConnectorService extends ConnectorGrpc.ConnectorImplBase {
             case ConnectorException.NotFound x -> Status.NOT_FOUND;
             case ConnectorException.Unsupported x -> Status.UNIMPLEMENTED;
             default -> {
-                LOG.log(Level.WARNING, "connector call failed", e);
+                if (e instanceof java.io.IOException) {
+                    // The network or the system (throttled, down): expected, and retried by the worker.
+                    LOG.log(Level.WARNING, "connector call failed, the worker retries: {0}: {1}",
+                            new Object[] {e.getClass().getSimpleName(), e.getMessage()});
+                } else {
+                    LOG.log(Level.WARNING, "connector call failed", e);
+                }
                 yield Status.UNAVAILABLE;
             }
         };

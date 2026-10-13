@@ -1,32 +1,49 @@
+# Power BI push datasets through the REST API, as a Microsoft Entra service
+# principal: the Camel/Java powerbi-export connector, in a sidecar next to
+# the worker (connectors/powerbi-export). Each connection names the dataset
+# and its tables' columns; rows are checked against them before they are
+# sent, which is also the dry run.
 apiVersion: turgon.dev/v1alpha1
 kind: ConnectorManifest
 metadata:
   name: powerbi-export
-  version: 1.0.0
+  version: 1.1.0
 spec:
   system: "Power BI REST API (push datasets)"
   runtime: camel-java
   auth:
     methods: [entra-service-principal]
     secretRef: openbao://powerbi/service-principal
+  discovery:
+    - kind: dataset-tables
   interfaces:
-    read:
-      - kind: rest-api
     write:
       - kind: push-dataset
+        simulation: validate-only
   entities: [Dataset]
   operations:
+    # Adds rows; a row's key column carries the write's idempotency key.
     - name: push-rows
       entity: Dataset
       direction: write
       interface: push-dataset
       risk: low
-      compensation: delete-rows
-    - name: delete-rows
+      compensation: reverse-rows
+    # Power BI cannot delete single rows: a reversal adds each pushed row
+    # again with its measures negated, so the table's sums are restored.
+    - name: reverse-rows
       entity: Dataset
       direction: write
       interface: push-dataset
       risk: low
+    # Empties a table: Power BI deletes all of its rows or none, so this
+    # cannot be undone and no recipe step may use it.
+    - name: delete-rows
+      entity: Dataset
+      direction: write
+      interface: push-dataset
+      risk: high
   limits:
+    # Power BI takes 120 push requests a minute per dataset.
     maxConcurrentCalls: 2
-    requestsPerSecond: 1
+    requestsPerSecond: 2

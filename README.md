@@ -695,6 +695,75 @@ bin/turgon run -s s4dv.json & bin/turgon run -s s4dv.json &   # one consumes, on
 echo "order C-100 M-2 4" >> sap.cmds                           # an order entered in SAP: the run starts at once
 ```
 
+### Power BI: rows in a push dataset, from the Camel/Java sidecar
+
+`powerbi-export` is the second Camel/Java connector (`connectors/powerbi-export`), built like
+`sap-ecc` and run in the same kind of sidecar. It adds rows to Power BI push datasets through the
+REST API, signed in as a Microsoft Entra service principal (client credentials). The connection
+(`examples/connections/powerbi-sales.yaml`) holds the tenant, the app's client ID, the workspace
+and the dataset. The secret is the client secret. The tenant must allow service principals to use
+Power BI APIs, and the app must be a Member or Contributor of the workspace.
+
+Power BI does not list a push dataset's columns, so the connection declares each table's columns
+and types (`Int64`, `Double`, `Decimal`, `Boolean`, `DateTime`, `String`). Rows are checked and
+converted against them before anything is sent; the same check is the dry run. A row with an
+unknown column or a value of the wrong type is invalid and is not retried. Pushes go in batches of
+10,000 rows, Power BI's limit per request. Throttling (429) and Power BI's own failures are
+retried by the worker. So are refused credentials and access, which recover once the secret is
+rotated or the access granted.
+
+| Operation | What it does |
+|---|---|
+| `push-rows` | Adds a row (the payload), or `{"table": ..., "rows": [...]}` |
+| `reverse-rows` | `push-rows`' compensation: adds each pushed row again with the table's `reverse.negate` columns negated and `reverse.set` applied |
+| `delete-rows` | Empties a table; it cannot be undone, so no recipe step may use it |
+
+Power BI deletes all of a table's rows or none, so a failed run cannot take back the rows it
+pushed. It reverses them instead, the way a ledger reverses a booking, so the table's sums are
+what they were. Power BI also cannot tell a retried push from a new one. The worker never repeats
+a write that succeeded, but one that failed in flight may still have added its rows. So the
+table's `key` column carries each row's idempotency key (`SHOP-2001`, `SHOP-2001#reversed`), and
+reports can count each row once.
+
+```yaml
+config:
+  tenant: 7f3c2a1e-0b6d-4e2f-9c1a-5d8e4b3f2a10
+  clientId: 2b9e6d4c-8a1f-4c3e-b5d7-0e9f1a2c3b4d
+  workspace: 5c1d9e8f-3a2b-4c6d-8e0f-1a2b3c4d5e6f
+  dataset: 9a8b7c6d-5e4f-4a3b-2c1d-0e9f8a7b6c5d
+  tables:
+    SalesOrders:
+      columns: { OrderId: String, OrderDate: DateTime, NetValue: Double, Lines: Int64, Reversal: Boolean, TurgonKey: String }
+      key: TurgonKey
+      reverse: { negate: [NetValue, Lines], set: { Reversal: true } }
+```
+
+The recipe `shop-orders-to-powerbi` adds each new web-shop order to the sales dataset, with the
+mapping `sales-order-to-sales-row`. Without Power BI, run the fake (`connectors/powerbi-fake`).
+It signs in like Entra, answers like the push dataset API, and shows the rows it holds at
+`/fake/tables/<table>/rows`:
+
+```sh
+make connectors                                                  # also builds the connector and the fake
+connectors/powerbi-fake/build/install/turgon-fake-powerbi/bin/turgon-fake-powerbi --port 9400 \
+  --tenant 7f3c2a1e-0b6d-4e2f-9c1a-5d8e4b3f2a10 --client-id 2b9e6d4c-8a1f-4c3e-b5d7-0e9f1a2c3b4d \
+  --client-secret s3cret --workspace 5c1d9e8f-3a2b-4c6d-8e0f-1a2b3c4d5e6f --dataset 9a8b7c6d-5e4f-4a3b-2c1d-0e9f8a7b6c5d \
+  --table SalesOrders=OrderId,Customer,OrderDate,NetValue,Currency,Lines,Source,Reversal,TurgonKey &
+TURGON_CONNECTOR_LISTEN=unix:///tmp/powerbi-export.sock \
+  connectors/powerbi-export/build/install/turgon-connector-powerbi-export/bin/turgon-connector-powerbi-export &
+cp -r examples my-catalog && sed -i 's|^  config:$|  config:\n    authority: http://127.0.0.1:9400\n    api: http://127.0.0.1:9400|' \
+  my-catalog/connections/powerbi-sales.yaml
+export TURGON_CONNECTORS=powerbi-export=unix:///tmp/powerbi-export.sock TURGON_SECRET_POWERBI_SALES_CLIENT_SECRET=s3cret
+bin/turgon compile -c my-catalog shop-orders-to-powerbi -o powerbi.json
+bin/turgon check -s powerbi.json        # the sidecar, the sign-in, the push dataset, each table and its reversal
+bin/turgon run -s powerbi.json &        # then add an order to shop.outbox as in the prototype flow
+curl -s localhost:9400/fake/tables/SalesOrders/rows
+```
+
+In the Helm chart, add it to `connectors.sidecars` with the image
+`ghcr.io/<owner>/turgon-connector-powerbi-export`, and allow egress to `login.microsoftonline.com`
+and `api.powerbi.com`.
+
 ### Webhooks: events in seconds, polling as the safety net
 
 Turgon runs next to the customer's systems, often where nothing may connect in, so events are
@@ -794,6 +863,7 @@ database as a snapshot. The connectors read it from the system's own catalog:
 | `rest` with `openapi` | each event's list items, each read's record, each write's request body, with types and formats, maximum lengths, required and read-only properties | the API's OpenAPI 3 description (JSON or YAML) |
 | `rest` without one | each event's list items, sampled | one page of the event's list request |
 | `postgres` outbox | each outbox event's payload, sampled | the latest 500 outbox rows |
+| `powerbi-export` | each table of the push dataset, with the columns and types its connection declares (Power BI does not list them) | the dataset's tables in the REST API |
 
 A REST connection's `openapi` names the API's OpenAPI 3 description, such as Stripe's
 `https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json`. Each event, read and
@@ -1735,7 +1805,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/secrets` | §9 | Secret references resolved from OpenBao or HashiCorp Vault (KV v2), signing in with Kubernetes service accounts, AppRoles or tokens; or from AWS Secrets Manager, Azure Key Vault and Google Secret Manager with the platform's workload identity |
 | `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled list or search events (ascending, or newest-first paged back to the cursor), also received as signed webhooks (Stripe, Shopify, generic HMAC), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/`, `stripetest/` and `hubspottest/` fake the Shopify Admin, Stripe and HubSpot CRM APIs |
 | `pkg/connector/remote`, `proto/` | §7.1 | The connector protocol (gRPC) and its Go client: connectors running in a sidecar, configured per endpoint with resolved secrets, reconfigured after a sidecar restart |
-| `connectors/` | §7.1 | Camel/Java connectors: `sdk` (the protocol's server, Camel routes per operation), `sap-ecc` (BAPIs over RFC through SAP JCo), `sap-ecc-fake` (an in-memory ECC) |
+| `connectors/` | §7.1 | Camel/Java connectors: `sdk` (the protocol's server, Camel routes per operation), `sap-ecc` (BAPIs over RFC through SAP JCo), `sap-ecc-fake` (an in-memory ECC), `powerbi-export` (Power BI push datasets as an Entra service principal), `powerbi-fake` (a fake Entra and Power BI) |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references, the webhook inbox, metadata snapshots |
 | `pkg/meta` | §7.2 | The metadata graph: catalogs of what each system holds, their digests, drift between snapshots, and what uses each field |
@@ -1790,7 +1860,9 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 In rough roadmap order (§16, §19): a REST API without an OpenAPI description has only its events'
 lists discovered (sampled), not its write targets. Debezium topics in Protobuf or JSON Schema (with
 a registry) are not read, only Avro and plain JSON. Managed subscriptions are tested against the fake org's Pub/Sub
-and Tooling APIs, not yet against a real org. Of the Camel/Java connectors, only SAP ECC exists so far. It is
+and Tooling APIs, not yet against a real org. The Camel/Java connectors are SAP ECC and Power BI. SAP ECC is
 tested against a fake ECC and a JCo stand-in, not yet against a real SAP system or gateway. It reads
-IDocs as SAP pushes them, but not change pointers. The `shopify` and `powerbi-export` manifests
-still have no runtime.
+IDocs as SAP pushes them, but not change pointers. Power BI is tested against a fake Entra and push
+dataset API, not yet against a real tenant; it adds rows to existing push datasets but does not
+create them. The `shopify` manifest (the GraphQL Admin API) still has no runtime; Shopify runs
+through the `rest` connector.
