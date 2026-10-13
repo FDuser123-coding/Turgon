@@ -1,0 +1,88 @@
+# A small OpenAPI description in the style of Shopify's Admin REST API,
+# for discovery tests.
+openapi: 3.0.3
+info: { title: Shop Admin, version: 2026-07 }
+servers:
+  - url: https://{shop}.myshopify.com/admin/api/2026-07
+paths:
+  /orders.json:
+    get:
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  orders: { type: array, items: { $ref: "#/components/schemas/Order" } }
+    post:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                order: { $ref: "#/components/schemas/OrderCreate" }
+      responses: { "201": { description: created } }
+  /orders/{order_id}.json:
+    get:
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  order: { $ref: "#/components/schemas/Order" }
+    put:
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                order: { $ref: "#/components/schemas/OrderUpdate" }
+      responses: { "200": { description: updated } }
+components:
+  schemas:
+    Order:
+      description: An order.
+      allOf:
+        - $ref: "#/components/schemas/OrderUpdate"
+        - type: object
+          required: [id, created_at]
+          properties:
+            id: { type: integer, format: int64, readOnly: true }
+            name: { type: string, readOnly: true }
+            email: { type: string, format: email, maxLength: 255 }
+            created_at: { type: string, format: date-time, readOnly: true }
+            subtotal_price: { type: string }
+            currency: { type: string, maxLength: 3 }
+            line_items: { type: array, items: { $ref: "#/components/schemas/LineItem" } }
+            customer:
+              anyOf:
+                - { type: integer }
+                - { $ref: "#/components/schemas/Customer" }
+    OrderUpdate:
+      type: object
+      properties:
+        note: { type: string, nullable: true, maxLength: 5000 }
+        tags: { type: string }
+    OrderCreate:
+      type: object
+      required: [line_items]
+      properties:
+        email: { type: string, maxLength: 255 }
+        phone: { type: string }
+        line_items: { type: array, items: { $ref: "#/components/schemas/LineItem" } }
+        note: { type: string }
+    LineItem:
+      type: object
+      properties:
+        sku: { type: string }
+        quantity: { type: integer }
+    Customer:
+      type: object
+      properties:
+        id: { type: integer }
+        email: { type: string }

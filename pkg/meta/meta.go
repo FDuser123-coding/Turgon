@@ -89,8 +89,9 @@ type Use struct {
 	Field  string `json:"field"`
 	// By names the user, such as "operation create-sales-order".
 	By string `json:"by"`
-	// Creates: the user creates records of the object, so a field that
-	// becomes required breaks it even if it does not use that field.
+	// Creates: the user writes whole records of the object (an insert, a
+	// create, a REST request body), so a field that becomes required
+	// breaks it even if it does not use that field.
 	Creates bool `json:"creates,omitempty"`
 }
 
@@ -489,7 +490,7 @@ func Annotate(changes []Change, usage, creators map[string][]string) []Change {
 		if ch.Breaking && (ch.Kind == FieldAdded || ch.Kind == BecameRequired) {
 			for _, by := range creators[ch.Object] {
 				if !slices.Contains(ch.UsedBy, by) {
-					ch.UsedBy = append(ch.UsedBy, by+" (creates)")
+					ch.UsedBy = append(ch.UsedBy, by+" (writes)")
 				}
 			}
 		}

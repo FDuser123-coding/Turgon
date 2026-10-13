@@ -122,7 +122,7 @@ func TestUsageAndAnnotate(t *testing.T) {
 	cr := Creators(c)
 	changes = Annotate([]Change{{Kind: FieldAdded, Object: "Opportunity", Field: "Region__c", Breaking: true},
 		{Kind: FieldAdded, Object: "Opportunity", Field: "Note__c"}}, Usage(c, nil), cr)
-	if got := strings.Join(changes[0].UsedBy, "; "); got != "operation create-opportunity (creates); operation tag-region" {
+	if got := strings.Join(changes[0].UsedBy, "; "); got != "operation create-opportunity (writes); operation tag-region" {
 		t.Fatalf("required field used by %q", got)
 	}
 	if changes[1].UsedBy != nil {

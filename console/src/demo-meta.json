@@ -104,7 +104,7 @@
      "new": "text",
      "breaking": true,
      "usedBy": [
-      "operation create-sales-order (creates)"
+      "operation create-sales-order (writes)"
      ]
     }
    ],
