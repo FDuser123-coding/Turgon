@@ -1,0 +1,18 @@
+# A sales order as a row of the Power BI sales dataset.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: sales-order-to-sales-row
+  version: 1.0.0
+spec:
+  from: model.SalesOrder
+  to: model.Dataset
+  fields:
+    - { target: OrderId,   expression: "externalId",      origin: human, confidence: 1.0 }
+    - { target: Customer,  expression: "customerRef",     origin: human, confidence: 1.0 }
+    - { target: OrderDate, expression: "orderDate",       origin: human, confidence: 1.0 }
+    - { target: NetValue,  expression: "netValue",        origin: human, confidence: 1.0 }
+    - { target: Currency,  expression: "currency",        origin: human, confidence: 1.0 }
+    - { target: Lines,     expression: "$count(lines)",   origin: human, confidence: 1.0 }
+    - { target: Source,    expression: "'web shop'",      origin: human, confidence: 1.0 }
+    - { target: Reversal,  expression: "false",           origin: human, confidence: 1.0 }

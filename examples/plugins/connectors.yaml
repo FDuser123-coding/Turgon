@@ -42,7 +42,7 @@ spec:
 ---
 apiVersion: turgon.dev/v1alpha1
 kind: Plugin
-metadata: { name: powerbi-export, publisher: turgon, version: 1.0.0 }
+metadata: { name: powerbi-export, publisher: turgon, version: 1.1.0 }
 spec:
   type: connector
   runtime: container

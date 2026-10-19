@@ -113,6 +113,20 @@
       ]
     },
     {
+      "name": "powerbi-sales",
+      "description": "The Power BI sales dataset: one row per order, for the sales report.",
+      "connector": "powerbi-export",
+      "product": "Power BI REST API (push datasets)",
+      "role": "target",
+      "events": [],
+      "operations": [
+        "push-rows"
+      ],
+      "flows": [
+        "shop-orders-to-powerbi"
+      ]
+    },
+    {
       "name": "s4-prod",
       "description": "SAP S/4HANA, through the released Sales Order OData API.",
       "connector": "sap-odata",
@@ -208,6 +222,7 @@
       "flows": [
         "shop-order-rows-to-erp",
         "shop-orders-to-erp",
+        "shop-orders-to-powerbi",
         "shop-orders-with-credit-check"
       ]
     },
@@ -798,6 +813,48 @@
         "erp-db"
       ],
       "slo": "p95 2s"
+    },
+    {
+      "name": "shop-orders-to-powerbi",
+      "version": "1.0.0",
+      "description": "Each new web-shop order is added to the Power BI sales dataset.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "shop-db",
+        "event": "Order.Created",
+        "delivery": "outbox"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "shop-order-to-sales-order@1.0.0",
+          "from": "shop-db.Order",
+          "to": "model.SalesOrder",
+          "fields": 6
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-sales-row@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.Dataset",
+          "fields": 8
+        },
+        {
+          "kind": "write",
+          "entity": "Dataset",
+          "system": "powerbi-sales",
+          "operation": "push-rows",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "validate-only",
+          "compensation": "reverse-rows"
+        }
+      ],
+      "targets": [
+        "powerbi-sales"
+      ],
+      "slo": "p95 5s"
     },
     {
       "name": "shop-orders-with-credit-check",
