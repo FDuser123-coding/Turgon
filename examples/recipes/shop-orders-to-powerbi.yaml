@@ -1,0 +1,33 @@
+# Each new web-shop order becomes a row of the Power BI sales dataset, so
+# the sales report shows it within seconds rather than after the nightly
+# refresh. The row is checked against the table's columns first (the dry
+# run); a run that fails after the push reverses its row.
+apiVersion: turgon.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: shop-orders-to-powerbi
+  version: 1.0.0
+  description: "Each new web-shop order is added to the Power BI sales dataset."
+spec:
+  trigger:
+    source: shop-db
+    event: Order.Created
+  steps:
+    - map:
+        from: shop-db.Order
+        to: model.SalesOrder
+        mapping: shop-order-to-sales-order@1
+    - map:
+        from: model.SalesOrder
+        to: model.Dataset
+        mapping: sales-order-to-sales-row@1
+    - write:
+        target: powerbi-sales
+        operation: push-rows
+        idempotencyKey: "SHOP-{{ source.order_number }}"
+        simulate: true
+  policies: [writeback-default]
+  capacity:
+    peakPerSecond: 1
+  slo:
+    p95Latency: 5s

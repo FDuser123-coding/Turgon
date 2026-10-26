@@ -1,0 +1,38 @@
+# The sales report's push dataset in Power BI, written as a Microsoft Entra
+# service principal: the Camel/Java powerbi-export connector, in a sidecar
+# next to the worker (connectors/powerbi-export). The secret is the app
+# registration's client secret. The tenant must allow service principals
+# to use Power BI APIs, and the app must be a Member or Contributor of the
+# workspace. Each pushed row carries its write's idempotency key
+# (TurgonKey), so reports count a row once; a failed run's rows are
+# reversed: added again with NetValue and Lines negated and Reversal set.
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata:
+  name: powerbi-sales
+  description: "The Power BI sales dataset: one row per order, for the sales report."
+spec:
+  connector: powerbi-export@^1
+  secretRef: openbao://powerbi/sales/client-secret
+  limits: { maxConcurrentCalls: 1, requestsPerSecond: 2 }
+  config:
+    tenant: 7f3c2a1e-0b6d-4e2f-9c1a-5d8e4b3f2a10
+    clientId: 2b9e6d4c-8a1f-4c3e-b5d7-0e9f1a2c3b4d
+    workspace: 5c1d9e8f-3a2b-4c6d-8e0f-1a2b3c4d5e6f
+    dataset: 9a8b7c6d-5e4f-4a3b-2c1d-0e9f8a7b6c5d
+    tables:
+      SalesOrders:
+        columns:
+          OrderId: String
+          Customer: String
+          OrderDate: DateTime
+          NetValue: Double
+          Currency: String
+          Lines: Int64
+          Source: String
+          Reversal: Boolean
+          TurgonKey: String
+        key: TurgonKey
+        reverse:
+          negate: [NetValue, Lines]
+          set: { Reversal: true }
