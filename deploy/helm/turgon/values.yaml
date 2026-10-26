@@ -270,6 +270,8 @@ connectors:
   # - name: powerbi-export   # Power BI push datasets; needs outbound HTTPS to
   #   image: { repository: ghcr.io/fduser123-coding/turgon-connector-powerbi-export, tag: "" }
   #                          # login.microsoftonline.com and api.powerbi.com
+  # - name: shopify          # the GraphQL Admin API; needs outbound HTTPS to <store>.myshopify.com
+  #   image: { repository: ghcr.io/fduser123-coding/turgon-connector-shopify, tag: "" }
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { memory: 768Mi }
