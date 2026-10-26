@@ -210,6 +210,60 @@ class ShopifyEndpointTest {
         }
     }
 
+    private Endpoint bindWithWebhook() throws Exception {
+        JsonNode cfg = json("{\"shop\": \"turgon-demo.myshopify.com\", \"apiVersion\": \"2026-07\", \"url\": \"" + shop.url()
+                + "\", \"webhook\": {\"secretRef\": \"openbao://shopify-admin/client-secret\"}}");
+        return new ShopifyConnector().bind(new EndpointConfig("shopify-admin", "shopify", "2.1.0", cfg, "shpat_demo",
+                Map.of("openbao://shopify-admin/client-secret", "shpss_client_secret")));
+    }
+
+    private static String hmac(String secret, byte[] body) throws Exception {
+        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+        mac.init(new javax.crypto.spec.SecretKeySpec(secret.getBytes(java.nio.charset.StandardCharsets.UTF_8), "HmacSHA256"));
+        return java.util.Base64.getEncoder().encodeToString(mac.doFinal(body));
+    }
+
+    private static Map<String, List<String>> headers(String sig, String topic) {
+        Map<String, List<String>> h = new java.util.TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        if (sig != null) {
+            h.put("X-Shopify-Hmac-Sha256", List.of(sig));
+        }
+        h.put("X-Shopify-Topic", List.of(topic));
+        h.put("X-Shopify-Shop-Domain", List.of("turgon-demo.myshopify.com"));
+        return h;
+    }
+
+    @Test
+    void ordersCreateWebhooksAreVerifiedAndKeyedLikePolledOrders() throws Exception {
+        long a = order("ada@example.com", "349.90");
+        try (Endpoint e = bindWithWebhook(); Endpoint plain = bind()) {
+            assertEquals(Set.of("Order.Created"), e.webhooks());
+            assertTrue(plain.webhooks().isEmpty());
+            // The webhook's body is the REST order; the poll's payload has that shape.
+            byte[] body = JSON.writeValueAsBytes(e.poll("Order.Created", 0, 1).get(0).payload());
+            List<Event> evs = e.receive("Order.Created", headers(hmac("shpss_client_secret", body), "orders/create"), body, java.time.Instant.now());
+            assertEquals(1, evs.size());
+            assertEquals("gid://shopify/Order/" + a, evs.get(0).id());
+            assertEquals("349.90", evs.get(0).payload().path("subtotal_price").asText());
+
+            assertThrows(ConnectorException.Unauthenticated.class,
+                    () -> e.receive("Order.Created", headers(hmac("wrong", body), "orders/create"), body, java.time.Instant.now()));
+            assertThrows(ConnectorException.Unauthenticated.class, () -> e.receive("Order.Created", headers(null, "orders/create"), body, java.time.Instant.now()));
+            byte[] tampered = new String(body, java.nio.charset.StandardCharsets.UTF_8).replace("349.90", "1.00").getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            assertThrows(ConnectorException.Unauthenticated.class,
+                    () -> e.receive("Order.Created", headers(hmac("shpss_client_secret", body), "orders/create"), tampered, java.time.Instant.now()));
+            assertTrue(e.receive("Order.Created", headers(hmac("shpss_client_secret", body), "orders/paid"), body, java.time.Instant.now()).isEmpty());
+        }
+        JsonNode noSecret = json("{\"shop\": \"turgon-demo.myshopify.com\", \"apiVersion\": \"2026-07\", \"webhook\": {\"secretRef\": \"openbao://x\"}}");
+        // Without its secret the webhook is reported, not fatal: the orders are still polled.
+        try (var e = new ShopifyConnector().bind(new EndpointConfig("s", "shopify", "2.1.0", noSecret, "t", Map.of()))) {
+            assertTrue(e.webhooks().isEmpty());
+            assertTrue(e.webhookErrors().get("Order.Created").contains("openbao://x is not set"));
+        }
+        JsonNode noRef = json("{\"shop\": \"turgon-demo.myshopify.com\", \"apiVersion\": \"2026-07\", \"webhook\": {}}");
+        assertThrows(ConnectorException.Invalid.class, () -> new ShopifyConnector().bind(new EndpointConfig("s", "shopify", "2.1.0", noRef, "t", Map.of())));
+    }
+
     @Test
     void configurationErrorsAreInvalid() {
         for (String cfg : List.of("{\"shop\": \"turgon-demo.com\", \"apiVersion\": \"2026-07\"}", "{\"shop\": \"turgon-demo.myshopify.com\", \"apiVersion\": \"2026-08\"}",

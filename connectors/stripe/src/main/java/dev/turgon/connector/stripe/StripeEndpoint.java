@@ -122,6 +122,78 @@ final class StripeEndpoint implements Endpoint {
     }
 
     @Override
+    public Set<String> webhooks() {
+        return cfg.webhookSecret() == null ? Set.of() : Set.of(EVENT);
+    }
+
+    @Override
+    public Map<String, String> webhookErrors() {
+        return cfg.webhookError() == null ? Map.of() : Map.of(EVENT, cfg.webhookError());
+    }
+
+    /**
+     * A delivery from a Stripe webhook endpoint: Stripe-Signature carries a
+     * timestamp and one or more v1 signatures, HMAC-SHA256 of
+     * "timestamp.body" with the endpoint's signing secret. A signature older
+     * than the tolerance is refused, so a recorded delivery cannot be
+     * replayed. The body is the same event the poll reads, with the same ID.
+     */
+    @Override
+    public List<Event> receive(String event, Map<String, List<String>> headers, byte[] body, java.time.Instant received) throws Exception {
+        if (!event.equals(EVENT) || cfg.webhookSecret() == null) {
+            throw new ConnectorException.Invalid("the connector receives " + EVENT + " by webhook only when webhook.secretRef is set");
+        }
+        List<String> sigHeader = headers.get("Stripe-Signature");
+        if (sigHeader == null || sigHeader.isEmpty()) {
+            throw new ConnectorException.Unauthenticated("the delivery has no Stripe-Signature");
+        }
+        long t = -1;
+        List<String> v1 = new ArrayList<>();
+        for (String part : sigHeader.get(0).split(",")) {
+            String[] kv = part.trim().split("=", 2);
+            if (kv.length != 2) {
+                continue;
+            }
+            if (kv[0].equals("t")) {
+                try {
+                    t = Long.parseLong(kv[1]);
+                } catch (NumberFormatException x) {
+                    throw new ConnectorException.Unauthenticated("Stripe-Signature's timestamp is not a number");
+                }
+            } else if (kv[0].equals("v1")) {
+                v1.add(kv[1]);
+            }
+        }
+        if (t < 0 || v1.isEmpty()) {
+            throw new ConnectorException.Unauthenticated("Stripe-Signature has no timestamp or no v1 signature");
+        }
+        long age = Math.abs(received.getEpochSecond() - t);
+        if (age > cfg.toleranceSeconds()) {
+            throw new ConnectorException.Unauthenticated("Stripe-Signature's timestamp is " + age + " s from now, more than " + cfg.toleranceSeconds() + " s");
+        }
+        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+        mac.init(new javax.crypto.spec.SecretKeySpec(cfg.webhookSecret(), "HmacSHA256"));
+        mac.update((t + ".").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        byte[] want = java.util.HexFormat.of().formatHex(mac.doFinal(body)).getBytes(java.nio.charset.StandardCharsets.US_ASCII);
+        boolean ok = false;
+        for (String s : v1) {
+            ok |= java.security.MessageDigest.isEqual(want, s.toLowerCase(Locale.ROOT).getBytes(java.nio.charset.StandardCharsets.US_ASCII));
+        }
+        if (!ok) {
+            throw new ConnectorException.Unauthenticated("no Stripe-Signature v1 signature matches: check webhook.secretRef holds the endpoint's signing secret");
+        }
+        JsonNode ev = JSON.readTree(body);
+        if (!ev.path("type").asText().equals("invoice.paid")) {
+            return List.of(); // authentic, but another event type the endpoint is subscribed to
+        }
+        String id = ev.path("id").asText("");
+        if (!id.startsWith("evt_")) {
+            throw new ConnectorException.Invalid("the delivery is not a Stripe event (no evt_ ID)");
+        }
+        return List.of(new Event(id, ev.path("created").asLong(), EVENT, ev));
+    }
+
+    @Override
     public JsonNode read(String operation, String id) throws Exception {
         return switch (operation) {
             case "get-invoice" -> client.get("/v1/invoices/" + id(JSON.createObjectNode().put("id", id), "id", "in_"), Map.of());

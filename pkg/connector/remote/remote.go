@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -46,6 +47,7 @@ const (
 	CapCheck    = "check"
 	CapStream   = "stream"
 	CapDiscover = "discover"
+	CapWebhook  = "webhook"
 )
 
 // StartTimeout is how long configuring an instance waits for its sidecar.
@@ -166,12 +168,13 @@ func (p *Pool) configure(ctx context.Context, addr Address, cfg compiler.Connect
 		}
 		req.Secret = v
 	}
+	// A secret inside the configuration that does not resolve is left out:
+	// the connector says whether it needs it (a webhook's signing secret
+	// is needed only by a worker that listens for webhooks).
 	for _, ref := range connector.ConfigSecretRefs(cfg.Config) {
-		v, err := secrets.Resolve(ctx, ref)
-		if err != nil {
-			return nil, fmt.Errorf("endpoint %s: %w", cfg.Endpoint, err)
+		if v, err := secrets.Resolve(ctx, ref); err == nil {
+			req.Secrets[ref] = v
 		}
-		req.Secrets[ref] = v
 	}
 	if req.Spec, err = json.Marshal(cfg); err != nil {
 		return nil, err
@@ -191,6 +194,11 @@ func (p *Pool) configure(ctx context.Context, addr Address, cfg compiler.Connect
 	for _, e := range resp.GetStreamedEvents() {
 		base.streamed[e] = true
 	}
+	base.webhooks = map[string]bool{}
+	for _, e := range resp.GetWebhookEvents() {
+		base.webhooks[e] = true
+	}
+	base.webhookErrors = resp.GetWebhookErrors()
 	if base.caps[CapPoll] || (base.caps[CapStream] && len(base.streamed) > 0) {
 		return &pollingInstance{base}, nil
 	}
@@ -235,6 +243,10 @@ type instance struct {
 	configure *pb.ConfigureRequest
 	// streamed are the events the system pushes (Stream, not Poll).
 	streamed map[string]bool
+	// webhooks are the events that may also arrive by webhook (Receive);
+	// webhookErrors those configured for it that cannot, and why.
+	webhooks      map[string]bool
+	webhookErrors map[string]string
 }
 
 // pollingInstance is an instance whose connector emits events: polled,
@@ -430,6 +442,54 @@ func (x *instance) Close() {
 		defer cancel()
 		_, _ = x.client.Release(x.out(ctx), &pb.InstanceRequest{Instance: x.id})
 	})
+}
+
+var _ connector.WebhookSource = (*pollingInstance)(nil)
+
+// Webhook returns how event arrives by webhook: the sidecar verifies each
+// delivery with its own secret for it.
+func (p *pollingInstance) Webhook(event string) (connector.Webhook, error) {
+	if msg, ok := p.webhookErrors[event]; ok {
+		return nil, fmt.Errorf("endpoint %s: %s cannot arrive by webhook: %s", p.endpoint, event, msg)
+	}
+	if !p.caps[CapWebhook] || !p.webhooks[event] {
+		return nil, connector.ErrNoWebhook
+	}
+	return remoteWebhook{p: p, event: event}, nil
+}
+
+type remoteWebhook struct {
+	p     *pollingInstance
+	event string
+}
+
+// Receive hands a delivery to the sidecar. A signature it refuses is
+// connector.ErrUnauthenticated, which the worker answers with 401.
+func (w remoteWebhook) Receive(header http.Header, body []byte, now time.Time) ([]connector.Event, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	req := &pb.ReceiveRequest{Instance: w.p.id, Event: w.event, Body: body, ReceivedUnixMillis: now.UnixMilli(),
+		Headers: make(map[string]*pb.HeaderValues, len(header))}
+	for k, v := range header {
+		req.Headers[http.CanonicalHeaderKey(k)] = &pb.HeaderValues{Values: v}
+	}
+	r, err := call(ctx, w.p.instance, func(ctx context.Context) (*pb.ReceiveResponse, error) {
+		return w.p.client.Receive(ctx, req)
+	})
+	if status.Code(err) == codes.PermissionDenied {
+		return nil, fmt.Errorf("%w: %s", connector.ErrUnauthenticated, status.Convert(err).Message())
+	}
+	if err != nil {
+		return nil, w.p.wrap("receive", err)
+	}
+	out := make([]connector.Event, 0, len(r.GetEvents()))
+	for _, e := range r.GetEvents() {
+		if e.GetId() == "" {
+			return nil, fmt.Errorf("connector %s: a webhook's %s has no ID", w.p.connector, w.event)
+		}
+		out = append(out, connector.Event{ID: e.GetId(), Name: w.event, Payload: e.GetPayload()})
+	}
+	return out, nil
 }
 
 // Streams reports whether event arrives over Stream.

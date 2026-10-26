@@ -18,6 +18,8 @@ import dev.turgon.connector.v1.InstanceRequest;
 import dev.turgon.connector.v1.PollRequest;
 import dev.turgon.connector.v1.Protocol;
 import dev.turgon.connector.v1.ReadRequest;
+import dev.turgon.connector.v1.HeaderValues;
+import dev.turgon.connector.v1.ReceiveRequest;
 import dev.turgon.connector.v1.WriteRequest;
 import io.grpc.ManagedChannel;
 import io.grpc.Metadata;
@@ -126,6 +128,20 @@ class ConnectorServiceTest {
         }
 
         @Override
+        public Set<String> webhooks() {
+            return Set.of("Order.Created");
+        }
+
+        @Override
+        public List<Event> receive(String event, Map<String, List<String>> headers, byte[] body, java.time.Instant received) throws Exception {
+            List<String> sig = headers.get("x-signature"); // looked up case-insensitively
+            if (sig == null || !sig.get(0).equals("ok")) {
+                throw new ConnectorException.Unauthenticated("the signature does not match");
+            }
+            return List.of(new Event("w1", 0, event, ConnectorService.JSON.readTree(body)));
+        }
+
+        @Override
         public AutoCloseable stream(String event, byte[] resume, StreamSink s) {
             sink = s;
             return CLOSED::incrementAndGet;
@@ -204,11 +220,27 @@ class ConnectorServiceTest {
     }
 
     @Test
+    void receivesWebhooks() {
+        var conf = stub.configure(ConfigureRequest.newBuilder().setInstance("erp-w").setEndpoint("erp")
+                .setSpec(json("{\"endpoint\":\"erp\",\"name\":\"orders\",\"version\":\"1.2.0\"}")).setSecret("user:pw").build());
+        assertEquals(List.of("Order.Created"), conf.getWebhookEventsList());
+        var ok = ReceiveRequest.newBuilder().setInstance("erp-w").setEvent("Order.Created").setBody(json("{\"n\":1}"))
+                .putHeaders("X-Signature", HeaderValues.newBuilder().addValues("ok").build()).setReceivedUnixMillis(System.currentTimeMillis());
+        var r = stub.receive(ok.build());
+        assertEquals(1, r.getEventsCount());
+        assertEquals("w1", r.getEvents(0).getId());
+        assertEquals(Status.Code.PERMISSION_DENIED, code(() -> stub.receive(ok.clone()
+                .putHeaders("X-Signature", HeaderValues.newBuilder().addValues("forged").build()).build())));
+        assertEquals(Status.Code.INVALID_ARGUMENT, code(() -> stub.receive(ok.clone().setEvent("Order.Shipped").build())));
+        assertEquals(Status.Code.ABORTED, code(() -> stub.receive(ok.clone().setInstance("gone").build())));
+    }
+
+    @Test
     void servesTheProtocol() {
         var d = stub.describe(DescribeRequest.newBuilder().setProtocol(Protocol.PROTOCOL_V1).build());
         assertEquals("orders", d.getConnector());
         assertEquals("1.2.0", d.getVersion());
-        assertEquals(List.of("simulate", "confirm", "read", "poll", "export", "check", "stream", "discover"), d.getCapabilitiesList());
+        assertEquals(List.of("simulate", "confirm", "read", "poll", "export", "check", "stream", "discover", "webhook"), d.getCapabilitiesList());
 
         configure("erp-1");
         EndpointConfig cfg = connector.bound.getFirst();

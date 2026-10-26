@@ -10,6 +10,8 @@
 //   NOT_FOUND           Read: no such record
 //   UNIMPLEMENTED       the connector does not do this (Simulate: no dry run)
 //   UNAUTHENTICATED     the worker did not send the sidecar's token
+//   PERMISSION_DENIED   Receive: the webhook's signature is missing,
+//                       wrong or expired
 //   ABORTED             the instance is not configured (the sidecar
 //                       restarted): the worker configures it again and
 //                       repeats the call once
@@ -137,7 +139,7 @@ type DescribeResponse struct {
 	Connector string `protobuf:"bytes,2,opt,name=connector,proto3" json:"connector,omitempty"`
 	Version   string `protobuf:"bytes,3,opt,name=version,proto3" json:"version,omitempty"`
 	// What it implements beyond Commit: "simulate", "confirm", "read",
-	// "poll", "export", "check", "stream", "discover".
+	// "poll", "export", "check", "stream", "discover", "webhook".
 	Capabilities  []string `protobuf:"bytes,4,rep,name=capabilities,proto3" json:"capabilities,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -286,8 +288,15 @@ type ConfigureResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The events of this instance that arrive by Stream rather than Poll.
 	StreamedEvents []string `protobuf:"bytes,1,rep,name=streamed_events,json=streamedEvents,proto3" json:"streamed_events,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// The events of this instance the connector can also receive by
+	// webhook (Receive); they are polled too, to reconcile.
+	WebhookEvents []string `protobuf:"bytes,2,rep,name=webhook_events,json=webhookEvents,proto3" json:"webhook_events,omitempty"`
+	// Events configured to arrive by webhook that cannot (their signing
+	// secret was not resolved), and why. A worker that listens for webhooks
+	// refuses to start with them; one that only polls ignores them.
+	WebhookErrors map[string]string `protobuf:"bytes,3,rep,name=webhook_errors,json=webhookErrors,proto3" json:"webhook_errors,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ConfigureResponse) Reset() {
@@ -323,6 +332,20 @@ func (*ConfigureResponse) Descriptor() ([]byte, []int) {
 func (x *ConfigureResponse) GetStreamedEvents() []string {
 	if x != nil {
 		return x.StreamedEvents
+	}
+	return nil
+}
+
+func (x *ConfigureResponse) GetWebhookEvents() []string {
+	if x != nil {
+		return x.WebhookEvents
+	}
+	return nil
+}
+
+func (x *ConfigureResponse) GetWebhookErrors() map[string]string {
+	if x != nil {
+		return x.WebhookErrors
 	}
 	return nil
 }
@@ -1465,6 +1488,172 @@ func (x *DiscoverResponse) GetCatalog() []byte {
 	return nil
 }
 
+type HeaderValues struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Values        []string               `protobuf:"bytes,1,rep,name=values,proto3" json:"values,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *HeaderValues) Reset() {
+	*x = HeaderValues{}
+	mi := &file_turgon_connector_v1_connector_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *HeaderValues) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*HeaderValues) ProtoMessage() {}
+
+func (x *HeaderValues) ProtoReflect() protoreflect.Message {
+	mi := &file_turgon_connector_v1_connector_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use HeaderValues.ProtoReflect.Descriptor instead.
+func (*HeaderValues) Descriptor() ([]byte, []int) {
+	return file_turgon_connector_v1_connector_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *HeaderValues) GetValues() []string {
+	if x != nil {
+		return x.Values
+	}
+	return nil
+}
+
+type ReceiveRequest struct {
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	Instance string                 `protobuf:"bytes,1,opt,name=instance,proto3" json:"instance,omitempty"`
+	Event    string                 `protobuf:"bytes,2,opt,name=event,proto3" json:"event,omitempty"`
+	// The delivery's HTTP headers, by canonical name.
+	Headers map[string]*HeaderValues `protobuf:"bytes,3,rep,name=headers,proto3" json:"headers,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	Body    []byte                   `protobuf:"bytes,4,opt,name=body,proto3" json:"body,omitempty"`
+	// When the worker received it (signatures expire).
+	ReceivedUnixMillis int64 `protobuf:"varint,5,opt,name=received_unix_millis,json=receivedUnixMillis,proto3" json:"received_unix_millis,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
+}
+
+func (x *ReceiveRequest) Reset() {
+	*x = ReceiveRequest{}
+	mi := &file_turgon_connector_v1_connector_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReceiveRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReceiveRequest) ProtoMessage() {}
+
+func (x *ReceiveRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_turgon_connector_v1_connector_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReceiveRequest.ProtoReflect.Descriptor instead.
+func (*ReceiveRequest) Descriptor() ([]byte, []int) {
+	return file_turgon_connector_v1_connector_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *ReceiveRequest) GetInstance() string {
+	if x != nil {
+		return x.Instance
+	}
+	return ""
+}
+
+func (x *ReceiveRequest) GetEvent() string {
+	if x != nil {
+		return x.Event
+	}
+	return ""
+}
+
+func (x *ReceiveRequest) GetHeaders() map[string]*HeaderValues {
+	if x != nil {
+		return x.Headers
+	}
+	return nil
+}
+
+func (x *ReceiveRequest) GetBody() []byte {
+	if x != nil {
+		return x.Body
+	}
+	return nil
+}
+
+func (x *ReceiveRequest) GetReceivedUnixMillis() int64 {
+	if x != nil {
+		return x.ReceivedUnixMillis
+	}
+	return 0
+}
+
+type ReceiveResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Events        []*Event               `protobuf:"bytes,1,rep,name=events,proto3" json:"events,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReceiveResponse) Reset() {
+	*x = ReceiveResponse{}
+	mi := &file_turgon_connector_v1_connector_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReceiveResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReceiveResponse) ProtoMessage() {}
+
+func (x *ReceiveResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_turgon_connector_v1_connector_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReceiveResponse.ProtoReflect.Descriptor instead.
+func (*ReceiveResponse) Descriptor() ([]byte, []int) {
+	return file_turgon_connector_v1_connector_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *ReceiveResponse) GetEvents() []*Event {
+	if x != nil {
+		return x.Events
+	}
+	return nil
+}
+
 var File_turgon_connector_v1_connector_proto protoreflect.FileDescriptor
 
 const file_turgon_connector_v1_connector_proto_rawDesc = "" +
@@ -1485,9 +1674,14 @@ const file_turgon_connector_v1_connector_proto_rawDesc = "" +
 	"\asecrets\x18\x05 \x03(\v22.turgon.connector.v1.ConfigureRequest.SecretsEntryR\asecrets\x1a:\n" +
 	"\fSecretsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"<\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x87\x02\n" +
 	"\x11ConfigureResponse\x12'\n" +
-	"\x0fstreamed_events\x18\x01 \x03(\tR\x0estreamedEvents\"-\n" +
+	"\x0fstreamed_events\x18\x01 \x03(\tR\x0estreamedEvents\x12%\n" +
+	"\x0ewebhook_events\x18\x02 \x03(\tR\rwebhookEvents\x12`\n" +
+	"\x0ewebhook_errors\x18\x03 \x03(\v29.turgon.connector.v1.ConfigureResponse.WebhookErrorsEntryR\rwebhookErrors\x1a@\n" +
+	"\x12WebhookErrorsEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"-\n" +
 	"\x0fInstanceRequest\x12\x1a\n" +
 	"\binstance\x18\x01 \x01(\tR\binstance\"\x11\n" +
 	"\x0fReleaseResponse\"[\n" +
@@ -1555,10 +1749,23 @@ const file_turgon_connector_v1_connector_proto_rawDesc = "" +
 	"\binstance\x18\x01 \x01(\tR\binstance\x12\x18\n" +
 	"\aobjects\x18\x02 \x03(\tR\aobjects\",\n" +
 	"\x10DiscoverResponse\x12\x18\n" +
-	"\acatalog\x18\x01 \x01(\fR\acatalog*5\n" +
+	"\acatalog\x18\x01 \x01(\fR\acatalog\"&\n" +
+	"\fHeaderValues\x12\x16\n" +
+	"\x06values\x18\x01 \x03(\tR\x06values\"\xb3\x02\n" +
+	"\x0eReceiveRequest\x12\x1a\n" +
+	"\binstance\x18\x01 \x01(\tR\binstance\x12\x14\n" +
+	"\x05event\x18\x02 \x01(\tR\x05event\x12J\n" +
+	"\aheaders\x18\x03 \x03(\v20.turgon.connector.v1.ReceiveRequest.HeadersEntryR\aheaders\x12\x12\n" +
+	"\x04body\x18\x04 \x01(\fR\x04body\x120\n" +
+	"\x14received_unix_millis\x18\x05 \x01(\x03R\x12receivedUnixMillis\x1a]\n" +
+	"\fHeadersEntry\x12\x10\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\x127\n" +
+	"\x05value\x18\x02 \x01(\v2!.turgon.connector.v1.HeaderValuesR\x05value:\x028\x01\"E\n" +
+	"\x0fReceiveResponse\x122\n" +
+	"\x06events\x18\x01 \x03(\v2\x1a.turgon.connector.v1.EventR\x06events*5\n" +
 	"\bProtocol\x12\x18\n" +
 	"\x14PROTOCOL_UNSPECIFIED\x10\x00\x12\x0f\n" +
-	"\vPROTOCOL_V1\x10\x012\xfe\a\n" +
+	"\vPROTOCOL_V1\x10\x012\xd4\b\n" +
 	"\tConnector\x12W\n" +
 	"\bDescribe\x12$.turgon.connector.v1.DescribeRequest\x1a%.turgon.connector.v1.DescribeResponse\x12Z\n" +
 	"\tConfigure\x12%.turgon.connector.v1.ConfigureRequest\x1a&.turgon.connector.v1.ConfigureResponse\x12U\n" +
@@ -1571,7 +1778,8 @@ const file_turgon_connector_v1_connector_proto_rawDesc = "" +
 	"\x04Poll\x12 .turgon.connector.v1.PollRequest\x1a!.turgon.connector.v1.PollResponse\x12Q\n" +
 	"\x06Export\x12\".turgon.connector.v1.ExportRequest\x1a!.turgon.connector.v1.ExportRecord0\x01\x12R\n" +
 	"\x06Stream\x12\".turgon.connector.v1.StreamRequest\x1a .turgon.connector.v1.StreamBatch(\x010\x01\x12W\n" +
-	"\bDiscover\x12$.turgon.connector.v1.DiscoverRequest\x1a%.turgon.connector.v1.DiscoverResponseB`\n" +
+	"\bDiscover\x12$.turgon.connector.v1.DiscoverRequest\x1a%.turgon.connector.v1.DiscoverResponse\x12T\n" +
+	"\aReceive\x12#.turgon.connector.v1.ReceiveRequest\x1a$.turgon.connector.v1.ReceiveResponseB`\n" +
 	"\x17dev.turgon.connector.v1P\x01ZCgithub.com/fduser123-coding/turgon/pkg/connector/remote/connectorpbb\x06proto3"
 
 var (
@@ -1587,7 +1795,7 @@ func file_turgon_connector_v1_connector_proto_rawDescGZIP() []byte {
 }
 
 var file_turgon_connector_v1_connector_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_turgon_connector_v1_connector_proto_msgTypes = make([]protoimpl.MessageInfo, 27)
+var file_turgon_connector_v1_connector_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
 var file_turgon_connector_v1_connector_proto_goTypes = []any{
 	(Protocol)(0),             // 0: turgon.connector.v1.Protocol
 	(*DescribeRequest)(nil),   // 1: turgon.connector.v1.DescribeRequest
@@ -1615,48 +1823,59 @@ var file_turgon_connector_v1_connector_proto_goTypes = []any{
 	(*StreamBatch)(nil),       // 23: turgon.connector.v1.StreamBatch
 	(*DiscoverRequest)(nil),   // 24: turgon.connector.v1.DiscoverRequest
 	(*DiscoverResponse)(nil),  // 25: turgon.connector.v1.DiscoverResponse
-	nil,                       // 26: turgon.connector.v1.ConfigureRequest.SecretsEntry
-	nil,                       // 27: turgon.connector.v1.ExportRecord.FieldsEntry
+	(*HeaderValues)(nil),      // 26: turgon.connector.v1.HeaderValues
+	(*ReceiveRequest)(nil),    // 27: turgon.connector.v1.ReceiveRequest
+	(*ReceiveResponse)(nil),   // 28: turgon.connector.v1.ReceiveResponse
+	nil,                       // 29: turgon.connector.v1.ConfigureRequest.SecretsEntry
+	nil,                       // 30: turgon.connector.v1.ConfigureResponse.WebhookErrorsEntry
+	nil,                       // 31: turgon.connector.v1.ExportRecord.FieldsEntry
+	nil,                       // 32: turgon.connector.v1.ReceiveRequest.HeadersEntry
 }
 var file_turgon_connector_v1_connector_proto_depIdxs = []int32{
 	0,  // 0: turgon.connector.v1.DescribeRequest.protocol:type_name -> turgon.connector.v1.Protocol
 	0,  // 1: turgon.connector.v1.DescribeResponse.protocol:type_name -> turgon.connector.v1.Protocol
-	26, // 2: turgon.connector.v1.ConfigureRequest.secrets:type_name -> turgon.connector.v1.ConfigureRequest.SecretsEntry
-	7,  // 3: turgon.connector.v1.CheckResponse.results:type_name -> turgon.connector.v1.CheckResult
-	16, // 4: turgon.connector.v1.PollResponse.events:type_name -> turgon.connector.v1.Event
-	27, // 5: turgon.connector.v1.ExportRecord.fields:type_name -> turgon.connector.v1.ExportRecord.FieldsEntry
-	21, // 6: turgon.connector.v1.StreamRequest.open:type_name -> turgon.connector.v1.StreamOpen
-	22, // 7: turgon.connector.v1.StreamRequest.ack:type_name -> turgon.connector.v1.StreamAck
-	16, // 8: turgon.connector.v1.StreamBatch.events:type_name -> turgon.connector.v1.Event
-	1,  // 9: turgon.connector.v1.Connector.Describe:input_type -> turgon.connector.v1.DescribeRequest
-	3,  // 10: turgon.connector.v1.Connector.Configure:input_type -> turgon.connector.v1.ConfigureRequest
-	5,  // 11: turgon.connector.v1.Connector.Release:input_type -> turgon.connector.v1.InstanceRequest
-	5,  // 12: turgon.connector.v1.Connector.Check:input_type -> turgon.connector.v1.InstanceRequest
-	9,  // 13: turgon.connector.v1.Connector.Simulate:input_type -> turgon.connector.v1.WriteRequest
-	9,  // 14: turgon.connector.v1.Connector.Commit:input_type -> turgon.connector.v1.WriteRequest
-	11, // 15: turgon.connector.v1.Connector.Confirm:input_type -> turgon.connector.v1.ConfirmRequest
-	13, // 16: turgon.connector.v1.Connector.Read:input_type -> turgon.connector.v1.ReadRequest
-	15, // 17: turgon.connector.v1.Connector.Poll:input_type -> turgon.connector.v1.PollRequest
-	18, // 18: turgon.connector.v1.Connector.Export:input_type -> turgon.connector.v1.ExportRequest
-	20, // 19: turgon.connector.v1.Connector.Stream:input_type -> turgon.connector.v1.StreamRequest
-	24, // 20: turgon.connector.v1.Connector.Discover:input_type -> turgon.connector.v1.DiscoverRequest
-	2,  // 21: turgon.connector.v1.Connector.Describe:output_type -> turgon.connector.v1.DescribeResponse
-	4,  // 22: turgon.connector.v1.Connector.Configure:output_type -> turgon.connector.v1.ConfigureResponse
-	6,  // 23: turgon.connector.v1.Connector.Release:output_type -> turgon.connector.v1.ReleaseResponse
-	8,  // 24: turgon.connector.v1.Connector.Check:output_type -> turgon.connector.v1.CheckResponse
-	10, // 25: turgon.connector.v1.Connector.Simulate:output_type -> turgon.connector.v1.WriteResponse
-	10, // 26: turgon.connector.v1.Connector.Commit:output_type -> turgon.connector.v1.WriteResponse
-	12, // 27: turgon.connector.v1.Connector.Confirm:output_type -> turgon.connector.v1.ConfirmResponse
-	14, // 28: turgon.connector.v1.Connector.Read:output_type -> turgon.connector.v1.ReadResponse
-	17, // 29: turgon.connector.v1.Connector.Poll:output_type -> turgon.connector.v1.PollResponse
-	19, // 30: turgon.connector.v1.Connector.Export:output_type -> turgon.connector.v1.ExportRecord
-	23, // 31: turgon.connector.v1.Connector.Stream:output_type -> turgon.connector.v1.StreamBatch
-	25, // 32: turgon.connector.v1.Connector.Discover:output_type -> turgon.connector.v1.DiscoverResponse
-	21, // [21:33] is the sub-list for method output_type
-	9,  // [9:21] is the sub-list for method input_type
-	9,  // [9:9] is the sub-list for extension type_name
-	9,  // [9:9] is the sub-list for extension extendee
-	0,  // [0:9] is the sub-list for field type_name
+	29, // 2: turgon.connector.v1.ConfigureRequest.secrets:type_name -> turgon.connector.v1.ConfigureRequest.SecretsEntry
+	30, // 3: turgon.connector.v1.ConfigureResponse.webhook_errors:type_name -> turgon.connector.v1.ConfigureResponse.WebhookErrorsEntry
+	7,  // 4: turgon.connector.v1.CheckResponse.results:type_name -> turgon.connector.v1.CheckResult
+	16, // 5: turgon.connector.v1.PollResponse.events:type_name -> turgon.connector.v1.Event
+	31, // 6: turgon.connector.v1.ExportRecord.fields:type_name -> turgon.connector.v1.ExportRecord.FieldsEntry
+	21, // 7: turgon.connector.v1.StreamRequest.open:type_name -> turgon.connector.v1.StreamOpen
+	22, // 8: turgon.connector.v1.StreamRequest.ack:type_name -> turgon.connector.v1.StreamAck
+	16, // 9: turgon.connector.v1.StreamBatch.events:type_name -> turgon.connector.v1.Event
+	32, // 10: turgon.connector.v1.ReceiveRequest.headers:type_name -> turgon.connector.v1.ReceiveRequest.HeadersEntry
+	16, // 11: turgon.connector.v1.ReceiveResponse.events:type_name -> turgon.connector.v1.Event
+	26, // 12: turgon.connector.v1.ReceiveRequest.HeadersEntry.value:type_name -> turgon.connector.v1.HeaderValues
+	1,  // 13: turgon.connector.v1.Connector.Describe:input_type -> turgon.connector.v1.DescribeRequest
+	3,  // 14: turgon.connector.v1.Connector.Configure:input_type -> turgon.connector.v1.ConfigureRequest
+	5,  // 15: turgon.connector.v1.Connector.Release:input_type -> turgon.connector.v1.InstanceRequest
+	5,  // 16: turgon.connector.v1.Connector.Check:input_type -> turgon.connector.v1.InstanceRequest
+	9,  // 17: turgon.connector.v1.Connector.Simulate:input_type -> turgon.connector.v1.WriteRequest
+	9,  // 18: turgon.connector.v1.Connector.Commit:input_type -> turgon.connector.v1.WriteRequest
+	11, // 19: turgon.connector.v1.Connector.Confirm:input_type -> turgon.connector.v1.ConfirmRequest
+	13, // 20: turgon.connector.v1.Connector.Read:input_type -> turgon.connector.v1.ReadRequest
+	15, // 21: turgon.connector.v1.Connector.Poll:input_type -> turgon.connector.v1.PollRequest
+	18, // 22: turgon.connector.v1.Connector.Export:input_type -> turgon.connector.v1.ExportRequest
+	20, // 23: turgon.connector.v1.Connector.Stream:input_type -> turgon.connector.v1.StreamRequest
+	24, // 24: turgon.connector.v1.Connector.Discover:input_type -> turgon.connector.v1.DiscoverRequest
+	27, // 25: turgon.connector.v1.Connector.Receive:input_type -> turgon.connector.v1.ReceiveRequest
+	2,  // 26: turgon.connector.v1.Connector.Describe:output_type -> turgon.connector.v1.DescribeResponse
+	4,  // 27: turgon.connector.v1.Connector.Configure:output_type -> turgon.connector.v1.ConfigureResponse
+	6,  // 28: turgon.connector.v1.Connector.Release:output_type -> turgon.connector.v1.ReleaseResponse
+	8,  // 29: turgon.connector.v1.Connector.Check:output_type -> turgon.connector.v1.CheckResponse
+	10, // 30: turgon.connector.v1.Connector.Simulate:output_type -> turgon.connector.v1.WriteResponse
+	10, // 31: turgon.connector.v1.Connector.Commit:output_type -> turgon.connector.v1.WriteResponse
+	12, // 32: turgon.connector.v1.Connector.Confirm:output_type -> turgon.connector.v1.ConfirmResponse
+	14, // 33: turgon.connector.v1.Connector.Read:output_type -> turgon.connector.v1.ReadResponse
+	17, // 34: turgon.connector.v1.Connector.Poll:output_type -> turgon.connector.v1.PollResponse
+	19, // 35: turgon.connector.v1.Connector.Export:output_type -> turgon.connector.v1.ExportRecord
+	23, // 36: turgon.connector.v1.Connector.Stream:output_type -> turgon.connector.v1.StreamBatch
+	25, // 37: turgon.connector.v1.Connector.Discover:output_type -> turgon.connector.v1.DiscoverResponse
+	28, // 38: turgon.connector.v1.Connector.Receive:output_type -> turgon.connector.v1.ReceiveResponse
+	26, // [26:39] is the sub-list for method output_type
+	13, // [13:26] is the sub-list for method input_type
+	13, // [13:13] is the sub-list for extension type_name
+	13, // [13:13] is the sub-list for extension extendee
+	0,  // [0:13] is the sub-list for field type_name
 }
 
 func init() { file_turgon_connector_v1_connector_proto_init() }
@@ -1674,7 +1893,7 @@ func file_turgon_connector_v1_connector_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_turgon_connector_v1_connector_proto_rawDesc), len(file_turgon_connector_v1_connector_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   27,
+			NumMessages:   32,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

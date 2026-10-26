@@ -18,13 +18,16 @@ import java.net.URI;
  *   finalize: true                   # finalize after creating (assigns its number)
  * link:
  *   metadataKey: erp_payment_id      # the invoice metadata link-invoice sets
+ * webhook:                           # Invoice.Paid also arrives from a webhook endpoint
+ *   secretRef: openbao://stripe-invoicing/webhook-secret   # its signing secret (whsec_...)
+ *   toleranceSeconds: 300            # how old a signature may be
  * </pre>
  *
  * The secret is a restricted key ({@code rk_live_...}) with read access to
  * customers and events and write access to invoices, or a secret key.
  */
 public record StripeConfig(URI url, String apiVersion, int pageSize, String collectionMethod, int daysUntilDue, boolean finalizeInvoices,
-        String metadataKey) {
+        String metadataKey, byte[] webhookSecret, long toleranceSeconds, String webhookError) {
 
     public static StripeConfig from(EndpointConfig e) throws ConnectorException.Invalid {
         JsonNode c = e.config();
@@ -55,6 +58,32 @@ public record StripeConfig(URI url, String apiVersion, int pageSize, String coll
         if (!key.matches("[A-Za-z0-9_\\-]{1,40}")) {
             throw new ConnectorException.Invalid("link.metadataKey must be 1 to 40 letters, digits, - or _ (Stripe's metadata keys)");
         }
-        return new StripeConfig(url, c.path("apiVersion").asText(""), page, method, days, inv.path("finalize").asBoolean(true), key);
+        byte[] hook = null;
+        String hookError = null;
+        JsonNode w = c.path("webhook");
+        if (c.has("webhook")) {
+            String ref = w.path("secretRef").asText("");
+            if (ref.isEmpty()) {
+                throw new ConnectorException.Invalid("webhook.secretRef must name the webhook endpoint's signing secret (whsec_...)");
+            }
+            String v = e.secrets().get(ref);
+            if (v == null || v.isBlank()) {
+                // Polling does not need it: only a worker listening for webhooks does.
+                hookError = "webhook.secretRef " + ref + " is not set: the invoice.paid webhook cannot be verified";
+            } else {
+                hook = v.trim().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            }
+        }
+        long tolerance = w.path("toleranceSeconds").asLong(300);
+        if (tolerance < 1 || tolerance > 3600) {
+            throw new ConnectorException.Invalid("webhook.toleranceSeconds must be between 1 and 3600");
+        }
+        return new StripeConfig(url, c.path("apiVersion").asText(""), page, method, days, inv.path("finalize").asBoolean(true), key, hook, tolerance, hookError);
+    }
+
+    /** Never prints the webhook's secret. */
+    @Override
+    public String toString() {
+        return "StripeConfig[url=" + url + ", apiVersion=" + apiVersion + ", webhook=" + (webhookSecret != null) + "]";
     }
 }

@@ -35,6 +35,15 @@ public abstract sealed class ConnectorException extends Exception {
         }
     }
 
+    /** A webhook delivery's signature is missing, wrong or expired: answered 401, not retried. */
+    public static final class Unauthenticated extends ConnectorException {
+        private static final long serialVersionUID = 1L;
+
+        public Unauthenticated(String message) {
+            super(message);
+        }
+    }
+
     /** The connector does not implement this. */
     public static final class Unsupported extends ConnectorException {
         private static final long serialVersionUID = 1L;

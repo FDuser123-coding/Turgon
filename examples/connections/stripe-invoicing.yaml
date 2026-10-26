@@ -17,3 +17,8 @@ spec:
     apiVersion: "2026-06-30.basil"
     invoice: { collectionMethod: send_invoice, daysUntilDue: 30, finalize: true }
     link: { metadataKey: erp_payment_id }
+    # Workers started with --webhook-listen also receive invoice.paid from a
+    # Stripe webhook endpoint (…/webhooks/stripe-invoicing/Invoice.Paid),
+    # signed with its signing secret; the poll then only reconciles.
+    webhook:
+      secretRef: openbao://stripe-invoicing/webhook-secret

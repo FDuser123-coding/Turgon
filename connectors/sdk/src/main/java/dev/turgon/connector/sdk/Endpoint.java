@@ -59,6 +59,39 @@ public interface Endpoint extends AutoCloseable {
         throw new ConnectorException.Unsupported("stream");
     }
 
+    /**
+     * The events that may also arrive by webhook: the worker takes each
+     * delivery on its webhook listener and hands it to {@link #receive}.
+     * They are still polled, which reconciles what the system never sent.
+     */
+    default Set<String> webhooks() {
+        return Set.of();
+    }
+
+    /**
+     * Why an event cannot arrive by webhook although the endpoint is
+     * configured for it (its signing secret is not set, say), by event. The
+     * event is still polled; a worker listening for webhooks refuses to
+     * start with the reason.
+     */
+    default Map<String, String> webhookErrors() {
+        return Map.of();
+    }
+
+    /**
+     * Verifies one webhook delivery (its signature, with the secret for it)
+     * and returns the events it carries; their positions are ignored. Use
+     * the same event IDs as {@link #poll}, so the worker runs each event
+     * once. Throw {@link ConnectorException.Unauthenticated} for a missing,
+     * wrong or expired signature; return no events for an authentic
+     * delivery of another event.
+     *
+     * @param headers the delivery's HTTP headers, case-insensitive
+     */
+    default List<Event> receive(String event, Map<String, List<String>> headers, byte[] body, java.time.Instant received) throws Exception {
+        throw new ConnectorException.Unsupported("webhook");
+    }
+
     default void export(String name, Consumer<Map<String, String>> each) throws Exception {
         throw new ConnectorException.Unsupported("export");
     }

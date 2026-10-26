@@ -15,3 +15,9 @@ spec:
   config:
     shop: turgon-demo.myshopify.com
     apiVersion: "2026-07"
+    # Workers started with --webhook-listen also receive new orders from an
+    # orders/create webhook subscription (…/webhooks/shopify-admin/
+    # Order.Created), signed with the app's client secret; the poll then
+    # only reconciles.
+    webhook:
+      secretRef: openbao://shopify-admin/client-secret

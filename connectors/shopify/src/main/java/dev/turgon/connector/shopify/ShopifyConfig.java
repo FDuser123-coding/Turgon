@@ -14,12 +14,14 @@ import java.util.regex.Pattern;
  * apiVersion: 2026-07               # the Admin API version, supported for a year
  * url: https://turgon-demo.myshopify.com   # default: https:// and the shop; tests point it at a fake
  * pageSize: 50                      # orders per poll, at most 250
+ * webhook:                          # Order.Created also arrives by the orders/create webhook
+ *   secretRef: openbao://shopify-admin/client-secret   # the app's client secret, which signs it
  * </pre>
  *
  * The secret is the app's Admin API access token ({@code shpat_...}), with
  * the scopes read_orders, write_orders and read_customers.
  */
-public record ShopifyConfig(String shop, String apiVersion, URI url, int pageSize) {
+public record ShopifyConfig(String shop, String apiVersion, URI url, int pageSize, byte[] webhookSecret, String webhookError) {
     private static final Pattern SHOP = Pattern.compile("[a-z0-9][a-z0-9-]*\\.myshopify\\.com");
     private static final Pattern VERSION = Pattern.compile("\\d{4}-(01|04|07|10)|unstable");
 
@@ -47,7 +49,28 @@ public record ShopifyConfig(String shop, String apiVersion, URI url, int pageSiz
         if (page < 1 || page > 250) {
             throw new ConnectorException.Invalid("pageSize must be between 1 and 250");
         }
-        return new ShopifyConfig(shop, version, url, page);
+        byte[] hook = null;
+        String hookError = null;
+        String ref = c.path("webhook").path("secretRef").asText("");
+        if (c.has("webhook")) {
+            String v = e.secrets().get(ref);
+            if (ref.isEmpty()) {
+                throw new ConnectorException.Invalid("webhook.secretRef must name the app's client secret, which signs the orders/create webhook");
+            }
+            if (v == null || v.isBlank()) {
+                // Polling does not need it: only a worker listening for webhooks does.
+                hookError = "webhook.secretRef " + ref + " is not set: the orders/create webhook cannot be verified";
+            } else {
+                hook = v.trim().getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            }
+        }
+        return new ShopifyConfig(shop, version, url, page, hook, hookError);
+    }
+
+    /** Never prints the webhook's secret. */
+    @Override
+    public String toString() {
+        return "ShopifyConfig[shop=" + shop + ", apiVersion=" + apiVersion + ", webhook=" + (webhookSecret != null) + "]";
     }
 
     public URI endpoint() {

@@ -46,7 +46,8 @@ func TestIntegrationsEndpoint(t *testing.T) {
 
 	// How each event arrives.
 	for flow, want := range map[string]string{"stripe-payments-to-erp": "webhook", "shop-orders-to-erp": "outbox",
-		"shop-order-rows-to-erp": "change capture", "salesforce-won-deals-to-erp-cdc": "subscription"} {
+		"shop-order-rows-to-erp": "change capture", "salesforce-won-deals-to-erp-cdc": "subscription",
+		"shopify-admin-orders-to-erp": "webhook", "stripe-invoicing-payments-to-erp": "webhook", "shop-orders-to-powerbi": "outbox"} {
 		if got := flows[flow].Trigger.Delivery; got != want {
 			t.Errorf("%s arrives by %q, want %q", flow, got, want)
 		}

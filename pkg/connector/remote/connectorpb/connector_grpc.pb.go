@@ -10,6 +10,8 @@
 //   NOT_FOUND           Read: no such record
 //   UNIMPLEMENTED       the connector does not do this (Simulate: no dry run)
 //   UNAUTHENTICATED     the worker did not send the sidecar's token
+//   PERMISSION_DENIED   Receive: the webhook's signature is missing,
+//                       wrong or expired
 //   ABORTED             the instance is not configured (the sidecar
 //                       restarted): the worker configures it again and
 //                       repeats the call once
@@ -49,6 +51,7 @@ const (
 	Connector_Export_FullMethodName    = "/turgon.connector.v1.Connector/Export"
 	Connector_Stream_FullMethodName    = "/turgon.connector.v1.Connector/Stream"
 	Connector_Discover_FullMethodName  = "/turgon.connector.v1.Connector/Discover"
+	Connector_Receive_FullMethodName   = "/turgon.connector.v1.Connector/Receive"
 )
 
 // ConnectorClient is the client API for Connector service.
@@ -87,6 +90,12 @@ type ConnectorClient interface {
 	// Discover reads what the system holds for the metadata graph: the
 	// objects the configuration uses, and those named.
 	Discover(ctx context.Context, in *DiscoverRequest, opts ...grpc.CallOption) (*DiscoverResponse, error)
+	// Receive verifies one webhook delivery the worker took for an event
+	// (its signature, with the connector's secret for it) and returns the
+	// events it carries, without positions: the worker's inbox assigns them
+	// and drops IDs it already has, so the same event polled later is not
+	// run twice. An authentic delivery for another event returns none.
+	Receive(ctx context.Context, in *ReceiveRequest, opts ...grpc.CallOption) (*ReceiveResponse, error)
 }
 
 type connectorClient struct {
@@ -229,6 +238,16 @@ func (c *connectorClient) Discover(ctx context.Context, in *DiscoverRequest, opt
 	return out, nil
 }
 
+func (c *connectorClient) Receive(ctx context.Context, in *ReceiveRequest, opts ...grpc.CallOption) (*ReceiveResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReceiveResponse)
+	err := c.cc.Invoke(ctx, Connector_Receive_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // ConnectorServer is the server API for Connector service.
 // All implementations must embed UnimplementedConnectorServer
 // for forward compatibility.
@@ -265,6 +284,12 @@ type ConnectorServer interface {
 	// Discover reads what the system holds for the metadata graph: the
 	// objects the configuration uses, and those named.
 	Discover(context.Context, *DiscoverRequest) (*DiscoverResponse, error)
+	// Receive verifies one webhook delivery the worker took for an event
+	// (its signature, with the connector's secret for it) and returns the
+	// events it carries, without positions: the worker's inbox assigns them
+	// and drops IDs it already has, so the same event polled later is not
+	// run twice. An authentic delivery for another event returns none.
+	Receive(context.Context, *ReceiveRequest) (*ReceiveResponse, error)
 	mustEmbedUnimplementedConnectorServer()
 }
 
@@ -310,6 +335,9 @@ func (UnimplementedConnectorServer) Stream(grpc.BidiStreamingServer[StreamReques
 }
 func (UnimplementedConnectorServer) Discover(context.Context, *DiscoverRequest) (*DiscoverResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Discover not implemented")
+}
+func (UnimplementedConnectorServer) Receive(context.Context, *ReceiveRequest) (*ReceiveResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method Receive not implemented")
 }
 func (UnimplementedConnectorServer) mustEmbedUnimplementedConnectorServer() {}
 func (UnimplementedConnectorServer) testEmbeddedByValue()                   {}
@@ -530,6 +558,24 @@ func _Connector_Discover_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Connector_Receive_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReceiveRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ConnectorServer).Receive(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Connector_Receive_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ConnectorServer).Receive(ctx, req.(*ReceiveRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Connector_ServiceDesc is the grpc.ServiceDesc for Connector service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -576,6 +622,10 @@ var Connector_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Discover",
 			Handler:    _Connector_Discover_Handler,
+		},
+		{
+			MethodName: "Receive",
+			Handler:    _Connector_Receive_Handler,
 		},
 	},
 	Streams: []grpc.StreamDesc{
