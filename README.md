@@ -1892,6 +1892,12 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 - **Slots over tools.** Recipes may name a slot (`erp`) instead of a tool (`sap-ecc`). In a
   blueprint, agent tools are generated from slot contracts, so `create_sales_order` keeps its
   name and meaning when the ERP behind it is swapped; the swap is re-verified against the contract.
+- **A slot names its connection.** In a blueprint, `slots.erp: { plugin: sap-ecc, connection:
+  ecc-prod }` binds the slot to the Connection that configures the plugin's connector in this
+  stack: the system's address, secret reference, limits and connector configuration. The
+  connection's connector must be the plugin's, in the plugin's version range, and the contract
+  is checked against the connection's view of the connector. A slot without a connection is a
+  warning: its connector would run with no configuration and the manifest's default secret.
 - **Every write has an undo.** Write steps without a compensation are rejected; high-risk writes
   cannot disable approval.
 - **Connections.** A `Connection` binds a connector to one system (pipeline stage 1). Generic
@@ -1925,6 +1931,6 @@ tested against a fake ECC and a JCo stand-in, not yet against a real SAP system 
 IDocs as SAP pushes them, but not change pointers. Power BI is tested against a fake Entra and push
 dataset API, not yet against a real tenant; it adds rows to existing push datasets but does not
 create them. Shopify is tested against a fake GraphQL Admin API, not yet against a real store; it polls
-orders and does not yet receive webhooks (the `rest` connection `shopify-store` does). A blueprint's
-slots carry no connection configuration yet, so a slot-based recipe such as `shopify-orders-to-sap`
-verifies and compiles but needs a connection to run.
+orders and does not yet receive webhooks (the `rest` connection `shopify-store` does). The `stripe`
+manifest (`camel-java`) still has no runtime, so the `eu-distributor-core` blueprint's billing slot
+has no connection; Stripe runs through the `rest` connection `stripe-billing`.

@@ -1,15 +1,19 @@
-# Architecture §18.5.
+# Architecture §18.5. Each slot names the plugin that fills it and the
+# Connection that configures that plugin's connector in this stack (the
+# system's address, secret and limits).
 apiVersion: turgon.dev/v1alpha1
 kind: StackBlueprint
 metadata: { name: eu-distributor-core }
 spec:
   model: ossie://turgon/distribution@1
   slots:
-    crm:       { plugin: salesforce,     version: "^3" }
-    erp:       { plugin: sap-ecc,        version: "^0.4" }
-    commerce:  { plugin: shopify,        version: "^2" }
+    crm:       { plugin: salesforce,     version: "^3",   connection: salesforce-prod }
+    erp:       { plugin: sap-ecc,        version: "^0.4", connection: ecc-prod }
+    commerce:  { plugin: shopify,        version: "^2",   connection: shopify-admin }
+    # The stripe connector has no runtime yet; Stripe runs through the rest
+    # connection stripe-billing, outside this stack.
     billing:   { plugin: stripe,         version: "^1" }
-    analytics: { plugin: powerbi-export, version: "^1" }
+    analytics: { plugin: powerbi-export, version: "^1",   connection: powerbi-sales }
   extensions: [credit-check@1.3]
   recipes: [salesforce-won-deals-to-sap-orders, shopify-orders-to-sap]
   policies: [writeback-default, mask-personal-data]

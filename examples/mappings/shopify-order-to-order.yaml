@@ -12,6 +12,10 @@ spec:
     - { target: orderDate,   expression: "$substring(created_at, 0, 10)", origin: certified, confidence: 0.99 }
     - { target: netValue,    expression: "$number(subtotal_price)", origin: certified, confidence: 0.98 }
     - { target: currency,    expression: "currency",             origin: certified, confidence: 0.99 }
+    - target: lines
+      expression: "line_items.{ 'material': sku, 'quantity': quantity }[]"
+      origin: human
+      confidence: 0.98
     - target: shippingCondition
       expression: "shipping_lines[0].code = 'express' ? '01' : '02'"
       origin: ai

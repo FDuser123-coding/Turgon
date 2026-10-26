@@ -476,6 +476,30 @@ func (v *Verifier) Blueprint(b *v1alpha1.StackBlueprint) *Report {
 		if err != nil {
 			continue // reported by the plugin's own report
 		}
+		if bind.Connection != "" {
+			conn, err := v.cat.Connection(bind.Connection)
+			if err != nil {
+				r.add(StageResolve, SeverityError, path+".connection", "connection %q: %v", bind.Connection, err)
+				r.raise(3)
+				continue
+			}
+			name, pin := v1alpha1.ParseRef(p.Spec.Connector)
+			if cname, _ := v1alpha1.ParseRef(conn.Spec.Connector); cname != name {
+				r.add(StageContract, SeverityError, path+".connection", "connection %s uses connector %s, but plugin %s is the %s connector",
+					conn.Metadata.Name, cname, p.Metadata.Name, name)
+				r.raise(3)
+				continue
+			}
+			// The plugin's version range decides which manifest the connection binds.
+			em := v.connection(r, conn, pin)
+			if em == nil {
+				continue
+			}
+			m = em
+			r.Resolution.Connections[slot] = conn
+		} else {
+			r.add(StageResolve, SeverityWarning, path+".connection", "no connection configures the %s slot: its connector runs with no configuration and the manifest's default secret; name the Connection for this stack's %s", slot, m.Metadata.Name)
+		}
 		if !satisfies(r, path, c, m) {
 			r.raise(2)
 			continue

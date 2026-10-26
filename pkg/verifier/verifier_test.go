@@ -211,6 +211,35 @@ func TestBlueprintVerifies(t *testing.T) {
 	}
 }
 
+func TestBlueprintSlotsBindTheirConnections(t *testing.T) {
+	cat := load(t)
+	rep := New(cat, Options{}).Blueprint(blueprint(t, cat))
+	for _, slot := range []string{"crm", "erp", "commerce", "analytics"} {
+		if rep.Resolution.Connections[slot] == nil {
+			t.Errorf("slot %s has no connection", slot)
+		}
+	}
+	// The slot's manifest is the connection's view of it: its secret.
+	if got := rep.Resolution.Connectors["commerce"].Spec.Auth.SecretRef; got != "openbao://shopify-admin/token" {
+		t.Errorf("commerce secret = %s", got)
+	}
+	// billing has no connection: a warning, not a block.
+	if len(findings(rep, SeverityWarning, "no connection configures the billing slot")) != 1 {
+		t.Errorf("warnings: %+v", rep.Findings)
+	}
+
+	b := blueprint(t, cat)
+	b.Spec.Slots["commerce"] = v1alpha1.SlotBinding{Plugin: "shopify", Version: "^2", Connection: "shopify-store"} // a rest connection
+	rep = New(cat, Options{}).Blueprint(b)
+	if rep.Deployable || len(findings(rep, SeverityError, "connection shopify-store uses connector rest, but plugin shopify is the shopify connector")) != 1 {
+		t.Fatalf("errors: %+v", rep.Errors())
+	}
+	b.Spec.Slots["commerce"] = v1alpha1.SlotBinding{Plugin: "shopify", Version: "^2", Connection: "no-such-connection"}
+	if rep = New(cat, Options{}).Blueprint(b); rep.Deployable {
+		t.Fatal("a missing connection was accepted")
+	}
+}
+
 func TestSlotSwapIsReverifiedAgainstContract(t *testing.T) {
 	cat := load(t)
 	// A cheaper ERP that cannot create sales orders does not fit the erp slot.
