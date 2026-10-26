@@ -764,6 +764,65 @@ In the Helm chart, add it to `connectors.sidecars` with the image
 `ghcr.io/<owner>/turgon-connector-powerbi-export`, and allow egress to `login.microsoftonline.com`
 and `api.powerbi.com`.
 
+### Shopify through the GraphQL Admin API, from the Camel/Java sidecar
+
+Shopify treats its REST Admin API as legacy and requires the GraphQL Admin API of new apps. The
+`shopify` connector (`connectors/shopify`) is the third Camel/Java connector, and uses GraphQL
+only. It gives orders and customers in the shape of Shopify's webhooks and REST resources
+(`admin_graphql_api_id`, `created_at`, `subtotal_price`, `line_items`). So a mapping written for an
+`orders/create` webhook, or for the `rest` connection `shopify-store`, reads them unchanged.
+
+| | What it does |
+|---|---|
+| `Order.Created` | New orders, polled in ID order (`orders(sortKey: ID, query: "id:>N")`); the cursor is the order's numeric ID |
+| `get-order`, `get-customer` | Read by number or GID |
+| `update-order` | Sets an order's `note` and `tags` (`orderUpdate`), previewed as current and proposed values; its result keeps what it replaced |
+| `restore-order` | `update-order`'s compensation: puts the replaced values back |
+
+The connection (`examples/connections/shopify-admin.yaml`) names the store's `myshopify.com`
+domain and the API version. The secret is the app's Admin API access token, with the scopes
+`read_orders`, `write_orders` and `read_customers`. `turgon check` reports:
+- the store the token belongs to;
+- the granted scopes, naming any that are missing;
+- the API version. Shopify supports each version for a year, then answers with the oldest one it
+  still supports, and the check says so.
+
+Shopify answers most failures with HTTP 200 and a list of errors:
+- **Throttled queries** (the API's cost limit) are retried by the worker.
+- **A missing scope** is not, because retrying cannot grant it.
+- **A user error on an update**, such as an archived order, rejects the write, and the saga
+  compensates.
+
+Discovery reads `Order` and `Customer` from the store's schema by GraphQL introspection.
+
+The recipe `shopify-admin-orders-to-erp` is the Shopify saga through GraphQL. Each new order becomes
+an ERP sales order once a person approves it, and the ERP number is written into the order's note.
+If Shopify refuses the note, the ERP order is cancelled. Without a store, run the fake
+(`connectors/shopify-fake`). It holds one store's orders, checks the token and the scopes like
+Shopify, and adds orders at `/fake/orders`:
+
+```sh
+make connectors                                              # also builds the connector and the fake
+connectors/shopify-fake/build/install/turgon-fake-shopify/bin/turgon-fake-shopify --port 9500 --token shpat_demo &
+TURGON_CONNECTOR_LISTEN=unix:///tmp/shopify.sock connectors/shopify/build/install/turgon-connector-shopify/bin/turgon-connector-shopify &
+cp -r examples my-catalog && sed -i 's|^  config:$|  config:\n    url: http://127.0.0.1:9500|' my-catalog/connections/shopify-admin.yaml
+export TURGON_CONNECTORS=shopify=unix:///tmp/shopify.sock TURGON_SECRET_SHOPIFY_ADMIN_TOKEN=shpat_demo
+export TURGON_SECRET_ERP_DB_DSN=$TURGON_DATABASE_URL         # the ERP schema from the prototype flow
+bin/turgon compile -c my-catalog shopify-admin-orders-to-erp -o shopify-admin.json
+bin/turgon check -s shopify-admin.json                       # the sidecar, the store, the API version, the scopes
+bin/turgon xref set --entity Customer --system shopify-admin --source ada@example.com --master C-100
+bin/turgon run -s shopify-admin.json &
+curl -s -XPOST localhost:9500/fake/orders -d '{"email": "ada@example.com", "currency": "EUR", "subtotal": "349.90",
+  "line_items": [{"sku": "M-7", "quantity": 2, "price": "174.95"}]}'
+bin/turgon pending 'shopify-admin-orders-to-erp/gid://shopify/Order/5600000000001'
+bin/turgon approve 'shopify-admin-orders-to-erp/gid://shopify/Order/5600000000001' --by you@example.com
+curl -s localhost:9500/fake/orders/5600000000001             # "note": "ERP order <number>"
+```
+
+`POST /fake/reject-update?order=<id>` makes the next update of an order fail, and the saga then
+cancels its ERP order. In the Helm chart, add the connector to `connectors.sidecars` with the image
+`ghcr.io/<owner>/turgon-connector-shopify`, and allow egress to the store.
+
 ### Webhooks: events in seconds, polling as the safety net
 
 Turgon runs next to the customer's systems, often where nothing may connect in, so events are
@@ -864,6 +923,7 @@ database as a snapshot. The connectors read it from the system's own catalog:
 | `rest` without one | each event's list items, sampled | one page of the event's list request |
 | `postgres` outbox | each outbox event's payload, sampled | the latest 500 outbox rows |
 | `powerbi-export` | each table of the push dataset, with the columns and types its connection declares (Power BI does not list them) | the dataset's tables in the REST API |
+| `shopify` | `Order` and `Customer`, with each field's type and whether it is non-null | the GraphQL Admin API's introspection |
 
 A REST connection's `openapi` names the API's OpenAPI 3 description, such as Stripe's
 `https://raw.githubusercontent.com/stripe/openapi/master/openapi/spec3.json`. Each event, read and
@@ -1805,7 +1865,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/secrets` | §9 | Secret references resolved from OpenBao or HashiCorp Vault (KV v2), signing in with Kubernetes service accounts, AppRoles or tokens; or from AWS Secrets Manager, Azure Key Vault and Google Secret Manager with the platform's workload identity |
 | `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled list or search events (ascending, or newest-first paged back to the cursor), also received as signed webhooks (Stripe, Shopify, generic HMAC), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/`, `stripetest/` and `hubspottest/` fake the Shopify Admin, Stripe and HubSpot CRM APIs |
 | `pkg/connector/remote`, `proto/` | §7.1 | The connector protocol (gRPC) and its Go client: connectors running in a sidecar, configured per endpoint with resolved secrets, reconfigured after a sidecar restart |
-| `connectors/` | §7.1 | Camel/Java connectors: `sdk` (the protocol's server, Camel routes per operation), `sap-ecc` (BAPIs over RFC through SAP JCo), `sap-ecc-fake` (an in-memory ECC), `powerbi-export` (Power BI push datasets as an Entra service principal), `powerbi-fake` (a fake Entra and Power BI) |
+| `connectors/` | §7.1 | Camel/Java connectors: `sdk` (the protocol's server, Camel routes per operation), `sap-ecc` (BAPIs over RFC through SAP JCo), `sap-ecc-fake` (an in-memory ECC), `powerbi-export` (Power BI push datasets as an Entra service principal), `powerbi-fake` (a fake Entra and Power BI), `shopify` (the GraphQL Admin API), `shopify-fake` (a fake store) |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references, the webhook inbox, metadata snapshots |
 | `pkg/meta` | §7.2 | The metadata graph: catalogs of what each system holds, their digests, drift between snapshots, and what uses each field |
@@ -1860,9 +1920,11 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 In rough roadmap order (§16, §19): a REST API without an OpenAPI description has only its events'
 lists discovered (sampled), not its write targets. Debezium topics in Protobuf or JSON Schema (with
 a registry) are not read, only Avro and plain JSON. Managed subscriptions are tested against the fake org's Pub/Sub
-and Tooling APIs, not yet against a real org. The Camel/Java connectors are SAP ECC and Power BI. SAP ECC is
+and Tooling APIs, not yet against a real org. The Camel/Java connectors are SAP ECC, Power BI and Shopify. SAP ECC is
 tested against a fake ECC and a JCo stand-in, not yet against a real SAP system or gateway. It reads
 IDocs as SAP pushes them, but not change pointers. Power BI is tested against a fake Entra and push
 dataset API, not yet against a real tenant; it adds rows to existing push datasets but does not
-create them. The `shopify` manifest (the GraphQL Admin API) still has no runtime; Shopify runs
-through the `rest` connector.
+create them. Shopify is tested against a fake GraphQL Admin API, not yet against a real store; it polls
+orders and does not yet receive webhooks (the `rest` connection `shopify-store` does). A blueprint's
+slots carry no connection configuration yet, so a slot-based recipe such as `shopify-orders-to-sap`
+verifies and compiles but needs a connection to run.

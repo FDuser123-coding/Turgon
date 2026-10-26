@@ -18,13 +18,15 @@ proto:
 	scripts/gen-proto.sh
 
 # Build and test the Camel/Java connectors, and drive the SAP ECC sidecar
-# (with its fake ECC) and the Power BI sidecar (with its fake Power BI)
-# from Go over the protocol.
+# (with its fake ECC), the Power BI sidecar (with its fake Power BI) and
+# the Shopify sidecar (with its fake Shopify) from Go over the protocol.
 connectors:
-	gradle -p connectors build :sap-ecc-fake:installDist :powerbi-export:installDist :powerbi-fake:installDist
+	gradle -p connectors build :sap-ecc-fake:installDist :powerbi-export:installDist :powerbi-fake:installDist :shopify:installDist :shopify-fake:installDist
 	TURGON_TEST_CONNECTOR_SAP_ECC=$$PWD/connectors/sap-ecc-fake/build/install/turgon-connector-sap-ecc-demo/bin/turgon-connector-sap-ecc-demo \
 	TURGON_TEST_CONNECTOR_POWERBI=$$PWD/connectors/powerbi-export/build/install/turgon-connector-powerbi-export/bin/turgon-connector-powerbi-export \
 	TURGON_TEST_FAKE_POWERBI=$$PWD/connectors/powerbi-fake/build/install/turgon-fake-powerbi/bin/turgon-fake-powerbi \
+	TURGON_TEST_CONNECTOR_SHOPIFY=$$PWD/connectors/shopify/build/install/turgon-connector-shopify/bin/turgon-connector-shopify \
+	TURGON_TEST_FAKE_SHOPIFY=$$PWD/connectors/shopify-fake/build/install/turgon-fake-shopify/bin/turgon-fake-shopify \
 		go test -count=1 -run TestJavaSidecar ./pkg/connector/remote/
 
 # The operator's tests run a real kube-apiserver and etcd (envtest):

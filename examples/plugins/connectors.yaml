@@ -22,7 +22,7 @@ spec:
 ---
 apiVersion: turgon.dev/v1alpha1
 kind: Plugin
-metadata: { name: shopify, publisher: turgon, version: 2.0.3 }
+metadata: { name: shopify, publisher: turgon, version: 2.1.0 }
 spec:
   type: connector
   runtime: container

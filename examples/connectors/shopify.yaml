@@ -1,13 +1,18 @@
+# Shopify through the GraphQL Admin API, which Shopify requires of new apps
+# (its REST Admin API is legacy): the Camel/Java shopify connector, in a
+# sidecar next to the worker (connectors/shopify). Orders and customers come
+# in the shape of Shopify's webhooks and REST resources, so mappings written
+# for an orders/create webhook read them unchanged.
 apiVersion: turgon.dev/v1alpha1
 kind: ConnectorManifest
 metadata:
   name: shopify
-  version: 2.0.3
+  version: 2.1.0
 spec:
-  system: "Shopify Admin API 2026-07"
+  system: "Shopify GraphQL Admin API 2026-07"
   runtime: camel-java
   auth:
-    methods: [oauth2]
+    methods: [admin-api-access-token]
     secretRef: openbao://shopify/store
   discovery:
     - kind: graphql-introspection
@@ -15,20 +20,40 @@ spec:
     read:
       - kind: graphql-api
     write:
+      # An update is previewed as the order's current and proposed values.
       - kind: graphql-api
+        simulation: preview
     events:
-      - kind: webhooks
+      # New orders in ID order (orders(sortKey: ID, query: "id:>N")).
+      - kind: polling
   entities: [Customer, Order]
   events:
     - name: Order.Created
       entity: Order
-      interface: webhooks
+      interface: polling
   operations:
     - name: get-order
       entity: Order
       direction: read
       interface: graphql-api
       risk: read
+    - name: get-customer
+      entity: Customer
+      direction: read
+      interface: graphql-api
+      risk: read
+    # Sets an order's note and tags; the result keeps what it replaced.
+    - name: update-order
+      entity: Order
+      direction: write
+      interface: graphql-api
+      risk: low
+      compensation: restore-order
+    - name: restore-order
+      entity: Order
+      direction: write
+      interface: graphql-api
+      risk: low
   limits:
     maxConcurrentCalls: 4
     requestsPerSecond: 2

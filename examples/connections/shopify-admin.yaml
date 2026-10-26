@@ -1,0 +1,17 @@
+# The web shop on Shopify through the GraphQL Admin API: the Camel/Java
+# shopify connector, in a sidecar next to the worker (connectors/shopify).
+# The secret is the app's Admin API access token (shpat_...), with the
+# scopes read_orders, write_orders and read_customers. New orders are polled
+# in ID order; the ERP order number is written back into the order's note.
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata:
+  name: shopify-admin
+  description: "The Shopify store through the GraphQL Admin API: new orders polled, ERP numbers noted on them."
+spec:
+  connector: shopify@^2
+  secretRef: openbao://shopify-admin/token
+  limits: { maxConcurrentCalls: 2, requestsPerSecond: 2 }
+  config:
+    shop: turgon-demo.myshopify.com
+    apiVersion: "2026-07"

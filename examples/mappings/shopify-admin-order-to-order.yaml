@@ -1,0 +1,21 @@
+# A Shopify order, as the shopify connector gives it (the orders/create
+# webhook's shape), as a sales order.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: shopify-admin-order-to-order
+  version: 1.0.0
+spec:
+  from: shopify-admin.Order
+  to: model.SalesOrder
+  fields:
+    - { target: externalId,  expression: "'SHOPIFY-' & $string(id)",      origin: human,     confidence: 1.0 }
+    - { target: shopifyId,   expression: "admin_graphql_api_id",          origin: human,     confidence: 1.0 }
+    - { target: customerRef, expression: "$lowercase(email)",             origin: human,     confidence: 0.99 }
+    - { target: orderDate,   expression: "$substring(created_at, 0, 10)", origin: certified, confidence: 0.99 }
+    - { target: netValue,    expression: "$number(subtotal_price)",       origin: certified, confidence: 0.99 }
+    - { target: currency,    expression: "$uppercase(currency)",          origin: certified, confidence: 0.99 }
+    - target: lines
+      expression: "line_items.{ 'material': sku, 'quantity': quantity }[]"
+      origin: human
+      confidence: 0.98

@@ -55,6 +55,7 @@
         "shop-order-rows-to-erp",
         "shop-orders-to-erp",
         "shop-orders-with-credit-check",
+        "shopify-admin-orders-to-erp",
         "shopify-store-orders-to-erp",
         "stripe-payments-to-erp"
       ]
@@ -224,6 +225,25 @@
         "shop-orders-to-erp",
         "shop-orders-to-powerbi",
         "shop-orders-with-credit-check"
+      ]
+    },
+    {
+      "name": "shopify-admin",
+      "description": "The Shopify store through the GraphQL Admin API: new orders polled, ERP numbers noted on them.",
+      "connector": "shopify",
+      "product": "Shopify GraphQL Admin API 2026-07",
+      "role": "both",
+      "events": [
+        {
+          "name": "Order.Created",
+          "delivery": "polling"
+        }
+      ],
+      "operations": [
+        "update-order"
+      ],
+      "flows": [
+        "shopify-admin-orders-to-erp"
       ]
     },
     {
@@ -897,6 +917,64 @@
       "targets": [
         "erp-db"
       ]
+    },
+    {
+      "name": "shopify-admin-orders-to-erp",
+      "version": "1.0.0",
+      "description": "A Shopify order, read through the GraphQL Admin API, becomes an ERP sales order; the ERP number is noted on the order.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "shopify-admin",
+        "event": "Order.Created",
+        "delivery": "polling"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "shopify-admin-order-to-order@1.0.0",
+          "from": "shopify-admin.Order",
+          "to": "model.SalesOrder",
+          "fields": 7
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "probabilistic"
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "erp-db",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "rollback",
+          "compensation": "cancel-sales-order"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-shopify-note@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.Order",
+          "fields": 2
+        },
+        {
+          "kind": "write",
+          "entity": "Order",
+          "system": "shopify-admin",
+          "operation": "update-order",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "restore-order"
+        }
+      ],
+      "targets": [
+        "erp-db",
+        "shopify-admin"
+      ],
+      "slo": "p95 10s"
     },
     {
       "name": "shopify-orders-to-sap",
