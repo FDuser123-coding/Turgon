@@ -272,6 +272,8 @@ connectors:
   #                          # login.microsoftonline.com and api.powerbi.com
   # - name: shopify          # the GraphQL Admin API; needs outbound HTTPS to <store>.myshopify.com
   #   image: { repository: ghcr.io/fduser123-coding/turgon-connector-shopify, tag: "" }
+  # - name: stripe           # billing; needs outbound HTTPS to api.stripe.com
+  #   image: { repository: ghcr.io/fduser123-coding/turgon-connector-stripe, tag: "" }
   resources:
     requests: { cpu: 100m, memory: 256Mi }
     limits: { memory: 768Mi }
