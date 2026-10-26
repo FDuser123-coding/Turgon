@@ -157,7 +157,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        connector: [sap-ecc, powerbi-export, shopify]
+        connector: [sap-ecc, powerbi-export, shopify, stripe]
     permissions:
       contents: read
       packages: write

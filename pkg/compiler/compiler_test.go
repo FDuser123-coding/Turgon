@@ -132,8 +132,8 @@ func TestBlueprintSlotsCarryTheirConnections(t *testing.T) {
 	if commerce.Connection != "shopify-admin" || commerce.Limits.MaxConcurrentCalls != 2 || !strings.Contains(string(commerce.Config), "turgon-demo.myshopify.com") {
 		t.Errorf("commerce = %+v %s", commerce, commerce.Config)
 	}
-	if b := by["billing"]; b.Connection != "" || len(b.Config) != 0 {
-		t.Errorf("billing = %+v", b)
+	if b := by["billing"]; b.Connection != "stripe-invoicing" || b.SecretRef != "openbao://stripe-invoicing/restricted-key" || !strings.Contains(string(b.Config), "erp_payment_id") {
+		t.Errorf("billing = %+v %s", b, b.Config)
 	}
 }
 

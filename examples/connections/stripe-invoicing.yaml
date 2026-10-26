@@ -1,0 +1,19 @@
+# Stripe billing through the Camel/Java stripe connector, in a sidecar next
+# to the worker (connectors/stripe). The secret is a restricted key with
+# Customers: Read, Invoices: Write and Events: Read. Paid invoices are read
+# from Stripe's invoice.paid events; the ERP payment ID is written into the
+# invoice's metadata (erp_payment_id).
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata:
+  name: stripe-invoicing
+  description: "Stripe billing: invoices created, paid invoices read, ERP payments noted on them."
+spec:
+  connector: stripe@^1
+  secretRef: openbao://stripe-invoicing/restricted-key
+  # Stripe allows 25 read and 25 write requests per second in live mode.
+  limits: { maxConcurrentCalls: 8, requestsPerSecond: 20 }
+  config:
+    apiVersion: "2026-06-30.basil"
+    invoice: { collectionMethod: send_invoice, daysUntilDue: 30, finalize: true }
+    link: { metadataKey: erp_payment_id }

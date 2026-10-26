@@ -214,7 +214,7 @@ func TestBlueprintVerifies(t *testing.T) {
 func TestBlueprintSlotsBindTheirConnections(t *testing.T) {
 	cat := load(t)
 	rep := New(cat, Options{}).Blueprint(blueprint(t, cat))
-	for _, slot := range []string{"crm", "erp", "commerce", "analytics"} {
+	for _, slot := range []string{"crm", "erp", "commerce", "billing", "analytics"} {
 		if rep.Resolution.Connections[slot] == nil {
 			t.Errorf("slot %s has no connection", slot)
 		}
@@ -223,12 +223,18 @@ func TestBlueprintSlotsBindTheirConnections(t *testing.T) {
 	if got := rep.Resolution.Connectors["commerce"].Spec.Auth.SecretRef; got != "openbao://shopify-admin/token" {
 		t.Errorf("commerce secret = %s", got)
 	}
-	// billing has no connection: a warning, not a block.
-	if len(findings(rep, SeverityWarning, "no connection configures the billing slot")) != 1 {
+	if len(findings(rep, SeverityWarning, "no connection configures")) != 0 {
 		t.Errorf("warnings: %+v", rep.Findings)
 	}
 
+	// A slot without a connection: a warning, not a block.
 	b := blueprint(t, cat)
+	b.Spec.Slots["billing"] = v1alpha1.SlotBinding{Plugin: "stripe", Version: "^1"}
+	rep = New(cat, Options{}).Blueprint(b)
+	if !rep.Deployable || len(findings(rep, SeverityWarning, "no connection configures the billing slot")) != 1 {
+		t.Errorf("warnings: %+v", rep.Findings)
+	}
+
 	b.Spec.Slots["commerce"] = v1alpha1.SlotBinding{Plugin: "shopify", Version: "^2", Connection: "shopify-store"} // a rest connection
 	rep = New(cat, Options{}).Blueprint(b)
 	if rep.Deployable || len(findings(rep, SeverityError, "connection shopify-store uses connector rest, but plugin shopify is the shopify connector")) != 1 {

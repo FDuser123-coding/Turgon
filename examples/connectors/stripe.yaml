@@ -1,8 +1,11 @@
+# Stripe billing through the REST API: the Camel/Java stripe connector, in a
+# sidecar next to the worker (connectors/stripe). Paid invoices arrive as
+# Stripe's invoice.paid events, in the shape Stripe sends to a webhook.
 apiVersion: turgon.dev/v1alpha1
 kind: ConnectorManifest
 metadata:
   name: stripe
-  version: 1.4.0
+  version: 1.5.0
 spec:
   system: "Stripe API 2026-06"
   runtime: camel-java
@@ -13,22 +16,50 @@ spec:
     read:
       - kind: rest-api
     write:
+      # Invoices are previewed with Stripe's invoice preview (its totals and
+      # taxes); links as the invoice's current and proposed metadata.
       - kind: rest-api
+        simulation: preview
     events:
-      - kind: webhooks
+      # invoice.paid events from /v1/events, paged back to the cursor.
+      - kind: polling
   entities: [Customer, Invoice]
   events:
     - name: Invoice.Paid
       entity: Invoice
-      interface: webhooks
+      interface: polling
   operations:
+    - name: get-invoice
+      entity: Invoice
+      direction: read
+      interface: rest-api
+      risk: read
+    - name: get-customer
+      entity: Customer
+      direction: read
+      interface: rest-api
+      risk: read
+    # An invoice with one item per line, finalized; idempotent per write.
     - name: create-invoice
       entity: Invoice
       direction: write
       interface: rest-api
       risk: low
       compensation: void-invoice
+    # Deletes a draft, voids an open invoice; a paid one is refused.
     - name: void-invoice
+      entity: Invoice
+      direction: write
+      interface: rest-api
+      risk: low
+    # Notes the ERP payment on the invoice (metadata); unlink puts it back.
+    - name: link-invoice
+      entity: Invoice
+      direction: write
+      interface: rest-api
+      risk: low
+      compensation: unlink-invoice
+    - name: unlink-invoice
       entity: Invoice
       direction: write
       interface: rest-api

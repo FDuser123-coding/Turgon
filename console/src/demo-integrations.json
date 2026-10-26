@@ -57,6 +57,7 @@
         "shop-orders-with-credit-check",
         "shopify-admin-orders-to-erp",
         "shopify-store-orders-to-erp",
+        "stripe-invoicing-payments-to-erp",
         "stripe-payments-to-erp"
       ]
     },
@@ -286,6 +287,25 @@
       ],
       "flows": [
         "stripe-payments-to-erp"
+      ]
+    },
+    {
+      "name": "stripe-invoicing",
+      "description": "Stripe billing: invoices created, paid invoices read, ERP payments noted on them.",
+      "connector": "stripe",
+      "product": "Stripe API 2026-06",
+      "role": "both",
+      "events": [
+        {
+          "name": "Invoice.Paid",
+          "delivery": "polling"
+        }
+      ],
+      "operations": [
+        "link-invoice"
+      ],
+      "flows": [
+        "stripe-invoicing-payments-to-erp"
       ]
     }
   ],
@@ -1187,6 +1207,64 @@
       "targets": [
         "s4-prod",
         "shopify-store"
+      ],
+      "slo": "p95 10s"
+    },
+    {
+      "name": "stripe-invoicing-payments-to-erp",
+      "version": "1.0.0",
+      "description": "A paid Stripe invoice, read by the stripe connector, is recorded as an ERP payment and linked to it (cash application).",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "stripe-invoicing",
+        "event": "Invoice.Paid",
+        "delivery": "polling"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "stripe-invoicing-invoice-to-payment@1.0.0",
+          "from": "stripe-invoicing.Invoice",
+          "to": "model.Payment",
+          "fields": 6
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "exact"
+        },
+        {
+          "kind": "write",
+          "entity": "Payment",
+          "system": "erp-db",
+          "operation": "record-payment",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "rollback",
+          "compensation": "void-payment"
+        },
+        {
+          "kind": "map",
+          "mapping": "payment-to-stripe-link@1.0.0",
+          "from": "model.Payment",
+          "to": "model.Invoice",
+          "fields": 2
+        },
+        {
+          "kind": "write",
+          "entity": "Invoice",
+          "system": "stripe-invoicing",
+          "operation": "link-invoice",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "unlink-invoice"
+        }
+      ],
+      "targets": [
+        "erp-db",
+        "stripe-invoicing"
       ],
       "slo": "p95 10s"
     },

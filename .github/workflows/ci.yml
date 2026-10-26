@@ -268,7 +268,7 @@ jobs:
           scripts/gen-proto.sh
           git diff --exit-code pkg/connector/remote/connectorpb
       - name: Build and test the Java connectors
-        run: gradle -p connectors build :sap-ecc-fake:installDist :powerbi-export:installDist :powerbi-fake:installDist :shopify:installDist :shopify-fake:installDist
+        run: gradle -p connectors build :sap-ecc-fake:installDist :powerbi-export:installDist :powerbi-fake:installDist :shopify:installDist :shopify-fake:installDist :stripe:installDist :stripe-fake:installDist
       - name: Drive the Java sidecars from Go over the protocol
         run: |
           TURGON_TEST_CONNECTOR_SAP_ECC=$PWD/connectors/sap-ecc-fake/build/install/turgon-connector-sap-ecc-demo/bin/turgon-connector-sap-ecc-demo \
@@ -276,12 +276,15 @@ jobs:
           TURGON_TEST_FAKE_POWERBI=$PWD/connectors/powerbi-fake/build/install/turgon-fake-powerbi/bin/turgon-fake-powerbi \
           TURGON_TEST_CONNECTOR_SHOPIFY=$PWD/connectors/shopify/build/install/turgon-connector-shopify/bin/turgon-connector-shopify \
           TURGON_TEST_FAKE_SHOPIFY=$PWD/connectors/shopify-fake/build/install/turgon-fake-shopify/bin/turgon-fake-shopify \
+          TURGON_TEST_CONNECTOR_STRIPE=$PWD/connectors/stripe/build/install/turgon-connector-stripe/bin/turgon-connector-stripe \
+          TURGON_TEST_FAKE_STRIPE=$PWD/connectors/stripe-fake/build/install/turgon-fake-stripe/bin/turgon-fake-stripe \
             go test -race -count=1 -run TestJavaSidecar -v ./pkg/connector/remote/
       - name: Build the connector images
         run: |
           docker build -f connectors/Dockerfile --build-arg CONNECTOR=sap-ecc -t turgon-connector-sap-ecc:ci .
           docker build -f connectors/Dockerfile --build-arg CONNECTOR=powerbi-export -t turgon-connector-powerbi-export:ci .
           docker build -f connectors/Dockerfile --build-arg CONNECTOR=shopify -t turgon-connector-shopify:ci .
+          docker build -f connectors/Dockerfile --build-arg CONNECTOR=stripe -t turgon-connector-stripe:ci .
 
   splink:
     runs-on: ubuntu-latest

@@ -374,6 +374,38 @@ echo "cus_ada 49.90" >> stripe.cmds                              # recorded at o
 echo "cus_ada 75000" >> stripe.cmds                              # waits for approval
 ```
 
+#### The `stripe` connector: invoices from the Camel/Java sidecar
+
+The `stripe` connector (`connectors/stripe`), in a sidecar, also creates invoices, which the
+`rest` connection does not. It fills the `billing` slot of `eu-distributor-core`
+(`examples/connections/stripe-invoicing.yaml`). The secret is a restricted key with
+Customers: Read, Invoices: Write and Events: Read.
+
+| | What it does |
+|---|---|
+| `Invoice.Paid` | Stripe's `invoice.paid` events, in the shape a webhook gets; Stripe lists them newest first, so a poll pages back to the cursor and hands them over oldest first |
+| `create-invoice` | An invoice with one item per line (amounts in the currency's major unit, converted to Stripe's minor unit; JPY has none, KWD three), finalized. Its dry run is Stripe's invoice preview, with totals and taxes |
+| `void-invoice` | `create-invoice`'s compensation: deletes a draft, voids an open invoice, refuses a paid one (refund it instead) |
+| `link-invoice`, `unlink-invoice` | Sets the ERP payment ID in the invoice's metadata, and puts the previous value back |
+| `get-invoice`, `get-customer` | Reads by ID |
+
+Each request of a write carries an idempotency key derived from the write's, so a retried
+create returns the same invoice and adds no second set of lines.
+
+Errors:
+- **Retried:** rate limits, Stripe's own failures, and what Stripe marks `Stripe-Should-Retry`.
+- **Not retried:** invalid requests, and a permission the restricted key lacks (it names the
+  permission).
+
+`turgon check` reports the key's mode (test or live) and whether it can read customers,
+invoices and events. Writes cannot be probed without writing, so the first create reports a
+missing write permission.
+
+The recipe `stripe-invoicing-payments-to-erp` is the cash application above, through this
+connector. The Java fake (`connectors/stripe-fake`) runs with
+`--port 9600 --key rk_test_demo --customer ada@example.com=Ada`. It prints the customer's ID, and
+`POST /fake/pay?invoice=in_...` pays an invoice.
+
 ### HubSpot to ERP: order entry from the CRM
 
 `hubspot-won-deals-to-erp` turns every deal won in HubSpot into an ERP sales order (a person
@@ -1865,7 +1897,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/secrets` | §9 | Secret references resolved from OpenBao or HashiCorp Vault (KV v2), signing in with Kubernetes service accounts, AppRoles or tokens; or from AWS Secrets Manager, Azure Key Vault and Google Secret Manager with the platform's workload identity |
 | `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled list or search events (ascending, or newest-first paged back to the cursor), also received as signed webhooks (Stripe, Shopify, generic HMAC), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/`, `stripetest/` and `hubspottest/` fake the Shopify Admin, Stripe and HubSpot CRM APIs |
 | `pkg/connector/remote`, `proto/` | §7.1 | The connector protocol (gRPC) and its Go client: connectors running in a sidecar, configured per endpoint with resolved secrets, reconfigured after a sidecar restart |
-| `connectors/` | §7.1 | Camel/Java connectors: `sdk` (the protocol's server, Camel routes per operation), `sap-ecc` (BAPIs over RFC through SAP JCo), `sap-ecc-fake` (an in-memory ECC), `powerbi-export` (Power BI push datasets as an Entra service principal), `powerbi-fake` (a fake Entra and Power BI), `shopify` (the GraphQL Admin API), `shopify-fake` (a fake store) |
+| `connectors/` | §7.1 | Camel/Java connectors: `sdk` (the protocol's server, Camel routes per operation), `sap-ecc` (BAPIs over RFC through SAP JCo), `sap-ecc-fake` (an in-memory ECC), `powerbi-export` (Power BI push datasets as an Entra service principal), `powerbi-fake` (a fake Entra and Power BI), `shopify` (the GraphQL Admin API), `shopify-fake` (a fake store), `stripe` (invoices and paid-invoice events), `stripe-fake` (a fake account) |
 | `pkg/connector/salesforce` | §7.1, §13 | Native Salesforce connector: OAuth JWT bearer or client credentials, SOQL polling on `SystemModstamp`, updates that record previous values, restore for compensation; `sftest/` is a fake org for tests |
 | `pkg/store/pgstore` | §7.2, §7.3, §8 | Turgon's state in Postgres: idempotency records with leases, source cursors, identity cross-references, the webhook inbox, metadata snapshots |
 | `pkg/meta` | §7.2 | The metadata graph: catalogs of what each system holds, their digests, drift between snapshots, and what uses each field |
@@ -1926,11 +1958,11 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 In rough roadmap order (§16, §19): a REST API without an OpenAPI description has only its events'
 lists discovered (sampled), not its write targets. Debezium topics in Protobuf or JSON Schema (with
 a registry) are not read, only Avro and plain JSON. Managed subscriptions are tested against the fake org's Pub/Sub
-and Tooling APIs, not yet against a real org. The Camel/Java connectors are SAP ECC, Power BI and Shopify. SAP ECC is
+and Tooling APIs, not yet against a real org. The Camel/Java connectors are SAP ECC, Power BI, Shopify and Stripe. SAP ECC is
 tested against a fake ECC and a JCo stand-in, not yet against a real SAP system or gateway. It reads
 IDocs as SAP pushes them, but not change pointers. Power BI is tested against a fake Entra and push
 dataset API, not yet against a real tenant; it adds rows to existing push datasets but does not
 create them. Shopify is tested against a fake GraphQL Admin API, not yet against a real store; it polls
 orders and does not yet receive webhooks (the `rest` connection `shopify-store` does). The `stripe`
-manifest (`camel-java`) still has no runtime, so the `eu-distributor-core` blueprint's billing slot
-has no connection; Stripe runs through the `rest` connection `stripe-billing`.
+connector is tested against a fake Stripe, not yet against a real account; it polls `invoice.paid`
+events and does not yet receive Stripe's webhooks (the `rest` connection `stripe-billing` does).
