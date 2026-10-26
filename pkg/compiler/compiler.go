@@ -457,6 +457,10 @@ func (b *builder) blueprint(rep *verifier.Report) {
 		// agents and extensions reach it through the slot.
 		b.connector(slot, m, "")
 		b.offers(slot, m)
+		if conn := rep.Resolution.Connections[slot]; conn != nil {
+			c := b.connectors[b.endpoint(slot)]
+			c.Connection, c.Config = conn.Metadata.Name, conn.Spec.Config
+		}
 	}
 	for _, slot := range slots {
 		p := rep.Resolution.Slots[slot]

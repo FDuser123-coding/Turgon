@@ -240,6 +240,10 @@ type BlueprintSpec struct {
 type SlotBinding struct {
 	Plugin  string `json:"plugin"`
 	Version string `json:"version,omitempty"`
+	// Connection names the Connection that configures the slot's connector
+	// in this stack: its system's address, secret reference, limits and
+	// connector configuration. Its connector must be the plugin's.
+	Connection string `json:"connection,omitempty"`
 }
 
 func (b *StackBlueprint) GetTypeMeta() TypeMeta { return b.TypeMeta }

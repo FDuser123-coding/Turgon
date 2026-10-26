@@ -117,6 +117,26 @@ func TestBlueprintToolsFollowSlots(t *testing.T) {
 	}
 }
 
+func TestBlueprintSlotsCarryTheirConnections(t *testing.T) {
+	cat, _ := catalog.Load("../../examples")
+	rt := compileNamed(t, cat, "eu-distributor-core")
+	by := map[string]ConnectorConfig{}
+	for _, c := range rt.Spec.Connectors {
+		by[c.Endpoint] = c
+	}
+	erp := by["erp"]
+	if erp.Connection != "ecc-prod" || erp.SecretRef != "openbao://sap/ecc/prod" || !strings.Contains(string(erp.Config), `"progid":"TURGON_IDOC"`) {
+		t.Errorf("erp = %+v %s", erp, erp.Config)
+	}
+	commerce := by["commerce"]
+	if commerce.Connection != "shopify-admin" || commerce.Limits.MaxConcurrentCalls != 2 || !strings.Contains(string(commerce.Config), "turgon-demo.myshopify.com") {
+		t.Errorf("commerce = %+v %s", commerce, commerce.Config)
+	}
+	if b := by["billing"]; b.Connection != "" || len(b.Config) != 0 {
+		t.Errorf("billing = %+v", b)
+	}
+}
+
 func TestCompileRefusesBlockedRecipe(t *testing.T) {
 	cat, _ := catalog.Load("../../examples")
 	obj, _ := cat.Find("shopify-orders-to-sap") // slot-based; not deployable alone
