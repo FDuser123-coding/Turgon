@@ -76,6 +76,12 @@ func newFixtureFor(t *testing.T, recipe string, extra connector.StaticSecrets, r
 // newFixtureWith also receives webhooks when webhooks is set.
 func newFixtureWith(t *testing.T, recipe string, extra connector.StaticSecrets, webhooks bool, rewrites ...func(string) string) *fixture {
 	t.Helper()
+	return newFixtureReg(t, recipe, extra, webhooks, nil, rewrites...)
+}
+
+// newFixtureReg also runs the connectors in reg (sidecars, say).
+func newFixtureReg(t *testing.T, recipe string, extra connector.StaticSecrets, webhooks bool, reg connector.Registry, rewrites ...func(string) string) *fixture {
+	t.Helper()
 	pool, schema := pgtest.Pool(t)
 	ctx := context.Background()
 	sql, err := os.ReadFile("../../examples/sql/demo.sql")
@@ -120,9 +126,13 @@ func newFixtureWith(t *testing.T, recipe string, extra connector.StaticSecrets, 
 	for k, v := range extra {
 		secrets[k] = v
 	}
+	registry := connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory, rest.Name: rest.Factory, sap.Name: sap.Factory,
+		debezium.Name: debezium.Factory}
+	for name, f := range reg {
+		registry[name] = f
+	}
 	rt, err := New(ctx, spec, Options{
-		Registry: connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory, rest.Name: rest.Factory, sap.Name: sap.Factory,
-			debezium.Name: debezium.Factory},
+		Registry: registry,
 		Secrets:  secrets,
 		Store:    store,
 		Resolver: store,
