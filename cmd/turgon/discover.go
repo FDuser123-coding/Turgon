@@ -109,8 +109,11 @@ func discoverCmd() *cobra.Command {
 			}
 			failed := false
 			for _, r := range results {
-				if r.Error != "" || (failOnBreaking && len(r.Missing) > 0) {
+				if r.Error != "" {
 					failed = true
+				}
+				for _, m := range r.Missing {
+					failed = failed || (failOnBreaking && !m.Sampled)
 				}
 				for _, c := range r.Changes {
 					failed = failed || (failOnBreaking && c.Breaks())
@@ -254,7 +257,11 @@ func printDiscoveries(w io.Writer, rs []discovery, stored bool) {
 			fmt.Fprintf(w, "; changed: snapshot %d, previous %d (%s)\n", r.Snapshot.ID, r.Previous.ID, r.Previous.DiscoveredAt.Format(time.RFC3339))
 		}
 		for _, m := range r.Missing {
-			fmt.Fprintf(w, "  MISSING   %s\n", m)
+			mark := "MISSING "
+			if m.Sampled {
+				mark = "NOT SEEN"
+			}
+			fmt.Fprintf(w, "  %s  %s\n", mark, m)
 		}
 		for _, c := range r.Changes {
 			mark := "          "

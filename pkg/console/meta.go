@@ -137,8 +137,12 @@ func (s *Server) metaOverview(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadGateway, "state database: snapshot "+strconv.FormatInt(list[0].ID, 10)+" could not be read")
 			return
 		}
-		sys := MetaSystem{Endpoint: ep, Connector: latest.Connector, Version: latest.Version, Latest: list[0], Snapshots: len(list),
-			Missing: len(meta.MissingUses(latest))}
+		sys := MetaSystem{Endpoint: ep, Connector: latest.Connector, Version: latest.Version, Latest: list[0], Snapshots: len(list)}
+		for _, m := range meta.MissingUses(latest) {
+			if !m.Sampled { // only not seen in a sample: not counted as missing
+				sys.Missing++
+			}
+		}
 		for _, o := range latest.Objects {
 			sys.Fields += len(o.Fields)
 		}

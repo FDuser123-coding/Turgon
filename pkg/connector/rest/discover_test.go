@@ -2,6 +2,7 @@ package rest
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -186,5 +187,105 @@ func TestOpenAPIPathsAndRefs(t *testing.T) {
 	}
 	if topField(`metadata.erp_id`) != "metadata" || topField(`customerid_account@odata\.bind`) != "customerid_account@odata.bind" {
 		t.Fatal("topField")
+	}
+}
+
+// Without a description, a read and a write target their resource, sampled
+// from the event that lists it, with the whole record read by a sampled
+// ID: the fields a write sends are its uses.
+func TestDiscoverSamplesWhatOperationsTarget(t *testing.T) {
+	shop, c := newShop(t)
+	o := order(1001)
+	o["note"] = "gift"
+	shop.AddOrder(o)
+	cat, err := c.Discover(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	orders, ok := cat.Object("Order.Created")
+	if !ok || !strings.Contains(orders.Label, "and the record GET /orders/{{id}}.json") {
+		t.Fatalf("objects %+v", cat.Objects)
+	}
+	uses := map[string]bool{}
+	for _, u := range cat.Uses {
+		uses[u.Object+"."+u.Field+" "+u.By] = u.Creates
+	}
+	for use, creates := range map[string]bool{
+		"Order.Created.note operation update-order (writes)": true,
+		"Order.Created.note operation get-order":             false,
+		"Order.Created.email operation get-order":            false,
+	} {
+		if got, ok := uses[use]; !ok || got != creates {
+			t.Fatalf("no use %q (creates %v): %v", use, creates, uses)
+		}
+	}
+	// No event lists customers and /customers.json is not there: nothing
+	// to sample, and no error.
+	for use := range uses {
+		if strings.Contains(use, "get-customer") {
+			t.Fatalf("customer use %q", use)
+		}
+	}
+}
+
+// An API with no events: a write's resource is sampled from a GET of its
+// collection, and a field it sends that its records stop having is
+// reported with the write that uses it.
+func TestDiscoverSamplesACollectionAndReportsWrittenFields(t *testing.T) {
+	var mu sync.Mutex
+	tickets := []map[string]any{{"id": 7, "subject": "Late delivery", "priority": "high", "status": "open"}}
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/v2/tickets":
+			_ = json.NewEncoder(w).Encode(map[string]any{"data": tickets, "meta": map[string]any{"count": len(tickets)}})
+		case r.Method == http.MethodGet && r.URL.Path == "/v2/tickets/7":
+			rec := map[string]any{"assignee": "ada"}
+			for k, v := range tickets[0] {
+				rec[k] = v
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"ticket": rec})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer api.Close()
+	c, err := New(Config{BaseURL: api.URL + "/v2", Auth: Auth{Type: "bearer"}, Operations: map[string]Operation{
+		"get-ticket":    {Method: "GET", Path: "/tickets/{{id}}", Result: "ticket", Fields: map[string]string{"subject": "subject", "assignee": "assignee"}},
+		"update-ticket": {Method: "PATCH", Path: "/tickets/{{ticketId}}", Result: "ticket", Fields: map[string]string{"priority": "priority", "status": "status"}},
+	}}, "tok", http.DefaultClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	before, err := c.Discover(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, ok := before.Object("/tickets")
+	if !ok || !o.Sampled || !strings.Contains(o.Label, "GET /tickets, 1 item(s) sampled, and the record GET /tickets/{{id}}") {
+		t.Fatalf("objects %+v", before.Objects)
+	}
+	if f, ok := o.Field("assignee"); !ok || f.Type != "string" {
+		t.Fatalf("the record's own field: %+v", o.Fields)
+	}
+
+	mu.Lock()
+	delete(tickets[0], "priority") // the API drops it
+	mu.Unlock()
+	after, err := c.Discover(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := meta.Compare(before, after)
+	if len(changes) != 1 || changes[0].Kind != meta.FieldNotSeen || changes[0].Field != "priority" ||
+		strings.Join(changes[0].UsedBy, ";") != "operation update-ticket (writes)" {
+		t.Fatalf("changes %+v", changes)
+	}
+	// Not in the records sampled: not seen, which may not mean missing.
+	if m := meta.MissingUses(after); len(m) != 1 || m[0].Field != "priority" || !m[0].Sampled ||
+		!strings.Contains(m[0].String(), "not in the sampled records") {
+		t.Fatalf("missing %+v", m)
 	}
 }

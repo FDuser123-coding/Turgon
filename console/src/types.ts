@@ -237,6 +237,8 @@ export interface MetaMissing {
   object: string;
   field?: string;
   usedBy: string[];
+  /** Not in the sampled records: a sample may have left it out. */
+  sampled?: boolean;
 }
 
 export interface MetaField {

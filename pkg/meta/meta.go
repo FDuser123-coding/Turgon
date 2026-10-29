@@ -383,17 +383,22 @@ func Usage(c Catalog, specs ...*compiler.RuntimeSpec) map[string][]string {
 }
 
 // Missing is an object or field the configuration uses that the system
-// does not hold.
+// does not hold. In a sampled object it is only not seen: the sampled
+// records may have left it out.
 type Missing struct {
-	Object string   `json:"object"`
-	Field  string   `json:"field,omitempty"`
-	UsedBy []string `json:"usedBy"`
+	Object  string   `json:"object"`
+	Field   string   `json:"field,omitempty"`
+	UsedBy  []string `json:"usedBy"`
+	Sampled bool     `json:"sampled,omitempty"`
 }
 
 func (m Missing) String() string {
 	where := m.Object
 	if m.Field != "" {
 		where += "." + m.Field
+	}
+	if m.Sampled {
+		where += " (not in the sampled records)"
 	}
 	return where + "; used by " + strings.Join(m.UsedBy, ", ")
 }
@@ -411,7 +416,7 @@ func MissingUses(c Catalog) []Missing {
 			if _, ok := o.Field(u.Field); ok {
 				continue
 			}
-			m.Field = u.Field
+			m.Field, m.Sampled = u.Field, o.Sampled
 		}
 		key := m.Object + "." + m.Field
 		i, seen := at[key]
