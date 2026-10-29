@@ -247,6 +247,19 @@ jobs:
 
   connectors:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: turgon
+          POSTGRES_PASSWORD: turgon
+          POSTGRES_DB: turgon_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U turgon"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TURGON_TEST_DATABASE_URL: postgres://turgon:turgon@localhost:5432/turgon_test?sslmode=disable
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -279,6 +292,11 @@ jobs:
           TURGON_TEST_CONNECTOR_STRIPE=$PWD/connectors/stripe/build/install/turgon-connector-stripe/bin/turgon-connector-stripe \
           TURGON_TEST_FAKE_STRIPE=$PWD/connectors/stripe-fake/build/install/turgon-fake-stripe/bin/turgon-fake-stripe \
             go test -race -count=1 -run TestJavaSidecar -v ./pkg/connector/remote/
+      - name: Run a workflow on a webhook through a Java sidecar
+        run: |
+          TURGON_TEST_CONNECTOR_STRIPE=$PWD/connectors/stripe/build/install/turgon-connector-stripe/bin/turgon-connector-stripe \
+          TURGON_TEST_FAKE_STRIPE=$PWD/connectors/stripe-fake/build/install/turgon-fake-stripe/bin/turgon-fake-stripe \
+            go test -race -count=1 -run TestSidecarWebhooksStartRuns -v ./pkg/engine/
       - name: Build the connector images
         run: |
           docker build -f connectors/Dockerfile --build-arg CONNECTOR=sap-ecc -t turgon-connector-sap-ecc:ci .
