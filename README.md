@@ -570,13 +570,14 @@ Errors are status codes:
   - **cancel-sales-order** is its compensation. It deletes the order through
     `BAPI_SALESORDER_CHANGE`, which SAP refuses once there is a delivery.
   - **get-customer** calls `BAPI_CUSTOMER_GETDETAIL2`.
-  - **Events** are the IDocs ECC sends (see below).
+  - **Events** are the IDocs ECC sends, or change pointers the connector polls (see below).
   - **Messages:** SAP's `RETURN` messages become the rejection's reason, such as
     `V1 462: Sold-to party 0000001002 is blocked for sales`.
 - `sap-ecc-fake` is an in-memory ECC for tests and demos. It follows SAP's rules where they matter:
   an order is kept only if committed in the same session, and a test run saves nothing. A saved
-  order is confirmed with an ORDRSP IDoc, which is sent again until accepted, as SM58 does. It is
-  never part of the production image.
+  order is confirmed with an ORDRSP IDoc, which is sent again until accepted, as SM58 does. Saved
+  and deleted orders and changed customers write change pointers. It is never part of the
+  production image.
 
 JCo is SAP's to license, so the connector calls it by reflection and the image does not carry it.
 Download SAP Java Connector 3.1 from the SAP Support Portal and mount `sapjco3.jar` and
@@ -653,6 +654,45 @@ an order saved in ECC becomes an order in the warehouse ERP database. Run it nex
 `salesforce-won-deals-to-ecc`, with both workers on the same sidecar. A won deal becomes an ECC
 order, and the fake ECC confirms it with an ORDRSP IDoc, which then reaches the ERP. Stop the
 second worker and the IDoc waits in the fake's SM58 queue until the worker is back.
+
+#### ECC events: change pointers, polled
+
+Where SAP cannot send IDocs to Turgon (no RFC destination, no partner profile), changes are polled
+from change pointers. SAP writes one per changed field of an object whose message type is active.
+Give Turgon its own message type, such as `ZTURGON_DEBMAS` as a copy of `DEBMAS`:
+- **BD50** activates it;
+- **BD52** names the fields of object class `DEBI` it tracks;
+- **BD61** switches change pointers on.
+
+Turgon never marks pointers processed, so distribution with BD21 is not disturbed. Clean old pointers
+up with BD22 as usual.
+
+```yaml
+config:
+  changePointers:
+    settleSeconds: 60       # how old a pointer must be before it is read
+    events:
+      Customer.Changed: { messageType: ZTURGON_DEBMAS, record: get-customer }
+```
+
+- **Reading:** pointers are read from `BDCP2` with `RFC_READ_TABLE`, and the cursor is the
+  pointer's number (`CPIDENT`). `RFC_READ_TABLE` does not sort and cuts at its row count. So a
+  read that comes back full is narrowed until a whole range fits, and only a range read in full
+  moves the cursor.
+- **Settling:** a pointer younger than `settleSeconds` waits, and so does every pointer after it.
+  A number drawn by a slower transaction that commits later is then not passed over.
+- **Events:** an event is one change document's pointers. `record` adds the object as
+  `get-customer` reads it, or `null` once it is deleted:
+
+```json
+{"messageType": "ZTURGON_DEBMAS", "objectClass": "DEBI", "objectId": "0000001000",
+ "changeNumber": "0000000042", "changedAt": "2026-10-29T12:00:00Z", "user": "JDOE",
+ "changes": [{"table": "KNA1", "key": "1000000001000", "field": "NAME1", "kind": "U"}],
+ "record": {"id": "0000001000", "name": "Ada Lovelace AG", "city": "Berlin", "country": "DE"}}
+```
+
+`turgon check` reads `BDCP2` once, which proves the RFC user's table authorization
+(`S_TABU_NAM`), and names any of its fields the release lacks.
 
 In the Helm chart, `connectors.sidecars` adds a connector's container to every worker and agent pod,
 with the socket volume and `TURGON_CONNECTORS`. With the operator, its Integrations get it too.
@@ -1975,7 +2015,7 @@ lists discovered (sampled), not its write targets. Debezium topics in Protobuf o
 a registry) are not read, only Avro and plain JSON. Managed subscriptions are tested against the fake org's Pub/Sub
 and Tooling APIs, not yet against a real org. The Camel/Java connectors are SAP ECC, Power BI, Shopify and Stripe. SAP ECC is
 tested against a fake ECC and a JCo stand-in, not yet against a real SAP system or gateway. It reads
-IDocs as SAP pushes them, but not change pointers. Power BI is tested against a fake Entra and push
+IDocs as SAP pushes them and polls change pointers through `RFC_READ_TABLE`. Power BI is tested against a fake Entra and push
 dataset API, not yet against a real tenant; it adds rows to existing push datasets but does not
 create them. Shopify is tested against a fake GraphQL Admin API, not yet against a real store, and its
 webhooks only with deliveries signed in the tests. The `stripe` connector is tested against a

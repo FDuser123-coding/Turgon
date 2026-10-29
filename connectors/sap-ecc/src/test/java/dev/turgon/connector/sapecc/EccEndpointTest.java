@@ -29,7 +29,7 @@ class EccEndpointTest {
     FakeEcc sap;
 
     static EndpointConfig config(String json, String secret) throws IOException {
-        return new EndpointConfig("sap-ecc", "sap-ecc", "0.4.0", JSON.readTree(json), secret, Map.of());
+        return new EndpointConfig("sap-ecc", "sap-ecc", "0.5.0", JSON.readTree(json), secret, Map.of());
     }
 
     @BeforeEach

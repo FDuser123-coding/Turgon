@@ -19,7 +19,10 @@ import java.util.concurrent.atomic.AtomicInteger;
  * cannot be deleted, and unknown parameters fail as in JCo. Saving an order
  * sends an order confirmation (ORDRSP, basic type ORDERS05) to the
  * registered server programs over "tRFC": a transaction they fail is sent
- * again every half second, as SAP's SM58 does.
+ * again every half second, as SAP's SM58 does. Changing a customer, and
+ * saving or deleting an order, writes change pointers (BDCP2) for the
+ * message types active for their object class, read with RFC_READ_TABLE,
+ * which returns rows in no particular order, as SAP's database may.
  *
  * <p>Customers 1000 (Ada Lovelace GmbH), 1001 (Hopper Labs) and 1002
  * (blocked); materials M-1, M-7, M-8 and M-9; sales area 1000/10/00.
@@ -28,7 +31,26 @@ public final class FakeEcc {
     private static final Map<String, FakeEcc> SYSTEMS = new ConcurrentHashMap<>();
     static final Set<String> FUNCTIONS = Set.of("RFC_PING", "BAPI_SALESORDER_CREATEFROMDAT2", "BAPI_SALESORDER_GETLIST",
             "BAPI_SALESORDER_GETSTATUS", "BAPI_SALESORDER_CHANGE", "BAPI_TRANSACTION_COMMIT", "BAPI_TRANSACTION_ROLLBACK",
-            "BAPI_CUSTOMER_GETDETAIL2", "IDOCTYPE_READ_COMPLETE", "RFC_GET_FUNCTION_INTERFACE", "DDIF_FIELDINFO_GET");
+            "BAPI_CUSTOMER_GETDETAIL2", "IDOCTYPE_READ_COMPLETE", "RFC_GET_FUNCTION_INTERFACE", "DDIF_FIELDINFO_GET", "RFC_READ_TABLE");
+
+    /** BDCP2's fields and their lengths as RFC_READ_TABLE gives them. */
+    static final Map<String, Integer> BDCP2 = new LinkedHashMap<>();
+
+    static {
+        for (Object[] f : new Object[][] {{"MESTYPE", 30}, {"CPIDENT", 20}, {"PROCESS", 1}, {"TABNAME", 30}, {"TABKEY", 70},
+                {"FLDNAME", 30}, {"CRETIME", 15}, {"ACTTIME", 15}, {"USRNAME", 12}, {"CDOBJCL", 15}, {"CDOBJID", 90},
+                {"CDCHGNO", 10}, {"CDCHGID", 1}}) {
+            BDCP2.put((String) f[0], (Integer) f[1]);
+        }
+    }
+
+    /** Message types with change pointers active (BD50), by object class (BD52). Tests change them. */
+    public final Map<String, String> activeMessageTypes = new ConcurrentHashMap<>(Map.of(
+            "ZTURGON_DEBMAS", "DEBI", "ZTURGON_ORDERS", "VERKBELEG"));
+    /** The change pointers, as rows of BDCP2. */
+    public final List<Map<String, String>> changePointers = java.util.Collections.synchronizedList(new ArrayList<>());
+    private final java.util.concurrent.atomic.AtomicLong cpidents = new java.util.concurrent.atomic.AtomicLong(100);
+    private final AtomicInteger changeNumbers = new AtomicInteger(1);
 
     /** Dictionary structures: field -> {type, length, text}. Tests change them to see drift. */
     public final Map<String, Map<String, Object[]>> structures = new ConcurrentHashMap<>();
@@ -219,6 +241,9 @@ public final class FakeEcc {
         structures.put("BAPISDH1X", structure("UPDATEFLAG", "CHAR", 1, "Update indicator"));
         structures.put("BAPICUSTOMER_04", structure("NAME", "CHAR", 35, "Name", "STREET", "CHAR", 35, "Street",
                 "POSTL_COD1", "CHAR", 10, "Postal code", "CITY", "CHAR", 35, "City", "COUNTRY", "CHAR", 3, "Country"));
+        Map<String, Object[]> bdcp2 = new LinkedHashMap<>();
+        BDCP2.forEach((f, len) -> bdcp2.put(f, new Object[] {"CHAR", len, f}));
+        structures.put("BDCP2", bdcp2);
     }
 
     /** The system behind a destination host, shared by every connection to it. */
@@ -247,6 +272,125 @@ public final class FakeEcc {
 
     static Map<String, String> msg(String type, String id, String number, String text) {
         return Map.of("TYPE", type, "ID", id, "NUMBER", number, "MESSAGE", text);
+    }
+
+    /** Changes a customer's name, as XD02 does, with its change document and pointers. */
+    public void changeCustomer(String number, String name, String user) {
+        Customer c = customers.get(number);
+        if (c == null) {
+            throw new IllegalArgumentException("no customer " + number);
+        }
+        customers.put(number, new Customer(name, c.street(), c.postalCode(), c.city(), c.country(), c.blocked()));
+        pointers("DEBI", number, "KNA1", "100" + number, user, "U", "NAME1");
+    }
+
+    /** Deletes a customer (archived, in a real system). */
+    public void deleteCustomer(String number, String user) {
+        customers.remove(number);
+        pointers("DEBI", number, "KNA1", "100" + number, user, "D", "KEY");
+    }
+
+    /** One change document: a pointer per field, for each message type active for the object class. */
+    void pointers(String objectClass, String objectId, String table, String key, String user, String kind, String... fields) {
+        String changeNumber = String.format("%010d", changeNumbers.getAndIncrement());
+        String now = java.time.format.DateTimeFormatter.ofPattern("yyyyMMddHHmmss").withZone(java.time.ZoneOffset.UTC)
+                .format(java.time.Instant.now());
+        for (var m : activeMessageTypes.entrySet()) {
+            if (!m.getValue().equals(objectClass)) {
+                continue;
+            }
+            for (String field : fields) {
+                Map<String, String> row = new LinkedHashMap<>();
+                row.put("MESTYPE", m.getKey());
+                row.put("CPIDENT", String.format("%020d", cpidents.getAndIncrement()));
+                row.put("PROCESS", "");
+                row.put("TABNAME", table);
+                row.put("TABKEY", key);
+                row.put("FLDNAME", field);
+                row.put("CRETIME", now);
+                row.put("ACTTIME", now);
+                row.put("USRNAME", user);
+                row.put("CDOBJCL", objectClass);
+                row.put("CDOBJID", objectId);
+                row.put("CDCHGNO", changeNumber);
+                row.put("CDCHGID", kind);
+                changePointers.add(row);
+            }
+        }
+    }
+
+    /** RFC_READ_TABLE on BDCP2: conditions joined by AND, in no particular order (newest first), cut at ROWCOUNT. */
+    private void readTable(Map<String, Object> p, Map<String, Object> out) {
+        allow("RFC_READ_TABLE", p, "QUERY_TABLE", "DELIMITER", "NO_DATA", "ROWSKIPS", "ROWCOUNT", "OPTIONS", "FIELDS");
+        if (!"BDCP2".equals(get(p, "QUERY_TABLE", ""))) {
+            throw new IllegalStateException("ABAP exception TABLE_NOT_AVAILABLE");
+        }
+        StringBuilder where = new StringBuilder();
+        for (Map<String, String> o : FakeEcc.<List<Map<String, String>>>get(p, "OPTIONS", List.of())) {
+            where.append(o.get("TEXT")).append(' ');
+        }
+        List<String[]> conds = new ArrayList<>();
+        for (String c : where.toString().trim().split("(?i)\\s+AND\\s+")) {
+            if (c.isBlank()) {
+                continue;
+            }
+            var m = java.util.regex.Pattern.compile("(\\w+)\\s*(<=|>=|=|<|>)\\s*'([^']*)'").matcher(c.trim());
+            if (!m.matches() || !BDCP2.containsKey(m.group(1))) {
+                throw new IllegalStateException("ABAP exception OPTION_NOT_VALID");
+            }
+            conds.add(new String[] {m.group(1), m.group(2), m.group(3)});
+        }
+        List<String> names = new ArrayList<>();
+        for (Map<String, String> f : FakeEcc.<List<Map<String, String>>>get(p, "FIELDS", List.of())) {
+            names.add(f.get("FIELDNAME"));
+        }
+        if (names.isEmpty()) {
+            names.addAll(BDCP2.keySet());
+        }
+        List<Map<String, String>> fields = new ArrayList<>();
+        int offset = 0;
+        for (String n : names) {
+            Integer len = BDCP2.get(n);
+            if (len == null) {
+                throw new IllegalStateException("ABAP exception FIELD_NOT_VALID");
+            }
+            fields.add(Map.of("FIELDNAME", n, "OFFSET", String.format("%06d", offset), "LENGTH", String.format("%06d", len), "TYPE", "C"));
+            offset += len;
+        }
+        if (offset > 512) {
+            throw new IllegalStateException("ABAP exception DATA_BUFFER_EXCEEDED");
+        }
+        int max = Integer.parseInt(get(p, "ROWCOUNT", "0").trim());
+        List<Map<String, String>> rows;
+        synchronized (changePointers) {
+            rows = new ArrayList<>(changePointers);
+        }
+        java.util.Collections.reverse(rows);
+        List<Map<String, String>> data = new ArrayList<>();
+        for (Map<String, String> row : rows) {
+            if (!conds.stream().allMatch(c -> {
+                int cmp = row.get(c[0]).compareTo(c[2]);
+                return switch (c[1]) {
+                    case "=" -> cmp == 0;
+                    case ">" -> cmp > 0;
+                    case ">=" -> cmp >= 0;
+                    case "<" -> cmp < 0;
+                    default -> cmp <= 0;
+                };
+            })) {
+                continue;
+            }
+            if (max > 0 && data.size() == max) {
+                break;
+            }
+            StringBuilder wa = new StringBuilder();
+            for (String n : names) {
+                wa.append(String.format("%-" + BDCP2.get(n) + "s", row.get(n)));
+            }
+            data.add(Map.of("WA", wa.toString().stripTrailing()));
+        }
+        out.put("FIELDS", fields);
+        out.put("DATA", data);
     }
 
     /** A connection as the given user ("locked" fails to log on). */
@@ -387,7 +531,10 @@ public final class FakeEcc {
                 } else if (o.delivered()) {
                     ret.add(msg("E", "V1", "084", "Sales document " + doc + " cannot be deleted: subsequent documents exist"));
                 } else {
-                    luw.add(() -> orders.remove(doc));
+                    luw.add(() -> {
+                        orders.remove(doc);
+                        pointers("VERKBELEG", doc, "VBAK", "100" + doc, "RFC_TURGON", "D", "KEY");
+                    });
                     ret.add(msg("S", "V1", "041", "Standard Order " + doc + " has been deleted"));
                 }
                 out.put("RETURN", ret);
@@ -404,6 +551,7 @@ public final class FakeEcc {
                             "CITY", c.city(), "COUNTRY", c.country()));
                 }
             }
+            case "RFC_READ_TABLE" -> readTable(p, out);
             case "RFC_GET_FUNCTION_INTERFACE" -> {
                 allow(function, p, "FUNCNAME", "LANGUAGE", "NONE_UNICODE_LENGTH");
                 List<String[]> params = INTERFACES.get(get(p, "FUNCNAME", ""));
@@ -494,6 +642,7 @@ public final class FakeEcc {
         Order o = new Order(number, soldTo, h.get("SALES_ORG"), h.getOrDefault("PURCH_NO_C", ""), date, List.copyOf(items), false);
         luw.add(() -> {
             orders.put(number, o);
+            pointers("VERKBELEG", number, "VBAK", "100" + number, "RFC_TURGON", "I", "KEY");
             confirmOrder(o);
         });
         ret.add(msg("S", "V1", "311", "Standard Order " + number + " has been saved"));

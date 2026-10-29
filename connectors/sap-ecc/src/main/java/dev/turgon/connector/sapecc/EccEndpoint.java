@@ -32,6 +32,9 @@ import org.apache.camel.builder.RouteBuilder;
  *       UPDATEFLAG D); SAP refuses once it has follow-on documents.
  *   <li>get-customer: BAPI_CUSTOMER_GETDETAIL2.
  * </ul>
+ *
+ * Events come from IDocs SAP sends ({@link Idocs}, streamed) or from change
+ * pointers ({@link ChangePointers}, polled).
  */
 final class EccEndpoint extends CamelEndpoint {
     static final List<String> FUNCTIONS = List.of("BAPI_SALESORDER_CREATEFROMDAT2", "BAPI_SALESORDER_GETLIST",
@@ -42,6 +45,7 @@ final class EccEndpoint extends CamelEndpoint {
     private final EccConfig cfg;
     private final Rfc rfc;
     private final Idocs idocs;
+    private final ChangePointers pointers;
     private final IdocServerStarter starter;
     private AutoCloseable server; // the registered server program, while a stream is open
 
@@ -57,6 +61,12 @@ final class EccEndpoint extends CamelEndpoint {
         this.rfc = rfc;
         this.starter = starter;
         this.idocs = new Idocs(rfc, cfg.idocEvents());
+        this.pointers = new ChangePointers(rfc, cfg.changePointers(), java.time.Instant::now);
+    }
+
+    @Override
+    public List<dev.turgon.connector.sdk.Event> poll(String event, long after, int limit) throws Exception {
+        return pointers.poll(event, after, limit, this::read);
     }
 
     /** The structure fields each operation fills or reads, for the metadata graph. */
@@ -251,6 +261,9 @@ final class EccEndpoint extends CamelEndpoint {
         }
         out.add(CheckResult.pass("sales area", cfg.salesOrg() + "/" + cfg.distributionChannel() + "/" + cfg.division()
                 + ", order type " + cfg.orderType()));
+        if (!cfg.changePointers().events().isEmpty()) {
+            out.addAll(checkChangePointers());
+        }
         if (!cfg.idocEvents().isEmpty()) {
             String program = cfg.server().get("jco.server.progid") + " at " + cfg.server().get("jco.server.gwhost") + " "
                     + cfg.server().get("jco.server.gwserv");
@@ -267,6 +280,36 @@ final class EccEndpoint extends CamelEndpoint {
             }
         }
         return out;
+    }
+
+    /** RFC_READ_TABLE may read BDCP2, which has the fields the connector reads. */
+    private List<CheckResult> checkChangePointers() {
+        String events = String.join(", ", cfg.changePointers().events().keySet());
+        String fix = "Grant the RFC user S_RFC for function group SDTX (RFC_READ_TABLE) and S_TABU_NAM for table BDCP2.";
+        try {
+            if (!rfc.exists("RFC_READ_TABLE")) {
+                return List.of(CheckResult.fail("RFC_READ_TABLE", "not found", fix));
+            }
+            Map<String, Object> r = rfc.call("DDIF_FIELDINFO_GET", Map.of("TABNAME", ChangePointers.TABLE));
+            java.util.Set<String> have = new java.util.HashSet<>();
+            Rfc.table(r, "DFIES_TAB").forEach(f -> have.add(f.getOrDefault("FIELDNAME", "").trim()));
+            List<String> missing = ChangePointers.FIELDS.stream().filter(f -> !have.contains(f)).toList();
+            if (!missing.isEmpty()) {
+                return List.of(CheckResult.fail("change pointers", "table BDCP2 lacks " + String.join(", ", missing),
+                        "Change pointers are in BDCP2 from release 7.0 (BDCPV before): the connector needs ECC 6.0."));
+            }
+            List<CheckResult> out = new ArrayList<>();
+            for (var e : cfg.changePointers().events().entrySet()) {
+                // A one-row read proves the table authorization, which S_RFC alone does not.
+                ChangePointers probe = new ChangePointers(rfc, new EccConfig.ChangePointerConfig(1, 0, Map.of()), java.time.Instant::now);
+                probe.complete(e.getValue().messageType(), Long.MAX_VALUE / 2);
+                out.add(CheckResult.pass("change pointers", e.getKey() + " from message type " + e.getValue().messageType()
+                        + " (activate it in BD61 and BD50, its fields in BD52)"));
+            }
+            return out;
+        } catch (Exception e) {
+            return List.of(CheckResult.fail("change pointers", events + ": " + e.getClass().getSimpleName() + ": " + e.getMessage(), fix));
+        }
     }
 
     @Override

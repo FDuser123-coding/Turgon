@@ -15,11 +15,12 @@ import java.util.Set;
  * SAP ECC 6.0 through BAPIs over RFC (examples/connectors/sap-ecc.yaml):
  * create-sales-order (test run first), cancel-sales-order (its
  * compensation) and get-customer; and events from the IDocs SAP sends to
- * a registered server program (idoc-outbound).
+ * a registered server program (idoc-outbound), or polled from change
+ * pointers (change-pointers).
  */
 public final class SapEccConnector implements Connector {
     public static final String NAME = "sap-ecc";
-    public static final String VERSION = "0.4.0";
+    public static final String VERSION = "0.5.0";
 
     @Override
     public String name() {
@@ -33,7 +34,8 @@ public final class SapEccConnector implements Connector {
 
     @Override
     public Set<Capability> capabilities() {
-        return EnumSet.of(Capability.SIMULATE, Capability.CONFIRM, Capability.READ, Capability.CHECK, Capability.STREAM, Capability.DISCOVER);
+        return EnumSet.of(Capability.SIMULATE, Capability.CONFIRM, Capability.READ, Capability.CHECK, Capability.STREAM, Capability.DISCOVER,
+                Capability.POLL);
     }
 
     /** The RFC providers on the class path. */

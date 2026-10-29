@@ -7,14 +7,17 @@
 # Events are the IDocs ECC sends: the order confirmation (ORDRSP, output
 # BA00) of each saved order goes over tRFC to the server program
 # TURGON_IDOC, through an RFC destination of type T in ECC (SM59) and a
-# partner profile for logical system TURGON (WE20).
+# partner profile for logical system TURGON (WE20). Changed customers are
+# polled from change pointers of Turgon's own message type ZTURGON_DEBMAS
+# (a copy of DEBMAS: BD50 activates it, BD52 names the fields of object
+# class DEBI it tracks), so other distribution (BD21) is not disturbed.
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
 metadata:
   name: ecc-prod
   description: "SAP ECC 6.0, sales orders through BAPIs over RFC."
 spec:
-  connector: sap-ecc@^0.4
+  connector: sap-ecc@^0.5
   secretRef: openbao://sap/ecc/prod
   entities: [SalesOrder, Customer]
   limits: { maxConcurrentCalls: 4, requestsPerSecond: 10 }
@@ -27,3 +30,6 @@ spec:
       server: { gwhost: ecc.acme.internal, gwserv: sapgw00, progid: TURGON_IDOC, connectionCount: 2 }
       events:
         SalesOrder.Created: { messageTypes: [ORDRSP], idocTypes: [ORDERS05] }
+    changePointers:
+      events:
+        Customer.Changed: { messageType: ZTURGON_DEBMAS, record: get-customer }
