@@ -509,26 +509,27 @@ var positionFields = map[string][]string{
 	"mongodb":    {"ord", "lsid", "txnNumber"},
 }
 
-// decode reads a change's envelope, and its key as canonical JSON: Avro
-// in the Confluent wire format with a schema registry, JSON otherwise. An
-// Avro key gives the same JSON as the JSON converter's, so a change keeps
-// its ID if the converter changes.
+// decode reads a change's envelope, and its key as canonical JSON: in the
+// Confluent wire format (Avro, JSON Schema or Protobuf) with a schema
+// registry, JSON otherwise. A key read with its schema gives the same JSON
+// as the JSON converter's, so a change keeps its ID if the converter
+// changes.
 func (c *Conn) decode(ctx context.Context, key, value []byte) (envelope, []byte, error) {
-	if _, _, avro := wireFormat(value); avro {
+	if _, _, framed := wireFormat(value); framed {
 		if c.reg == nil {
-			return envelope{}, nil, errors.New("this change is Avro in the Confluent wire format: set the connection's schemaRegistry")
+			return envelope{}, nil, errors.New("this change is in the Confluent wire format (Avro, JSON Schema or Protobuf): set the connection's schemaRegistry")
 		}
-		_, m, err := c.reg.decodeAvro(ctx, value)
+		_, m, err := c.reg.decodeRecord(ctx, value)
 		if err != nil {
 			return envelope{}, nil, err
 		}
-		env, err := avroEnvelope(m)
+		env, err := recordEnvelope(m)
 		if err != nil {
 			return envelope{}, nil, err
 		}
 		canon := canonicalKey(key)
-		if _, _, avroKey := wireFormat(key); avroKey {
-			_, km, err := c.reg.decodeAvro(ctx, key)
+		if _, _, framedKey := wireFormat(key); framedKey {
+			_, km, err := c.reg.decodeRecord(ctx, key)
 			if err != nil {
 				return envelope{}, nil, fmt.Errorf("key: %w", err)
 			}

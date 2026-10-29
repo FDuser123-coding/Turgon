@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/iskorotkov/avro/v2"
 	"github.com/twmb/franz-go/pkg/kadm"
 	"github.com/twmb/franz-go/pkg/kerr"
 	"github.com/twmb/franz-go/pkg/kgo"
@@ -142,23 +141,21 @@ func (c *Conn) describe(ctx context.Context, topic string, recs []*kgo.Record) (
 	for _, f := range keySchema(recs[0].Key) {
 		keys[f] = true
 	}
-	if _, _, isAvro := wireFormat(recs[0].Value); isAvro && c.reg != nil {
-		if _, _, avroKey := wireFormat(recs[0].Key); avroKey {
-			if ks, _, err := c.reg.decodeAvro(ctx, recs[0].Key); err == nil {
-				if kr, ok := ks.(*avro.RecordSchema); ok {
-					for _, f := range kr.Fields() {
-						keys[f.Name()] = true
-					}
+	if _, _, framed := wireFormat(recs[0].Value); framed && c.reg != nil {
+		if _, _, framedKey := wireFormat(recs[0].Key); framedKey {
+			if kd, _, err := c.reg.decodeRecord(ctx, recs[0].Key); err == nil {
+				for _, f := range kd.fields() {
+					keys[f] = true
 				}
 			}
 		}
-		s, _, err := c.reg.decodeAvro(ctx, recs[0].Value)
+		d, _, err := c.reg.decodeRecord(ctx, recs[0].Value)
 		if err != nil {
 			return o, err
 		}
-		cols, ok := avroColumns(s, keys)
+		cols, ok := d.columns(keys)
 		if !ok {
-			return o, errors.New("the Avro schema has no before or after row")
+			return o, errors.New("the change's schema has no before or after row")
 		}
 		for _, col := range cols {
 			o.Fields = append(o.Fields, column(col.f, col.key))

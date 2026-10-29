@@ -259,18 +259,28 @@ spec:
 
   Tombstones are skipped. A flattened event (the `ExtractNewRecordState` transform) is refused
   with an explanation, because Turgon needs the envelope.
-- **Avro with a schema registry.** When Debezium writes Avro, set the connection's
-  `schemaRegistry`. The converter is Confluent's `AvroConverter`, or Apicurio's with
+- **Avro, JSON Schema or Protobuf with a schema registry.** When Debezium writes in the
+  Confluent wire format, set the connection's `schemaRegistry`. The converter is Confluent's
+  `AvroConverter`, `JsonSchemaConverter` or `ProtobufConverter`, or Apicurio's with
   `apicurio.registry.as-confluent=true`, `headers.enabled=false` and `use-id=contentId`. The
   registry URL is a Confluent-compatible API: Confluent Schema Registry, Apicurio's
   `/apis/ccompat/v7`, Karapace or Redpanda.
-  - Each record's schema is fetched once by its ID and kept.
+  - Each record's schema is fetched once by its ID and kept, by its type (`schemaType`). So are
+    the schemas a Protobuf schema imports (its references, such as `confluent/type/decimal.proto`).
+  - **Protobuf:** the record's message indexes pick the message. Connect's logical types come as
+    `confluent.type.Decimal`, `google.type.Date`, `google.type.TimeOfDay` and
+    `google.protobuf.Timestamp`, so set `time.precision.mode=connect` for dates and times. With
+    Debezium's own time types they arrive as numbers, unless the converter kept their name in
+    `confluent.field_meta`. Wrappers (`wrapper.for.nullables`) are read as their values.
   - Values are decoded into the same JSON as the JSON converter gives, keys too. So switching
     converters changes neither the payloads nor the change IDs, and the inbox still drops replays.
-  - Discovery reads the columns from the Avro schema, named as Connect names them.
+  - Discovery reads the columns from the record's schema, named as Connect names them. Protobuf
+    cannot say whether a message-typed column is required: only `optional` and wrappers make a
+    column optional.
   - A registry that needs credentials (Confluent Cloud's API key) takes `auth: basic`, with
     `{"registry": {"username": ..., "password": ...}}` in the connection's secret.
-  - An Avro record on a connection without a registry is refused with that explanation.
+  - A record in the wire format on a connection without a registry is refused with that
+    explanation.
 
   ```yaml
   config:
@@ -2011,8 +2021,9 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 ## Not built yet
 
 In rough roadmap order (§16, §19): a REST API without an OpenAPI description has only its events'
-lists discovered (sampled), not its write targets. Debezium topics in Protobuf or JSON Schema (with
-a registry) are not read, only Avro and plain JSON. Managed subscriptions are tested against the fake org's Pub/Sub
+lists discovered (sampled), not its write targets. Debezium topics in JSON Schema and Protobuf are
+tested with records built as Confluent's converters build them, not yet against Kafka Connect itself
+(Avro was). Managed subscriptions are tested against the fake org's Pub/Sub
 and Tooling APIs, not yet against a real org. The Camel/Java connectors are SAP ECC, Power BI, Shopify and Stripe. SAP ECC is
 tested against a fake ECC and a JCo stand-in, not yet against a real SAP system or gateway. It reads
 IDocs as SAP pushes them and polls change pointers through `RFC_READ_TABLE`. Power BI is tested against a fake Entra and push

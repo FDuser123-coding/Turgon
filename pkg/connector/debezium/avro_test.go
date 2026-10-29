@@ -175,17 +175,17 @@ func TestAvroWithoutARegistryIsExplained(t *testing.T) {
 func TestRegistryAuthAndErrors(t *testing.T) {
 	reg := newRegistryServer(t, "key", "secret", map[int]string{1: orderKeySchema, 3: `{"type": "record", "name": "X", "fields": []}`})
 	r := newRegistry(&Registry{URL: reg.URL, Auth: "basic"}, "key", "secret")
-	if _, err := r.schema(context.Background(), 1); err != nil {
+	if _, err := r.decoder(context.Background(), 1); err != nil {
 		t.Fatal(err)
 	}
 	if n, err := r.subjects(context.Background()); err != nil || n != 2 {
 		t.Fatalf("subjects: %d %v", n, err)
 	}
-	if _, err := r.schema(context.Background(), 9); err == nil || !strings.Contains(err.Error(), "404") {
+	if _, err := r.decoder(context.Background(), 9); err == nil || !strings.Contains(err.Error(), "404") {
 		t.Fatalf("missing schema: %v", err)
 	}
 	wrong := newRegistry(&Registry{URL: reg.URL, Auth: "basic"}, "key", "nope")
-	if _, err := wrong.schema(context.Background(), 1); err == nil || !strings.Contains(err.Error(), "401") {
+	if _, err := wrong.decoder(context.Background(), 1); err == nil || !strings.Contains(err.Error(), "401") {
 		t.Fatalf("bad credentials: %v", err)
 	}
 	conn, _ := setup(t, Event{})
