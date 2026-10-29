@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -51,8 +52,9 @@ func TestJavaSidecar(t *testing.T) {
 	pool := NewPool()
 	defer pool.Close()
 	ctx := context.Background()
-	cfg := compiler.ConnectorConfig{Endpoint: "sap-ecc", Name: "sap-ecc", Version: "0.4.0", Runtime: "camel-java",
-		SecretRef: "openbao://sap/ecc/prod", Config: json.RawMessage(`{"rfc":{"provider":"fake","destination":{"ashost":"ecc-it"}}}`)}
+	cfg := compiler.ConnectorConfig{Endpoint: "sap-ecc", Name: "sap-ecc", Version: "0.5.0", Runtime: "camel-java",
+		SecretRef: "openbao://sap/ecc/prod", Config: json.RawMessage(`{"rfc":{"provider":"fake","destination":{"ashost":"ecc-it"}},
+			"changePointers":{"settleSeconds":0,"events":{"SalesOrder.Changed":{"messageType":"ZTURGON_ORDERS"}}}}`)}
 	inst, err := pool.Factory(Address{Target: "unix://" + sock, Token: "tok"})(ctx, cfg, connector.StaticSecrets{"openbao://sap/ecc/prod": "TURGON:pw"})
 	if err != nil {
 		t.Fatal(err)
@@ -65,7 +67,7 @@ func TestJavaSidecar(t *testing.T) {
 			t.Fatalf("check %+v", c)
 		}
 	}
-	if !strings.Contains(checks[0].Detail, "sap-ecc 0.4.0") || !strings.Contains(checks[1].Detail, "fake ECC") {
+	if !strings.Contains(checks[0].Detail, "sap-ecc 0.5.0") || !strings.Contains(checks[1].Detail, "fake ECC") {
 		t.Fatalf("checks %+v", checks)
 	}
 
@@ -97,8 +99,18 @@ func TestJavaSidecar(t *testing.T) {
 	if _, err := inst.(writeguard.Reader).Read(ctx, "get-customer", "4711"); !errors.Is(err, writeguard.ErrNotFound) {
 		t.Fatalf("read missing: %v", err)
 	}
-	if _, ok := inst.(connector.Source); ok {
-		t.Fatal("sap-ecc does not poll yet")
+	// The saved order wrote a change pointer (BDCP2), polled as an event.
+	src, ok := inst.(connector.Source)
+	if !ok {
+		t.Fatal("sap-ecc does not poll")
+	}
+	evs, err := src.Poll(ctx, "SalesOrder.Changed", 0, 10)
+	if err != nil || len(evs) != 1 || !strings.Contains(string(evs[0].Payload), `"objectId":"0000012000"`) ||
+		!strings.Contains(string(evs[0].Payload), `"kind":"I"`) || evs[0].ID != fmt.Sprintf("BDCP2:ZTURGON_ORDERS:%d", evs[0].Position) {
+		t.Fatalf("change pointers %+v %v", evs, err)
+	}
+	if more, err := src.Poll(ctx, "SalesOrder.Changed", evs[0].Position, 10); err != nil || len(more) != 0 {
+		t.Fatalf("after the cursor %+v %v", more, err)
 	}
 
 	// The sidecar restarts (and its fake ECC forgets everything): the
@@ -133,7 +145,7 @@ func TestJavaSidecarStream(t *testing.T) {
 	pool := NewPool()
 	defer pool.Close()
 	ctx := context.Background()
-	cfg := compiler.ConnectorConfig{Endpoint: "sap-ecc", Name: "sap-ecc", Version: "0.4.0", Runtime: "camel-java", SecretRef: "s",
+	cfg := compiler.ConnectorConfig{Endpoint: "sap-ecc", Name: "sap-ecc", Version: "0.5.0", Runtime: "camel-java", SecretRef: "s",
 		Config: json.RawMessage(`{"rfc":{"provider":"fake","destination":{"ashost":"ecc-stream"}},
 			"idoc":{"server":{"gwhost":"ecc-stream","gwserv":"sapgw00","progid":"TURGON_IDOC"},
 			        "events":{"SalesOrder.Created":{"messageTypes":["ORDRSP"]}}}}`)}
@@ -206,7 +218,7 @@ func TestJavaSidecarDiscover(t *testing.T) {
 	pool := NewPool()
 	defer pool.Close()
 	ctx := context.Background()
-	cfg := compiler.ConnectorConfig{Endpoint: "sap-ecc", Name: "sap-ecc", Version: "0.4.0", Runtime: "camel-java", SecretRef: "s",
+	cfg := compiler.ConnectorConfig{Endpoint: "sap-ecc", Name: "sap-ecc", Version: "0.5.0", Runtime: "camel-java", SecretRef: "s",
 		Config: json.RawMessage(`{"rfc":{"provider":"fake","destination":{"ashost":"ecc-discover"}}}`)}
 	inst, err := pool.Factory(Address{Target: "unix://" + sock, Token: "tok"})(ctx, cfg, connector.StaticSecrets{"s": "TURGON:pw"})
 	if err != nil {
@@ -221,7 +233,7 @@ func TestJavaSidecarDiscover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cat.Connector != "sap-ecc" || cat.Endpoint != "sap-ecc" || cat.Version != "0.4.0" {
+	if cat.Connector != "sap-ecc" || cat.Endpoint != "sap-ecc" || cat.Version != "0.5.0" {
 		t.Fatalf("catalog %s/%s %s", cat.Endpoint, cat.Connector, cat.Version)
 	}
 	hd, ok := cat.Object("BAPISDHD1")

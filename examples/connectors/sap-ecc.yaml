@@ -4,7 +4,7 @@ apiVersion: turgon.dev/v1alpha1
 kind: ConnectorManifest
 metadata:
   name: sap-ecc
-  version: 0.4.0
+  version: 0.5.0
 spec:
   system: "SAP ECC 6.0, EHP 6-8"
   runtime: camel-java
@@ -36,6 +36,12 @@ spec:
     - name: SalesOrder.Created
       entity: SalesOrder
       interface: idoc-outbound
+    - name: SalesOrder.Changed
+      entity: SalesOrder
+      interface: change-pointers
+    - name: Customer.Changed
+      entity: Customer
+      interface: change-pointers
   operations:
     - name: get-customer
       entity: Customer

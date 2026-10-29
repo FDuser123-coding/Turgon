@@ -8,7 +8,7 @@ spec:
   model: ossie://turgon/distribution@1
   slots:
     crm:       { plugin: salesforce,     version: "^3",   connection: salesforce-prod }
-    erp:       { plugin: sap-ecc,        version: "^0.4", connection: ecc-prod }
+    erp:       { plugin: sap-ecc,        version: "^0.5", connection: ecc-prod }
     commerce:  { plugin: shopify,        version: "^2",   connection: shopify-admin }
     billing:   { plugin: stripe,         version: "^1",   connection: stripe-invoicing }
     analytics: { plugin: powerbi-export, version: "^1",   connection: powerbi-sales }

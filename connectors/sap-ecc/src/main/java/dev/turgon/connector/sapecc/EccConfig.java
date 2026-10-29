@@ -28,6 +28,11 @@ import java.util.TreeMap;
  *   server: { gwhost: ecc.example.com, gwserv: sapgw00, progid: TURGON_IDOC, connectionCount: 2 }
  *   events:
  *     SalesOrder.Created: { messageTypes: [ORDRSP], idocTypes: [ORDERS05] }
+ * changePointers:                # events: change pointers (BDCP2), polled
+ *   pageRows: 1000               # rows per RFC_READ_TABLE call
+ *   settleSeconds: 60            # how long a pointer waits before it is read
+ *   events:
+ *     Customer.Changed: { messageType: ZTURGON_DEBMAS, record: get-customer }
  * </pre>
  *
  * The secret is the RFC user: {@code user:password}, or a JSON object of
@@ -36,7 +41,15 @@ import java.util.TreeMap;
  */
 public record EccConfig(String provider, Map<String, String> destination, String salesOrg, String distributionChannel,
         String division, String orderType, String partnerRole, boolean lookupByPurchaseOrder, int peakLimit,
-        Map<String, String> server, Map<String, IdocEvent> idocEvents) {
+        Map<String, String> server, Map<String, IdocEvent> idocEvents, ChangePointerConfig changePointers) {
+
+    /** Polled change pointer events: each names its message type, and optionally a read that fills "record". */
+    public record ChangePointerConfig(int pageRows, long settleSeconds, Map<String, ChangePointerEvent> events) {}
+
+    public record ChangePointerEvent(String messageType, String record) {}
+
+    /** The read operations an event's record may come from. */
+    static final java.util.Set<String> RECORD_READS = java.util.Set.of("get-customer");
 
     /** Which IDocs make an event: their message types, and optionally their basic types. */
     public record IdocEvent(java.util.Set<String> messageTypes, java.util.Set<String> idocTypes) {
@@ -98,10 +111,35 @@ public record EccConfig(String provider, Map<String, String> destination, String
             }
             server.putIfAbsent("jco.server.connection_count", "2");
         }
+        JsonNode cp = c.path("changePointers");
+        Map<String, ChangePointerEvent> cpEvents = new TreeMap<>();
+        for (var ev : cp.path("events").properties()) {
+            String mt = ev.getValue().path("messageType").asText("").trim().toUpperCase();
+            if (!mt.matches("[A-Z0-9_/]{1,30}")) {
+                throw new ConnectorException.Invalid("changePointers.events." + ev.getKey() + ".messageType must be an SAP message type (BD50)");
+            }
+            if (events.containsKey(ev.getKey())) {
+                throw new ConnectorException.Invalid("event " + ev.getKey() + " is configured both under idoc.events and changePointers.events");
+            }
+            String record = ev.getValue().path("record").asText("");
+            if (!record.isEmpty() && !RECORD_READS.contains(record)) {
+                throw new ConnectorException.Invalid("changePointers.events." + ev.getKey() + ".record must be one of " + RECORD_READS);
+            }
+            cpEvents.put(ev.getKey(), new ChangePointerEvent(mt, record));
+        }
+        int pageRows = cp.path("pageRows").asInt(1000);
+        if (pageRows < 1 || pageRows > 10000) {
+            throw new ConnectorException.Invalid("changePointers.pageRows must be between 1 and 10000");
+        }
+        long settle = cp.path("settleSeconds").asLong(60);
+        if (settle < 0 || settle > 3600) {
+            throw new ConnectorException.Invalid("changePointers.settleSeconds must be between 0 and 3600");
+        }
         return new EccConfig(c.path("rfc").path("provider").asText(""), new LinkedHashMap<>(dest),
                 area.path("salesOrg").asText("1000"), area.path("distributionChannel").asText("10"),
                 area.path("division").asText("00"), c.path("orderType").asText("TA"), c.path("partnerRole").asText("AG"),
-                c.path("lookupByPurchaseOrder").asBoolean(true), peak, server, events);
+                c.path("lookupByPurchaseOrder").asBoolean(true), peak, server, events,
+                new ChangePointerConfig(pageRows, settle, cpEvents));
     }
 
     /** "ashost" -> "jco.client.ashost"; full property names pass through. */

@@ -12,7 +12,7 @@ spec:
     event: Opportunity.ClosedWon
   connectors:
     salesforce: "^3"
-    sap-ecc: "^0.4"
+    sap-ecc: "^0.5"
   steps:
     - map:
         from: salesforce.Opportunity
