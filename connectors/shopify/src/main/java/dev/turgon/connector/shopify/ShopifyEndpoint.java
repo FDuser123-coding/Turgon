@@ -104,6 +104,59 @@ final class ShopifyEndpoint implements Endpoint {
     }
 
     @Override
+    public Set<String> webhooks() {
+        return cfg.webhookSecret() == null ? Set.of() : Set.of(EVENT);
+    }
+
+    @Override
+    public java.util.Map<String, String> webhookErrors() {
+        return cfg.webhookError() == null ? java.util.Map.of() : java.util.Map.of(EVENT, cfg.webhookError());
+    }
+
+    /**
+     * An orders/create webhook: Shopify signs the body with the app's
+     * client secret (X-Shopify-Hmac-Sha256, base64 HMAC-SHA256). Its body is
+     * the order in the REST shape the poll gives too, and its event ID the
+     * order's GID, so an order that arrives both ways runs once.
+     */
+    @Override
+    public List<Event> receive(String event, java.util.Map<String, List<String>> headers, byte[] body, java.time.Instant received) throws Exception {
+        if (!event.equals(EVENT) || cfg.webhookSecret() == null) {
+            throw new ConnectorException.Invalid("the connector receives " + EVENT + " by webhook only when webhook.secretRef is set");
+        }
+        String sig = first(headers, "X-Shopify-Hmac-Sha256");
+        if (sig.isEmpty()) {
+            throw new ConnectorException.Unauthenticated("the delivery has no X-Shopify-Hmac-Sha256 signature");
+        }
+        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+        mac.init(new javax.crypto.spec.SecretKeySpec(cfg.webhookSecret(), "HmacSHA256"));
+        byte[] want = mac.doFinal(body), got;
+        try {
+            got = java.util.Base64.getDecoder().decode(sig.trim());
+        } catch (IllegalArgumentException x) {
+            throw new ConnectorException.Unauthenticated("the X-Shopify-Hmac-Sha256 signature is not base64");
+        }
+        if (!java.security.MessageDigest.isEqual(want, got)) {
+            throw new ConnectorException.Unauthenticated("the X-Shopify-Hmac-Sha256 signature does not match: check webhook.secretRef holds the app's client secret");
+        }
+        String topic = first(headers, "X-Shopify-Topic"), domain = first(headers, "X-Shopify-Shop-Domain");
+        if (!topic.equals("orders/create") || (!domain.isEmpty() && !domain.equalsIgnoreCase(cfg.shop()))) {
+            return List.of(); // authentic, but not this event or not this store
+        }
+        JsonNode order = JSON.readTree(body);
+        String id = order.path("admin_graphql_api_id").asText("");
+        if (id.isEmpty()) {
+            id = gid("Order", order.path("id").asText(""));
+        }
+        return List.of(new Event(id, 0, EVENT, order));
+    }
+
+    private static String first(java.util.Map<String, List<String>> headers, String name) {
+        List<String> v = headers.get(name);
+        return v == null || v.isEmpty() ? "" : v.get(0);
+    }
+
+    @Override
     public JsonNode read(String operation, String id) throws Exception {
         switch (operation) {
             case "get-order" -> {

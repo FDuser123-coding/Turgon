@@ -19,6 +19,8 @@ import dev.turgon.connector.v1.PollResponse;
 import dev.turgon.connector.v1.Protocol;
 import dev.turgon.connector.v1.ReadRequest;
 import dev.turgon.connector.v1.ReadResponse;
+import dev.turgon.connector.v1.ReceiveRequest;
+import dev.turgon.connector.v1.ReceiveResponse;
 import dev.turgon.connector.v1.ReleaseResponse;
 import dev.turgon.connector.v1.WriteRequest;
 import dev.turgon.connector.v1.WriteResponse;
@@ -90,6 +92,7 @@ public final class ConnectorService extends ConnectorGrpc.ConnectorImplBase {
             case ConnectorException.Rejected x -> Status.FAILED_PRECONDITION;
             case ConnectorException.NotFound x -> Status.NOT_FOUND;
             case ConnectorException.Unsupported x -> Status.UNIMPLEMENTED;
+            case ConnectorException.Unauthenticated x -> Status.PERMISSION_DENIED;
             default -> {
                 if (e instanceof java.io.IOException) {
                     // The network or the system (throttled, down): expected, and retried by the worker.
@@ -156,7 +159,8 @@ public final class ConnectorService extends ConnectorGrpc.ConnectorImplBase {
                 close(old);
             }
             LOG.info(() -> "configured " + cfg.endpoint() + " as " + req.getInstance());
-            return ConfigureResponse.newBuilder().addAllStreamedEvents(e.streams().stream().sorted().toList()).build();
+            return ConfigureResponse.newBuilder().addAllStreamedEvents(e.streams().stream().sorted().toList())
+                    .addAllWebhookEvents(e.webhooks().stream().sorted().toList()).putAllWebhookErrors(e.webhookErrors()).build();
         });
     }
 
@@ -236,6 +240,23 @@ public final class ConnectorService extends ConnectorGrpc.ConnectorImplBase {
             for (Event e : instance(req.getInstance()).poll(req.getEvent(), req.getAfter(), req.getLimit())) {
                 b.addEvents(dev.turgon.connector.v1.Event.newBuilder().setId(e.id()).setPosition(e.position())
                         .setName(e.name()).setPayload(bytes(e.payload())));
+            }
+            return b.build();
+        });
+    }
+
+    @Override
+    public void receive(ReceiveRequest req, StreamObserver<ReceiveResponse> out) {
+        answer(out, () -> {
+            Endpoint e = instance(req.getInstance());
+            if (!e.webhooks().contains(req.getEvent())) {
+                throw new ConnectorException.Invalid("event " + req.getEvent() + " is not configured to arrive by webhook");
+            }
+            java.util.Map<String, java.util.List<String>> headers = new java.util.TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+            req.getHeadersMap().forEach((k, v) -> headers.put(k, v.getValuesList()));
+            var b = ReceiveResponse.newBuilder();
+            for (Event ev : e.receive(req.getEvent(), headers, req.getBody().toByteArray(), java.time.Instant.ofEpochMilli(req.getReceivedUnixMillis()))) {
+                b.addEvents(dev.turgon.connector.v1.Event.newBuilder().setId(ev.id()).setName(ev.name()).setPayload(bytes(ev.payload())));
             }
             return b.build();
         });

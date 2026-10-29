@@ -272,6 +272,9 @@ func delivery(spec *compiler.RuntimeSpec, trig compiler.WorkflowSource) string {
 		} `json:"events"`
 		Subscriptions map[string]json.RawMessage `json:"subscriptions"`
 		Changes       map[string]json.RawMessage `json:"changes"`
+		// The Camel/Java shopify and stripe connectors configure the webhook
+		// of their one event at the top.
+		Webhook json.RawMessage `json:"webhook"`
 	}
 	for _, c := range spec.Spec.Connectors {
 		if c.Endpoint == trig.Endpoint {
@@ -286,7 +289,7 @@ func delivery(spec *compiler.RuntimeSpec, trig compiler.WorkflowSource) string {
 		return "subscription"
 	case cfg.Changes[trig.Event] != nil:
 		return "change capture"
-	case len(cfg.Events[trig.Event].Webhook) > 0:
+	case len(cfg.Events[trig.Event].Webhook) > 0, len(cfg.Webhook) > 0:
 		return "webhook"
 	case trig.Interface == "outbox":
 		return "outbox"

@@ -3,10 +3,13 @@ package remote
 import (
 	"bufio"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -74,9 +77,10 @@ func TestJavaSidecarStripe(t *testing.T) {
 	defer pool.Close()
 	ctx := context.Background()
 	cfg := compiler.ConnectorConfig{Endpoint: "stripe-invoicing", Name: "stripe", Version: "1.5.0", Runtime: "camel-java",
-		SecretRef: "openbao://stripe-invoicing/restricted-key", Config: json.RawMessage(`{"url":"` + url + `"}`)}
+		SecretRef: "openbao://stripe-invoicing/restricted-key",
+		Config:    json.RawMessage(`{"url":"` + url + `","webhook":{"secretRef":"openbao://stripe-invoicing/webhook-secret"}}`)}
 	inst, err := pool.Factory(Address{Target: "unix://" + sock, Token: "tok"})(ctx, cfg,
-		connector.StaticSecrets{"openbao://stripe-invoicing/restricted-key": "rk_test_sidecar0000"})
+		connector.StaticSecrets{"openbao://stripe-invoicing/restricted-key": "rk_test_sidecar0000", "openbao://stripe-invoicing/webhook-secret": "whsec_test"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -119,6 +123,22 @@ func TestJavaSidecarStripe(t *testing.T) {
 	evs, err := src.Poll(ctx, "Invoice.Paid", 0, 10)
 	if err != nil || len(evs) != 1 || !strings.Contains(string(evs[0].Payload), `"amount_paid":34990`) || !strings.HasPrefix(evs[0].ID, "evt_") {
 		t.Fatalf("poll %+v %v", evs, err)
+	}
+	// The same event from a webhook endpoint, signed with its secret.
+	hook, err := inst.(connector.WebhookSource).Webhook("Invoice.Paid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	mac := hmac.New(sha256.New, []byte("whsec_test"))
+	fmt.Fprintf(mac, "%d.%s", now.Unix(), evs[0].Payload)
+	h := http.Header{}
+	h.Set("Stripe-Signature", fmt.Sprintf("t=%d,v1=%x", now.Unix(), mac.Sum(nil)))
+	if got, err := hook.Receive(h, evs[0].Payload, now); err != nil || len(got) != 1 || got[0].ID != evs[0].ID {
+		t.Fatalf("webhook %+v %v", got, err)
+	}
+	if _, err := hook.Receive(h, evs[0].Payload, now.Add(time.Hour)); !errors.Is(err, connector.ErrUnauthenticated) {
+		t.Fatalf("an old signature: %v", err)
 	}
 	if _, err := inst.Commit(ctx, "void-invoice", "SO-1#compensate", res); !errors.Is(err, writeguard.ErrRejected) {
 		t.Fatalf("voiding a paid invoice: %v", err)

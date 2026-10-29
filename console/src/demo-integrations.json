@@ -237,7 +237,7 @@
       "events": [
         {
           "name": "Order.Created",
-          "delivery": "polling"
+          "delivery": "webhook"
         }
       ],
       "operations": [
@@ -298,7 +298,7 @@
       "events": [
         {
           "name": "Invoice.Paid",
-          "delivery": "polling"
+          "delivery": "webhook"
         }
       ],
       "operations": [
@@ -947,7 +947,7 @@
       "trigger": {
         "system": "shopify-admin",
         "event": "Order.Created",
-        "delivery": "polling"
+        "delivery": "webhook"
       },
       "steps": [
         {
@@ -1219,7 +1219,7 @@
       "trigger": {
         "system": "stripe-invoicing",
         "event": "Invoice.Paid",
-        "delivery": "polling"
+        "delivery": "webhook"
       },
       "steps": [
         {

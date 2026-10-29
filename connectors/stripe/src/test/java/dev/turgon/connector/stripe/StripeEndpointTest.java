@@ -177,6 +177,56 @@ class StripeEndpointTest {
         }
     }
 
+    private static String sign(String secret, long t, byte[] body) throws Exception {
+        javax.crypto.Mac mac = javax.crypto.Mac.getInstance("HmacSHA256");
+        mac.init(new javax.crypto.spec.SecretKeySpec(secret.getBytes(java.nio.charset.StandardCharsets.UTF_8), "HmacSHA256"));
+        mac.update((t + ".").getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        return java.util.HexFormat.of().formatHex(mac.doFinal(body));
+    }
+
+    private static Map<String, List<String>> sig(String value) {
+        Map<String, List<String>> h = new java.util.TreeMap<>(String.CASE_INSENSITIVE_ORDER);
+        h.put("Stripe-Signature", List.of(value));
+        return h;
+    }
+
+    @Test
+    void webhookDeliveriesAreVerifiedWithinTheTolerance() throws Exception {
+        ObjectNode extra = (ObjectNode) json("{\"webhook\": {\"secretRef\": \"openbao://stripe-invoicing/webhook-secret\"}}");
+        ObjectNode cfg = JSON.createObjectNode().put("url", stripe.url());
+        cfg.setAll(extra);
+        try (Endpoint e = new StripeConnector().bind(new EndpointConfig("stripe-invoicing", "stripe", "1.5.0", cfg, KEY,
+                Map.of("openbao://stripe-invoicing/webhook-secret", "whsec_test")))) {
+            assertEquals(Set.of("Invoice.Paid"), e.webhooks());
+            String id = e.commit("create-invoice", "W-1", order()).path("id").asText();
+            JsonNode paid = stripe.pay(id);
+            byte[] body = JSON.writeValueAsBytes(paid);
+            java.time.Instant now = java.time.Instant.now();
+            long t = now.getEpochSecond();
+            List<Event> evs = e.receive("Invoice.Paid", sig("t=" + t + ",v1=" + sign("whsec_other", t, body) + ",v1=" + sign("whsec_test", t, body)), body, now);
+            assertEquals(1, evs.size());
+            // The same ID the poll gives, so the worker runs it once.
+            assertEquals(e.poll("Invoice.Paid", 0, 10).get(0).id(), evs.get(0).id());
+
+            assertThrows(ConnectorException.Unauthenticated.class, () -> e.receive("Invoice.Paid", sig("t=" + t + ",v1=" + sign("whsec_other", t, body)), body, now));
+            assertThrows(ConnectorException.Unauthenticated.class,
+                    () -> e.receive("Invoice.Paid", sig("t=" + (t - 600) + ",v1=" + sign("whsec_test", t - 600, body)), body, now));
+            assertThrows(ConnectorException.Unauthenticated.class, () -> e.receive("Invoice.Paid", Map.of(), body, now));
+            byte[] other = JSON.writeValueAsBytes(((ObjectNode) paid.deepCopy()).put("type", "invoice.finalized"));
+            assertTrue(e.receive("Invoice.Paid", sig("t=" + t + ",v1=" + sign("whsec_test", t, other)), other, now).isEmpty());
+        }
+        ObjectNode noSecret = JSON.createObjectNode().put("url", stripe.url());
+        noSecret.putObject("webhook").put("secretRef", "openbao://missing");
+        // Without its secret the webhook is reported, not fatal: the invoices are still polled.
+        try (var e = new StripeConnector().bind(new EndpointConfig("s", "stripe", "1.5.0", noSecret, KEY, Map.of()))) {
+            assertTrue(e.webhooks().isEmpty());
+            assertTrue(e.webhookErrors().get("Invoice.Paid").contains("openbao://missing is not set"));
+        }
+        ObjectNode noRef = JSON.createObjectNode().put("url", stripe.url());
+        noRef.putObject("webhook");
+        assertThrows(ConnectorException.Invalid.class, () -> new StripeConnector().bind(new EndpointConfig("s", "stripe", "1.5.0", noRef, KEY, Map.of())));
+    }
+
     @Test
     void amountsFollowTheCurrencysMinorUnit() throws Exception {
         assertEquals(1500, StripeEndpoint.minor(new BigDecimal("1500"), "JPY"));

@@ -397,6 +397,11 @@ Errors:
 - **Not retried:** invalid requests, and a permission the restricted key lacks (it names the
   permission).
 
+`Invoice.Paid` also arrives by webhook: a Stripe webhook endpoint for `invoice.paid` pointing at
+`/webhooks/stripe-invoicing/Invoice.Paid`, verified by `Stripe-Signature` with the endpoint's
+signing secret (`webhook.secretRef`) within `webhook.toleranceSeconds` (300 by default), and
+keyed by the event's `evt_` ID, as polled.
+
 `turgon check` reports the key's mode (test or live) and whether it can read customers,
 invoices and events. Writes cannot be probed without writing, so the first create reports a
 missing write permission.
@@ -538,6 +543,7 @@ The protocol mirrors the worker's connector interfaces:
 | `Read`, `Poll`, `Export`, `Check` | Reads, polled events, exports and connection checks |
 | `Stream` | Events the system pushes. The worker acknowledges each batch once its inbox holds it, and only then does the connector confirm the batch to the system |
 | `Discover` | What the system holds, for the metadata graph (`turgon discover`) |
+| `Receive` | Verifies one webhook delivery and returns its events. `Configure` lists the events an instance takes by webhook, and why any configured one cannot be (a signing secret that is not set) |
 
 Errors are status codes:
 
@@ -547,6 +553,7 @@ Errors are status codes:
 | `FAILED_PRECONDITION` | The system refused the write |
 | `NOT_FOUND` | The record is not there |
 | `UNIMPLEMENTED` | The connector does not do this |
+| `PERMISSION_DENIED` | A webhook delivery's signature is missing, wrong or expired: the provider gets 401 |
 | `ABORTED` | The sidecar restarted: the worker configures the instance again and repeats the call |
 | Anything else | Transient: the call is retried |
 
@@ -827,6 +834,11 @@ Shopify answers most failures with HTTP 200 and a list of errors:
 
 Discovery reads `Order` and `Customer` from the store's schema by GraphQL introspection.
 
+`Order.Created` also arrives by Shopify's `orders/create` webhook, verified by
+`X-Shopify-Hmac-Sha256` with the app's client secret (`webhook.secretRef` in the connection) and
+keyed by the order's GID, as polled. Point the store's webhook subscription at
+`/webhooks/shopify-admin/Order.Created` on a worker run with `--webhook-listen`.
+
 The recipe `shopify-admin-orders-to-erp` is the Shopify saga through GraphQL. Each new order becomes
 an ERP sales order once a person approves it, and the ERP number is written into the order's note.
 If Shopify refuses the note, the ERP order is cancelled. Without a store, run the fake
@@ -860,7 +872,9 @@ cancels its ERP order. In the Helm chart, add the connector to `connectors.sidec
 Turgon runs next to the customer's systems, often where nothing may connect in, so events are
 polled by default. Where the provider can reach a worker, an event can also arrive by webhook:
 the connection's event gets a `webhook` block (`examples/connections/stripe-billing.yaml`,
-`shopify-store.yaml`) and workers run with `--webhook-listen`. Then:
+`shopify-store.yaml`) and workers run with `--webhook-listen`. The Camel/Java connectors `shopify`
+and `stripe` take a `webhook` block in their config too (`shopify-admin.yaml`,
+`stripe-invoicing.yaml`) and verify the signatures in the sidecar. Then:
 
 - **Deliveries are verified** before anything is stored: Stripe's `Stripe-Signature`
   (timestamped, so old deliveries cannot be replayed), Shopify's `X-Shopify-Hmac-Sha256`, or
@@ -874,7 +888,8 @@ the connection's event gets a `webhook` block (`examples/connections/stripe-bill
   into the same inbox, to catch deliveries the provider gave up on. The inbox keeps each
   event ID once, so an event that arrives both ways, or is redelivered, starts one run, and a
   run that ended (an approval that was rejected) is never started again.
-- A worker without `--webhook-listen` polls as before and needs no signing secret.
+- A worker without `--webhook-listen` polls as before and needs no signing secret. A worker with
+  it refuses to start while a configured signing secret is not set, and names it.
 
 ```sh
 bin/turgon compile -c my-catalog stripe-payments-to-erp -o stripe.json   # as above
@@ -1962,7 +1977,6 @@ and Tooling APIs, not yet against a real org. The Camel/Java connectors are SAP 
 tested against a fake ECC and a JCo stand-in, not yet against a real SAP system or gateway. It reads
 IDocs as SAP pushes them, but not change pointers. Power BI is tested against a fake Entra and push
 dataset API, not yet against a real tenant; it adds rows to existing push datasets but does not
-create them. Shopify is tested against a fake GraphQL Admin API, not yet against a real store; it polls
-orders and does not yet receive webhooks (the `rest` connection `shopify-store` does). The `stripe`
-connector is tested against a fake Stripe, not yet against a real account; it polls `invoice.paid`
-events and does not yet receive Stripe's webhooks (the `rest` connection `stripe-billing` does).
+create them. Shopify is tested against a fake GraphQL Admin API, not yet against a real store, and its
+webhooks only with deliveries signed in the tests. The `stripe` connector is tested against a
+fake Stripe, not yet against a real account; its webhooks likewise.

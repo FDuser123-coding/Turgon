@@ -29,7 +29,8 @@ public final class StripeConnector implements Connector {
 
     @Override
     public Set<Capability> capabilities() {
-        return EnumSet.of(Capability.SIMULATE, Capability.CONFIRM, Capability.READ, Capability.POLL, Capability.CHECK);
+        return EnumSet.of(Capability.SIMULATE, Capability.CONFIRM, Capability.READ, Capability.POLL, Capability.CHECK,
+                Capability.WEBHOOK);
     }
 
     @Override

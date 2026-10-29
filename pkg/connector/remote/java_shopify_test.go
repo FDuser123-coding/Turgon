@@ -2,6 +2,9 @@ package remote
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -82,8 +85,10 @@ func TestJavaSidecarShopify(t *testing.T) {
 	ctx := context.Background()
 	cfg := compiler.ConnectorConfig{Endpoint: "shopify-admin", Name: "shopify", Version: "2.1.0", Runtime: "camel-java",
 		SecretRef: "openbao://shopify-admin/token",
-		Config:    json.RawMessage(`{"shop":"turgon-demo.myshopify.com","apiVersion":"2026-07","url":"` + url + `"}`)}
-	inst, err := pool.Factory(Address{Target: "unix://" + sock, Token: "tok"})(ctx, cfg, connector.StaticSecrets{"openbao://shopify-admin/token": "shpat_demo"})
+		Config: json.RawMessage(`{"shop":"turgon-demo.myshopify.com","apiVersion":"2026-07","url":"` + url + `",
+			"webhook":{"secretRef":"openbao://shopify-admin/client-secret"}}`)}
+	inst, err := pool.Factory(Address{Target: "unix://" + sock, Token: "tok"})(ctx, cfg, connector.StaticSecrets{"openbao://shopify-admin/token": "shpat_demo",
+		"openbao://shopify-admin/client-secret": "shpss_client_secret"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,6 +115,23 @@ func TestJavaSidecarShopify(t *testing.T) {
 	_ = json.Unmarshal(evs[0].Payload, &order)
 	if order["subtotal_price"] != "349.90" || order["order_number"] != 1001.0 {
 		t.Fatalf("payload %s", evs[0].Payload)
+	}
+	// The same order by webhook: verified by the sidecar, keyed like the poll.
+	hook, err := inst.(connector.WebhookSource).Webhook("Order.Created")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mac := hmac.New(sha256.New, []byte("shpss_client_secret"))
+	mac.Write(evs[0].Payload)
+	h := http.Header{}
+	h.Set("X-Shopify-Hmac-Sha256", base64.StdEncoding.EncodeToString(mac.Sum(nil)))
+	h.Set("X-Shopify-Topic", "orders/create")
+	if got, err := hook.Receive(h, evs[0].Payload, time.Now()); err != nil || len(got) != 1 || got[0].ID != evs[0].ID {
+		t.Fatalf("webhook %+v %v", got, err)
+	}
+	h.Set("X-Shopify-Hmac-Sha256", base64.StdEncoding.EncodeToString([]byte("forged")))
+	if _, err := hook.Receive(h, evs[0].Payload, time.Now()); !errors.Is(err, connector.ErrUnauthenticated) {
+		t.Fatalf("forged webhook: %v", err)
 	}
 	if more, err := src.Poll(ctx, "Order.Created", evs[0].Position, 10); err != nil || len(more) != 0 {
 		t.Fatalf("poll after %v %v", more, err)
@@ -151,6 +173,21 @@ func TestJavaSidecarShopify(t *testing.T) {
 	fakeCall(t, "POST", url+"/fake/throttle?n=1", "")
 	if _, err := src.Poll(ctx, "Order.Created", 0, 10); err == nil || errors.Is(err, writeguard.ErrInvalid) || errors.Is(err, writeguard.ErrRejected) {
 		t.Fatalf("a throttled poll must be retried: %v", err)
+	}
+
+	// Without the client secret the orders are still polled; only the
+	// webhook is refused, with the reason.
+	plain, err := pool.Factory(Address{Target: "unix://" + sock, Token: "tok"})(ctx, cfg, connector.StaticSecrets{"openbao://shopify-admin/token": "shpat_demo"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer plain.Close()
+	if _, err := plain.(connector.WebhookSource).Webhook("Order.Created"); err == nil || errors.Is(err, connector.ErrNoWebhook) ||
+		!strings.Contains(err.Error(), "openbao://shopify-admin/client-secret is not set") {
+		t.Fatalf("webhook without its secret: %v", err)
+	}
+	if evs, err := plain.(connector.Source).Poll(ctx, "Order.Created", 0, 10); err != nil || len(evs) != 1 {
+		t.Fatalf("poll without the webhook secret %+v %v", evs, err)
 	}
 
 	cat, err := inst.(connector.Discoverer).Discover(ctx, nil)

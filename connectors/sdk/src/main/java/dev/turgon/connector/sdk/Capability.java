@@ -9,7 +9,8 @@ public enum Capability {
     EXPORT("export"),
     CHECK("check"),
     STREAM("stream"),
-    DISCOVER("discover");
+    DISCOVER("discover"),
+    WEBHOOK("webhook");
 
     private final String wire;
 

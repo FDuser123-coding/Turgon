@@ -28,7 +28,8 @@ public final class ShopifyConnector implements Connector {
 
     @Override
     public Set<Capability> capabilities() {
-        return EnumSet.of(Capability.SIMULATE, Capability.CONFIRM, Capability.READ, Capability.POLL, Capability.CHECK, Capability.DISCOVER);
+        return EnumSet.of(Capability.SIMULATE, Capability.CONFIRM, Capability.READ, Capability.POLL, Capability.CHECK, Capability.DISCOVER,
+                Capability.WEBHOOK);
     }
 
     @Override

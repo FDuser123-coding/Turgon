@@ -10,6 +10,8 @@
 //   NOT_FOUND           Read: no such record
 //   UNIMPLEMENTED       the connector does not do this (Simulate: no dry run)
 //   UNAUTHENTICATED     the worker did not send the sidecar's token
+//   PERMISSION_DENIED   Receive: the webhook's signature is missing,
+//                       wrong or expired
 //   ABORTED             the instance is not configured (the sidecar
 //                       restarted): the worker configures it again and
 //                       repeats the call once
@@ -56,6 +58,12 @@ service Connector {
   // Discover reads what the system holds for the metadata graph: the
   // objects the configuration uses, and those named.
   rpc Discover(DiscoverRequest) returns (DiscoverResponse);
+  // Receive verifies one webhook delivery the worker took for an event
+  // (its signature, with the connector's secret for it) and returns the
+  // events it carries, without positions: the worker's inbox assigns them
+  // and drops IDs it already has, so the same event polled later is not
+  // run twice. An authentic delivery for another event returns none.
+  rpc Receive(ReceiveRequest) returns (ReceiveResponse);
 }
 
 // The protocol version this file describes.
@@ -74,7 +82,7 @@ message DescribeResponse {
   string connector = 2;
   string version = 3;
   // What it implements beyond Commit: "simulate", "confirm", "read",
-  // "poll", "export", "check", "stream", "discover".
+  // "poll", "export", "check", "stream", "discover", "webhook".
   repeated string capabilities = 4;
 }
 
@@ -94,6 +102,13 @@ message ConfigureRequest {
 message ConfigureResponse {
   // The events of this instance that arrive by Stream rather than Poll.
   repeated string streamed_events = 1;
+  // The events of this instance the connector can also receive by
+  // webhook (Receive); they are polled too, to reconcile.
+  repeated string webhook_events = 2;
+  // Events configured to arrive by webhook that cannot (their signing
+  // secret was not resolved), and why. A worker that listens for webhooks
+  // refuses to start with them; one that only polls ignores them.
+  map<string, string> webhook_errors = 3;
 }
 
 message InstanceRequest {
@@ -215,4 +230,22 @@ message DiscoverResponse {
   // [{"name", "to", "toField"}]}], "uses": [{"object", "field", "by"}]}
   // (pkg/meta.Catalog).
   bytes catalog = 1;
+}
+
+message HeaderValues {
+  repeated string values = 1;
+}
+
+message ReceiveRequest {
+  string instance = 1;
+  string event = 2;
+  // The delivery's HTTP headers, by canonical name.
+  map<string, HeaderValues> headers = 3;
+  bytes body = 4;
+  // When the worker received it (signatures expire).
+  int64 received_unix_millis = 5;
+}
+
+message ReceiveResponse {
+  repeated Event events = 1;
 }
