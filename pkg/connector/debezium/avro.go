@@ -1,181 +1,67 @@
 package debezium
 
 import (
-	"context"
 	"encoding/base64"
-	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"math/big"
-	"net"
-	"net/http"
-	"net/url"
 	"strconv"
-	"strings"
-	"sync"
 	"time"
 
 	"github.com/iskorotkov/avro/v2"
 )
 
-// Registry is a Confluent-compatible schema registry (Confluent Schema
-// Registry, Apicurio's ccompat API, Karapace, Redpanda). With it, changes
-// Debezium wrote with an Avro converter in the Confluent wire format (a
-// zero byte, the schema's 4-byte ID, the Avro body) are read with their
-// schema; JSON changes are still read as before.
-type Registry struct {
-	URL string `json:"url"`
-	// Auth is "basic" for a registry that needs credentials (Confluent
-	// Cloud's API key and secret); the connection's secret then holds them
-	// as {"registry": {"username": ..., "password": ...}}.
-	Auth string `json:"auth,omitempty"`
-}
-
-func (r Registry) validate() error {
-	u, err := url.Parse(r.URL)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return fmt.Errorf("schemaRegistry: url %q must be an http(s) URL", r.URL)
-	}
-	if u.Scheme == "http" {
-		if ip := net.ParseIP(u.Hostname()); u.Hostname() != "localhost" && (ip == nil || !ip.IsLoopback()) {
-			return errors.New("schemaRegistry: https is required for a registry that is not on this host")
-		}
-	}
-	switch r.Auth {
-	case "", "basic":
-	default:
-		return fmt.Errorf("schemaRegistry: auth must be basic, got %q", r.Auth)
-	}
-	return nil
-}
-
 // avroAPI decodes within bounds: a corrupt or hostile record fails
 // instead of allocating without limit.
 var avroAPI = avro.Config{MaxByteSliceSize: 16 << 20, MaxSliceAllocSize: 1_000_000, MaxMapAllocSize: 100_000}.Freeze()
 
-// registry fetches schemas by ID and keeps them: an ID always names the
-// same schema.
-type registry struct {
-	url        string
-	user, pass string
-	client     *http.Client
-	mu         sync.Mutex
-	schemas    map[uint32]avro.Schema
+// avroDecoder reads records of one Avro schema.
+type avroDecoder struct {
+	id uint32
+	s  avro.Schema
 }
 
-func newRegistry(r *Registry, user, pass string) *registry {
-	if r == nil {
-		return nil
-	}
-	return &registry{url: strings.TrimRight(r.URL, "/"), user: user, pass: pass,
-		client: &http.Client{Timeout: 10 * time.Second}, schemas: map[uint32]avro.Schema{}}
-}
-
-func (r *registry) schema(ctx context.Context, id uint32) (avro.Schema, error) {
-	r.mu.Lock()
-	s, ok := r.schemas[id]
-	r.mu.Unlock()
-	if ok {
-		return s, nil
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/schemas/ids/%d", r.url, id), nil)
+func newAvroDecoder(id uint32, schema string) (decoder, error) {
+	// A cache of its own: two versions of a table's schema share a name.
+	s, err := avro.ParseWithCache(schema, "", &avro.SchemaCache{})
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Accept", "application/vnd.schemaregistry.v1+json, application/json")
-	if r.user != "" {
-		req.SetBasicAuth(r.user, r.pass)
-	}
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("schema registry: %w", err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("schema registry: schema %d: HTTP %d %s", id, resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var out struct {
-		Schema     string `json:"schema"`
-		SchemaType string `json:"schemaType"`
-	}
-	if err := json.Unmarshal(body, &out); err != nil {
-		return nil, fmt.Errorf("schema registry: schema %d: %w", id, err)
-	}
-	if out.SchemaType != "" && out.SchemaType != "AVRO" {
-		return nil, fmt.Errorf("schema registry: schema %d is %s; Turgon reads Avro and JSON changes", id, out.SchemaType)
-	}
-	// A cache of its own: two versions of a table's schema share a name.
-	s, err = avro.ParseWithCache(out.Schema, "", &avro.SchemaCache{})
-	if err != nil {
-		return nil, fmt.Errorf("schema registry: schema %d: %w", id, err)
-	}
-	r.mu.Lock()
-	r.schemas[id] = s
-	r.mu.Unlock()
-	return s, nil
+	return avroDecoder{id, s}, nil
 }
 
-// subjects lists the registry's subjects: a call that proves it is
-// reachable and accepts the credentials.
-func (r *registry) subjects(ctx context.Context) (int, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, r.url+"/subjects", nil)
-	if err != nil {
-		return 0, err
-	}
-	req.Header.Set("Accept", "application/vnd.schemaregistry.v1+json, application/json")
-	if r.user != "" {
-		req.SetBasicAuth(r.user, r.pass)
-	}
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("HTTP %d %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var list []string
-	if err := json.Unmarshal(body, &list); err != nil {
-		return 0, fmt.Errorf("not a schema registry's subject list: %w", err)
-	}
-	return len(list), nil
-}
-
-// wireFormat splits a Confluent wire-format record into its schema ID and
-// Avro body.
-func wireFormat(b []byte) (uint32, []byte, bool) {
-	if len(b) < 5 || b[0] != 0 {
-		return 0, nil, false
-	}
-	return binary.BigEndian.Uint32(b[1:5]), b[5:], true
-}
-
-// decodeAvro reads an Avro record as JSON values: the same values the JSON
+// decode reads an Avro record as JSON values: the same values the JSON
 // converter's records give (exact decimals, ISO dates and timestamps, JSON
 // documents), so events do not depend on the converter.
-func (r *registry) decodeAvro(ctx context.Context, b []byte) (avro.Schema, map[string]any, error) {
-	id, body, _ := wireFormat(b)
-	s, err := r.schema(ctx, id)
-	if err != nil {
-		return nil, nil, err
-	}
+func (d avroDecoder) decode(body []byte) (map[string]any, error) {
 	var raw any
-	if err := avroAPI.Unmarshal(s, body, &raw); err != nil {
-		return nil, nil, fmt.Errorf("avro (schema %d): %w", id, err)
+	if err := avroAPI.Unmarshal(d.s, body, &raw); err != nil {
+		return nil, fmt.Errorf("avro (schema %d): %w", d.id, err)
 	}
-	v, err := plainAvro(s, raw)
+	v, err := plainAvro(d.s, raw)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	m, ok := v.(map[string]any)
 	if !ok {
-		return nil, nil, fmt.Errorf("avro (schema %d): not a record", id)
+		return nil, fmt.Errorf("avro (schema %d): not a record", d.id)
 	}
-	return s, m, nil
+	return m, nil
+}
+
+func (d avroDecoder) columns(keys map[string]bool) ([]metaColumn, bool) {
+	return avroColumns(d.s, keys)
+}
+
+func (d avroDecoder) fields() []string {
+	var out []string
+	if r, ok := d.s.(*avro.RecordSchema); ok {
+		for _, f := range r.Fields() {
+			out = append(out, f.Name())
+		}
+	}
+	return out
 }
 
 // connectName is the Kafka Connect type an Avro schema carries.
@@ -290,8 +176,8 @@ func avroTypeName(s avro.Schema) string {
 	return string(s.Type())
 }
 
-// avroEnvelope makes a change event's envelope from its decoded record.
-func avroEnvelope(m map[string]any) (envelope, error) {
+// recordEnvelope makes a change event's envelope from its decoded record.
+func recordEnvelope(m map[string]any) (envelope, error) {
 	env := envelope{}
 	env.Op, _ = m["op"].(string)
 	env.Source, _ = m["source"].(map[string]any)
