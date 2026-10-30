@@ -55,7 +55,7 @@ class PowerBiEndpointTest {
     }
 
     private Endpoint bind(JsonNode config, String secret) throws Exception {
-        return new PowerBiConnector().bind(new EndpointConfig("powerbi-sales", "powerbi-export", "1.1.0", config, secret, Map.of()));
+        return new PowerBiConnector().bind(new EndpointConfig("powerbi-sales", "powerbi-export", "1.2.0", config, secret, Map.of()));
     }
 
     private Endpoint bind() throws Exception {
@@ -267,5 +267,76 @@ class PowerBiEndpointTest {
         try (Endpoint e = bind(two, "s3cret")) { // two tables, no default: the payload must name one
             assertThrows(ConnectorException.Invalid.class, () -> e.commit("push-rows", "K", json(ORDER)));
         }
+    }
+
+    /** A connection naming a dataset the workspace does not have, with create. */
+    private ObjectNode createConfig(String name) throws Exception {
+        ObjectNode c = config();
+        c.remove("dataset");
+        c.put("datasetName", name).put("create", true).put("retention", "basicFIFO").put("table", "SalesOrders");
+        ((ObjectNode) c.path("tables")).set("Invoices", json("{\"columns\": {\"InvoiceId\": \"String\", \"Amount\": \"Decimal\"}, \"reverse\": {\"negate\": [\"Amount\"]}}"));
+        return c;
+    }
+
+    @Test
+    void theFirstWriteCreatesANamedDatasetWithItsTables() throws Exception {
+        try (Endpoint e = bind(createConfig("Turgon Sales"), "s3cret")) {
+            // A check and a dry run create nothing.
+            List<CheckResult> checks = e.check();
+            assertTrue(checks.get(1).ok() && checks.get(1).detail().contains("the first write creates it"), checks.toString());
+            e.simulate("push-rows", json(ORDER));
+            assertEquals(null, pbi.columns("Turgon Sales", "SalesOrders"));
+
+            e.commit("push-rows", "K-1", json(ORDER));
+            assertEquals(COLUMNS, pbi.columns("Turgon Sales", "SalesOrders"));
+            assertEquals(Set.of("InvoiceId", "Amount"), pbi.columns("Turgon Sales", "Invoices"));
+            assertEquals("basicFIFO", pbi.retention("Turgon Sales"));
+            assertEquals("K-1", pbi.rows("Turgon Sales", "SalesOrders").getFirst().path("TurgonKey").asText());
+            assertTrue(pbi.rows("SalesOrders").isEmpty(), "the configured dataset's tables are another dataset's");
+            for (CheckResult c : e.check()) {
+                assertTrue(c.ok(), c.toString());
+            }
+        }
+        // Another connection with the same name finds it, and creates no second one.
+        try (Endpoint e = bind(createConfig("Turgon Sales"), "s3cret")) {
+            e.commit("push-rows", "K-2", json(ORDER));
+            assertEquals(2, pbi.rows("Turgon Sales", "SalesOrders").size());
+        }
+    }
+
+    @Test
+    void createAddsTheTablesAnExistingDatasetLacks() throws Exception {
+        ObjectNode c = createConfig("x");
+        c.remove("datasetName");
+        c.put("dataset", "ds-1");
+        try (Endpoint e = bind(c, "s3cret")) {
+            CheckResult invoices = e.check().stream().filter(r -> r.name().equals("table Invoices")).findFirst().orElseThrow();
+            assertTrue(invoices.ok() && invoices.detail().contains("the first write adds it"), invoices.toString());
+            e.commit("push-rows", "K-1", json("{\"table\": \"Invoices\", \"rows\": [{\"InvoiceId\": \"I-1\", \"Amount\": \"10.50\"}]}"));
+            assertEquals(1, pbi.rows("Sales", "Invoices").size());
+            assertEquals(COLUMNS, pbi.columns("Sales", "SalesOrders"), "an existing table is left as it is");
+        }
+    }
+
+    @Test
+    void aNamedDatasetWithoutCreateMustBeThere() throws Exception {
+        ObjectNode c = createConfig("Missing");
+        c.put("create", false);
+        try (Endpoint e = bind(c, "s3cret")) {
+            CheckResult d = e.check().get(1);
+            assertTrue(!d.ok() && d.fix().contains("create: true"), d.toString());
+            ConnectorException.Invalid x = assertThrows(ConnectorException.Invalid.class, () -> e.commit("push-rows", "K", json(ORDER)));
+            assertTrue(x.getMessage().contains("no dataset named Missing"), x.getMessage());
+        }
+        ObjectNode found = createConfig("Sales"); // the fake's own dataset, by name
+        found.put("create", false);
+        try (Endpoint e = bind(found, "s3cret")) {
+            e.commit("push-rows", "K", json(ORDER));
+            assertEquals(1, pbi.rows("SalesOrders").size());
+        }
+        ObjectNode both = config().put("datasetName", "Sales");
+        assertThrows(ConnectorException.Invalid.class, () -> bind(both, "s3cret"));
+        ObjectNode retention = createConfig("x").put("retention", "forever");
+        assertThrows(ConnectorException.Invalid.class, () -> bind(retention, "s3cret"));
     }
 }

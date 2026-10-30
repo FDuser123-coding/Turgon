@@ -103,11 +103,11 @@ final class PowerBiClient {
         }
     }
 
-    /** Calls the API below the dataset's path; null body: no content. Signs in again once when the token is rejected. */
+    /** Calls the API at a path below its root; null body: no content. Signs in again once when the token is rejected. */
     JsonNode call(String method, String path, JsonNode body) throws IOException, InterruptedException {
         for (int attempt = 0;; attempt++) {
             String t = token();
-            HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(cfg.api() + cfg.datasetPath() + path)).timeout(Duration.ofSeconds(60))
+            HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(cfg.api() + path)).timeout(Duration.ofSeconds(60))
                     .header("Authorization", "Bearer " + t).header("Accept", "application/json");
             if (body != null) {
                 b.header("Content-Type", "application/json").method(method, HttpRequest.BodyPublishers.ofByteArray(JSON.writeValueAsBytes(body)));

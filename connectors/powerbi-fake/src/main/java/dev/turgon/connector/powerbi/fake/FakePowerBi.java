@@ -28,14 +28,18 @@ import java.util.regex.Pattern;
  *
  * <pre>
  * POST   /{tenant}/oauth2/v2.0/token
+ * GET    /v1.0/myorg/groups/{workspace}/datasets
+ * POST   /v1.0/myorg/groups/{workspace}/datasets?defaultRetentionPolicy=None   {"name", "defaultMode": "Push", "tables"}
  * GET    /v1.0/myorg/groups/{workspace}/datasets/{dataset}
  * GET    /v1.0/myorg/groups/{workspace}/datasets/{dataset}/tables
+ * PUT    /v1.0/myorg/groups/{workspace}/datasets/{dataset}/tables/{table}  {"name", "columns"}
  * POST   /v1.0/myorg/groups/{workspace}/datasets/{dataset}/tables/{table}/rows   {"rows": [...]}
  * DELETE /v1.0/myorg/groups/{workspace}/datasets/{dataset}/tables/{table}/rows
  * </pre>
  *
  * Power BI has no API to read a push dataset's rows; the fake shows them at
- * {@code GET /fake/tables/{table}/rows}. {@code POST /fake/throttle?n=2}
+ * {@code GET /fake/tables/{table}/rows} (the dataset it starts with) and
+ * {@code GET /fake/datasets/{name}/tables/{table}/rows}. {@code POST /fake/throttle?n=2}
  * answers the next pushes with 429, {@code POST /fake/expire} revokes the
  * tokens issued so far.
  */
@@ -43,13 +47,17 @@ public final class FakePowerBi implements AutoCloseable {
     public static final int MAX_ROWS = 10_000;
 
     private static final ObjectMapper JSON = new ObjectMapper();
-    private static final Pattern DATASET = Pattern.compile("/v1\\.0/myorg/groups/([^/]+)/datasets/([^/]+)(/tables(?:/([^/]+)/rows)?)?");
-    private static final Pattern FAKE_ROWS = Pattern.compile("/fake/tables/([^/]+)/rows");
+    private static final Pattern DATASET = Pattern.compile("/v1\\.0/myorg/groups/([^/]+)/datasets/([^/]+)(/tables(?:/([^/]+)(/rows)?)?)?");
+    private static final Pattern DATASETS = Pattern.compile("/v1\\.0/myorg/groups/([^/]+)/datasets");
+    private static final Set<String> TYPES = Set.of("Int64", "Double", "Decimal", "Boolean", "DateTime", "Datetime", "String");
+    private static final Pattern FAKE_ROWS = Pattern.compile("/fake(?:/datasets/([^/]+))?/tables/([^/]+)/rows");
 
     private final HttpServer http;
     private final String tenant, clientId, clientSecret, workspace, dataset;
+    /** The workspace's push datasets by ID: their names, and their tables' columns and rows. */
+    private final Map<String, Dataset> datasets = new ConcurrentHashMap<>();
     private final Map<String, Set<String>> tables;
-    private final Map<String, List<JsonNode>> rows = new ConcurrentHashMap<>();
+    private final Map<String, List<JsonNode>> rows;
     private final Set<String> tokens = ConcurrentHashMap.newKeySet();
     private final AtomicInteger issued = new AtomicInteger(), throttle = new AtomicInteger(), pushes = new AtomicInteger();
 
@@ -63,8 +71,11 @@ public final class FakePowerBi implements AutoCloseable {
         this.clientSecret = clientSecret;
         this.workspace = workspace;
         this.dataset = dataset;
-        this.tables = new LinkedHashMap<>(tables);
-        tables.keySet().forEach(t -> rows.put(t, java.util.Collections.synchronizedList(new ArrayList<>())));
+        Dataset d = new Dataset("Sales", "None");
+        tables.forEach(d::put);
+        datasets.put(dataset, d);
+        this.tables = d.tables;
+        this.rows = d.rows;
         http = HttpServer.create(new InetSocketAddress("127.0.0.1", port), 0);
         http.createContext("/", this::handle);
         http.setExecutor(java.util.concurrent.Executors.newCachedThreadPool());
@@ -76,11 +87,56 @@ public final class FakePowerBi implements AutoCloseable {
         return "http://127.0.0.1:" + http.getAddress().getPort();
     }
 
-    /** The rows pushed to a table, in order. */
+    /** A push dataset: its name, retention policy, tables' columns and rows. */
+    static final class Dataset {
+        final String name, retention;
+        final Map<String, Set<String>> tables = new ConcurrentHashMap<>();
+        final Map<String, List<JsonNode>> rows = new ConcurrentHashMap<>();
+
+        Dataset(String name, String retention) {
+            this.name = name;
+            this.retention = retention;
+        }
+
+        void put(String table, Set<String> columns) {
+            tables.put(table, new java.util.LinkedHashSet<>(columns));
+            rows.computeIfAbsent(table, t -> java.util.Collections.synchronizedList(new ArrayList<>()));
+        }
+    }
+
+    /** The rows pushed to a table of the first dataset, in order. */
     public List<JsonNode> rows(String table) {
         synchronized (rows.get(table)) {
             return List.copyOf(rows.get(table));
         }
+    }
+
+    /** The rows pushed to a table of the dataset named name. */
+    public List<JsonNode> rows(String name, String table) {
+        Dataset d = byName(name);
+        List<JsonNode> r = d == null ? null : d.rows.get(table);
+        if (r == null) {
+            return List.of();
+        }
+        synchronized (r) {
+            return List.copyOf(r);
+        }
+    }
+
+    /** The columns of a table of the dataset named name, or null. */
+    public Set<String> columns(String name, String table) {
+        Dataset d = byName(name);
+        return d == null ? null : d.tables.get(table);
+    }
+
+    /** The retention policy the dataset named name was created with, or null. */
+    public String retention(String name) {
+        Dataset d = byName(name);
+        return d == null ? null : d.retention;
+    }
+
+    private Dataset byName(String name) {
+        return datasets.values().stream().filter(d -> d.name.equals(name)).findFirst().orElse(null);
     }
 
     /** Answers the next n pushes with 429 Too Many Requests. */
@@ -128,18 +184,26 @@ public final class FakePowerBi implements AutoCloseable {
             }
             Matcher fr = FAKE_ROWS.matcher(path);
             if (method.equals("GET") && fr.matches()) {
-                List<JsonNode> r = rows.get(decode(fr.group(1)));
+                String table = decode(fr.group(2));
+                Map<String, List<JsonNode>> in = rows;
+                if (fr.group(1) != null) {
+                    Dataset d = byName(decode(fr.group(1)));
+                    in = d == null ? Map.of() : d.rows;
+                }
+                List<JsonNode> r = in.get(table);
                 if (r == null) {
                     error(ex, 404, "ItemNotFound", "Table is not found");
                     return;
                 }
                 ObjectNode out = JSON.createObjectNode();
-                out.putArray("value").addAll(rows(decode(fr.group(1))));
+                synchronized (r) {
+                    out.putArray("value").addAll(List.copyOf(r));
+                }
                 send(ex, 200, out);
                 return;
             }
-            Matcher m = DATASET.matcher(path);
-            if (!m.matches()) {
+            Matcher all = DATASETS.matcher(path), m = DATASET.matcher(path);
+            if (!all.matches() && !m.matches()) {
                 error(ex, 404, "EntityNotFound", "Not found");
                 return;
             }
@@ -149,16 +213,21 @@ public final class FakePowerBi implements AutoCloseable {
                 error(ex, 401, "TokenExpired", "Access token has expired, resubmit with a new access token");
                 return;
             }
-            if (!decode(m.group(1)).equals(workspace)) {
+            if (!decode((all.matches() ? all : m).group(1)).equals(workspace)) {
                 error(ex, 404, "PowerBIEntityNotFound", "Workspace is not found or the caller has no access to it");
                 return;
             }
-            if (!decode(m.group(2)).equals(dataset)) {
+            if (all.matches()) {
+                datasets(ex, method);
+                return;
+            }
+            Dataset ds = datasets.get(decode(m.group(2)));
+            if (ds == null) {
                 error(ex, 404, "ItemNotFound", "Dataset " + decode(m.group(2)) + " is not found");
                 return;
             }
             if (m.group(3) == null && method.equals("GET")) {
-                ObjectNode d = JSON.createObjectNode().put("id", dataset).put("name", "Sales").put("addRowsAPIEnabled", true)
+                ObjectNode d = JSON.createObjectNode().put("id", decode(m.group(2))).put("name", ds.name).put("addRowsAPIEnabled", true)
                         .put("configuredBy", clientId).put("isRefreshable", false);
                 send(ex, 200, d);
                 return;
@@ -166,17 +235,23 @@ public final class FakePowerBi implements AutoCloseable {
             if (m.group(4) == null && method.equals("GET")) {
                 ObjectNode out = JSON.createObjectNode();
                 ArrayNode value = out.putArray("value");
-                tables.keySet().forEach(t -> value.addObject().put("name", t));
+                ds.tables.keySet().stream().sorted().forEach(t -> value.addObject().put("name", t));
                 send(ex, 200, out);
                 return;
             }
             String table = m.group(4) == null ? null : decode(m.group(4));
-            if (table == null || !tables.containsKey(table)) {
+            if (table != null && m.group(5) == null && method.equals("PUT")) {
+                putTable(ex, ds, table);
+                return;
+            }
+            if (table == null || m.group(5) == null || !ds.tables.containsKey(table)) {
                 error(ex, 404, "ItemNotFound", "Table " + table + " is not found in the dataset");
                 return;
             }
+            Map<String, Set<String>> tables = ds.tables;
+            Map<String, List<JsonNode>> rows = ds.rows;
             switch (method) {
-                case "POST" -> push(ex, table);
+                case "POST" -> push(ex, ds, table);
                 case "DELETE" -> {
                     rows.get(table).clear();
                     send(ex, 200, null);
@@ -188,7 +263,71 @@ public final class FakePowerBi implements AutoCloseable {
         }
     }
 
-    private void push(HttpExchange ex, String table) throws IOException {
+    /** Lists the workspace's datasets, or creates a push dataset. */
+    private void datasets(HttpExchange ex, String method) throws IOException {
+        if (method.equals("GET")) {
+            ObjectNode out = JSON.createObjectNode();
+            ArrayNode value = out.putArray("value");
+            datasets.forEach((id, d) -> value.addObject().put("id", id).put("name", d.name).put("addRowsAPIEnabled", true));
+            send(ex, 200, out);
+            return;
+        }
+        if (!method.equals("POST")) {
+            error(ex, 405, "MethodNotAllowed", "Method not allowed");
+            return;
+        }
+        String query = ex.getRequestURI().getQuery() == null ? "" : ex.getRequestURI().getQuery();
+        String retention = query.contains("defaultRetentionPolicy=basicFIFO") ? "basicFIFO" : "None";
+        JsonNode body = JSON.readTree(ex.getRequestBody());
+        String name = body == null ? "" : body.path("name").asText("");
+        if (name.isEmpty() || !"Push".equals(body.path("defaultMode").asText("Push"))) {
+            error(ex, 400, "InvalidRequest", "A push dataset needs a name and defaultMode Push");
+            return;
+        }
+        Dataset d = new Dataset(name, retention);
+        for (JsonNode t : body.path("tables")) {
+            Set<String> cols = columns(t);
+            if (cols == null) {
+                error(ex, 400, "InvalidRequest", "Table " + t.path("name").asText() + " has a column without a name or a known dataType");
+                return;
+            }
+            d.put(t.path("name").asText(), cols);
+        }
+        if (d.tables.isEmpty()) {
+            error(ex, 400, "InvalidRequest", "A push dataset needs at least one table");
+            return;
+        }
+        String id = UUID.randomUUID().toString();
+        datasets.put(id, d);
+        send(ex, 201, JSON.createObjectNode().put("id", id).put("name", name).put("defaultRetentionPolicy", retention));
+    }
+
+    /** Adds a table to a push dataset, or replaces its columns. */
+    private void putTable(HttpExchange ex, Dataset d, String table) throws IOException {
+        JsonNode body = JSON.readTree(ex.getRequestBody());
+        Set<String> cols = body == null ? null : columns(body);
+        if (cols == null || !table.equals(body.path("name").asText(table))) {
+            error(ex, 400, "InvalidRequest", "The table needs its name and columns, each with a name and a known dataType");
+            return;
+        }
+        d.put(table, cols);
+        send(ex, 200, body);
+    }
+
+    private static Set<String> columns(JsonNode t) {
+        Set<String> cols = new java.util.LinkedHashSet<>();
+        for (JsonNode c : t.path("columns")) {
+            if (c.path("name").asText("").isEmpty() || !TYPES.contains(c.path("dataType").asText())) {
+                return null;
+            }
+            cols.add(c.path("name").asText());
+        }
+        return cols.isEmpty() || t.path("name").asText("").isEmpty() ? null : cols;
+    }
+
+    private void push(HttpExchange ex, Dataset ds, String table) throws IOException {
+        Map<String, Set<String>> tables = ds.tables;
+        Map<String, List<JsonNode>> rows = ds.rows;
         if (throttle.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
             ex.getResponseHeaders().add("Retry-After", "1");
             error(ex, 429, "TooManyRequests", "Rate limit exceeded");

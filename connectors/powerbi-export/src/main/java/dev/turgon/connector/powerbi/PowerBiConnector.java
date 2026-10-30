@@ -15,7 +15,7 @@ import java.util.Set;
  */
 public final class PowerBiConnector implements Connector {
     public static final String NAME = "powerbi-export";
-    public static final String VERSION = "1.1.0";
+    public static final String VERSION = "1.2.0";
 
     @Override
     public String name() {

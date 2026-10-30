@@ -24,7 +24,10 @@ import java.util.Map;
  * tenant: 00000000-0000-0000-0000-000000000000    # the Microsoft Entra tenant (directory) ID
  * clientId: 11111111-1111-1111-1111-111111111111  # the service principal's application ID
  * workspace: 22222222-2222-2222-2222-222222222222 # the workspace (group) ID; omitted: My workspace
- * dataset: 33333333-3333-3333-3333-333333333333   # the push dataset's ID
+ * dataset: 33333333-3333-3333-3333-333333333333   # the push dataset's ID, or:
+ * datasetName: Turgon Sales                       # its name in the workspace, found by name
+ * create: true                                    # create the dataset, and tables it lacks, on the first write
+ * retention: none                                 # a created dataset's retention: none or basicFIFO (the newest 200,000 rows)
  * table: SalesOrders                              # the table a payload without "table" goes to
  * tables:
  *   SalesOrders:
@@ -36,11 +39,12 @@ import java.util.Map;
  * </pre>
  *
  * The secret is the service principal's client secret. The columns are the
- * table's schema as the push dataset was created with it: rows are checked
- * against it before they are sent, which is also the dry run.
+ * table's schema as the push dataset was created with it, or is created
+ * with: rows are checked against it before they are sent, which is also
+ * the dry run.
  */
 public record PowerBiConfig(URI authority, URI api, String tenant, String clientId, String workspace, String dataset,
-        String table, Map<String, Table> tables) {
+        String datasetName, boolean create, String retention, String table, Map<String, Table> tables) {
 
     /** Power BI's push dataset column types. */
     public enum Type {
@@ -77,7 +81,16 @@ public record PowerBiConfig(URI authority, URI api, String tenant, String client
 
     public static PowerBiConfig from(EndpointConfig e) throws ConnectorException.Invalid {
         JsonNode c = e.config();
-        String tenant = required(c, "tenant"), clientId = required(c, "clientId"), dataset = required(c, "dataset");
+        String tenant = required(c, "tenant"), clientId = required(c, "clientId");
+        String dataset = c.path("dataset").asText("").trim(), datasetName = c.path("datasetName").asText("").trim();
+        if (dataset.isEmpty() == datasetName.isEmpty()) {
+            throw new ConnectorException.Invalid("set dataset (the push dataset's ID) or datasetName (its name in the workspace), not both");
+        }
+        boolean create = c.path("create").asBoolean(false);
+        String retention = c.path("retention").asText("none");
+        if (!retention.equals("none") && !retention.equals("basicFIFO")) {
+            throw new ConnectorException.Invalid("retention must be none or basicFIFO");
+        }
         Map<String, Table> tables = new LinkedHashMap<>();
         for (var t : c.path("tables").properties()) {
             String name = t.getKey();
@@ -127,7 +140,7 @@ public record PowerBiConfig(URI authority, URI api, String tenant, String client
             throw new ConnectorException.Invalid("table: " + table + " is not one of tables");
         }
         return new PowerBiConfig(uri(c, "authority", "https://login.microsoftonline.com"), uri(c, "api", "https://api.powerbi.com"),
-                tenant, clientId, c.path("workspace").asText(""), dataset, table, tables);
+                tenant, clientId, c.path("workspace").asText(""), dataset, datasetName, create, retention, table, tables);
     }
 
     private static String required(JsonNode c, String field) throws ConnectorException.Invalid {
@@ -164,10 +177,19 @@ public record PowerBiConfig(URI authority, URI api, String tenant, String client
         return t;
     }
 
-    /** The dataset's path below the API's root. */
-    public String datasetPath() {
-        String ws = workspace.isEmpty() ? "" : "/groups/" + encode(workspace);
-        return "/v1.0/myorg" + ws + "/datasets/" + encode(dataset);
+    /** The workspace's datasets' path below the API's root. */
+    public String datasetsPath() {
+        return "/v1.0/myorg" + (workspace.isEmpty() ? "" : "/groups/" + encode(workspace)) + "/datasets";
+    }
+
+    /** A dataset's path below the API's root. */
+    public String datasetPath(String id) {
+        return datasetsPath() + "/" + encode(id);
+    }
+
+    /** The dataset as the configuration names it, for messages. */
+    public String datasetLabel() {
+        return dataset.isEmpty() ? "named " + datasetName : dataset;
     }
 
     static String encode(String s) {
@@ -243,6 +265,6 @@ public record PowerBiConfig(URI authority, URI api, String tenant, String client
 
     @Override
     public String toString() {
-        return "PowerBiConfig[tenant=" + tenant + ", clientId=" + clientId + ", dataset=" + datasetPath() + "]";
+        return "PowerBiConfig[tenant=" + tenant + ", clientId=" + clientId + ", dataset " + datasetLabel() + "]";
     }
 }
