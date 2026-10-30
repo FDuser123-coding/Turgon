@@ -117,8 +117,9 @@ function DetailView({ endpoint, from, to }: { endpoint: string; from: string | n
           <h2>Used but missing</h2>
           <ul className="findings">
             {data.missing.map((m) => (
-              <li key={where(m)} className="sev-error">
+              <li key={where(m)} className={m.sampled ? "sev-warning" : "sev-error"}>
                 <span className="mono">{where(m)}</span>
+                {m.sampled && <span className="small"> not in the sampled records</span>}
                 <div className="small">used by {m.usedBy.join(", ")}</div>
               </li>
             ))}

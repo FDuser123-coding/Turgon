@@ -1017,7 +1017,7 @@ database as a snapshot. The connectors read it from the system's own catalog:
 | `sap-ecc` | BAPI interfaces, the dictionary structures the BAPIs take, IDoc segments | `RFC_GET_FUNCTION_INTERFACE`, `DDIF_FIELDINFO_GET`, `IDOCTYPE_READ_COMPLETE` |
 | `debezium` | each captured table, with its columns' Connect types (`decimal(12,2)`, `Date`, `Json`), optional or not, defaults, the key, and, with Debezium's `column.propagate.source.type`, the database's own type and length | the newest change on each topic: its Kafka Connect schema, or its values when schemas are off |
 | `rest` with `openapi` | each event's list items, each read's record, each write's request body, with types and formats, maximum lengths, required and read-only properties | the API's OpenAPI 3 description (JSON or YAML) |
-| `rest` without one | each event's list items, sampled | one page of the event's list request |
+| `rest` without one | each event's list items, and the records each read and write targets, sampled | one page of the event's list request; a GET of a resource no event lists; one whole record, by a sampled ID |
 | `postgres` outbox | each outbox event's payload, sampled | the latest 500 outbox rows |
 | `powerbi-export` | each table of the push dataset, with the columns and types its connection declares (Power BI does not list them) | the dataset's tables in the REST API |
 | `shopify` | `Order` and `Customer`, with each field's type and whether it is non-null | the GraphQL Admin API's introspection |
@@ -1035,6 +1035,19 @@ and required `description` on an invoice update:
 BREAKING became-required POST /v1/invoices/{invoice} request.description; used by operation link-invoice (writes)
 BREAKING field-removed invoice.amount_paid (was integer); used by operation get-invoice
 ```
+
+Without a description, the resource of a read or a write is its path without its templated
+segments and format extension (`/orders/{{orderId}}.json` is `/orders`).
+- **Sampling:** the resource is sampled from the event that lists it, or else from a GET of the
+  collection (`/tickets`, whose first array is the records), when the API answers one.
+- **Whole records:** a read, or an update's `capture`, also reads one whole record by a sampled
+  item's ID, since lists often abbreviate records.
+- **Uses:** each field a write sends counts as used by it. So when the records stop having one, it
+  is reported as not seen, with the operation, marked **(writes)**. That is a warning, not a
+  break: a sample cannot tell a removed field from one that happened to be empty.
+- **Not seen:** a field something uses that no sampled record has is listed as `NOT SEEN`, not
+  `MISSING`, and does not fail `--fail-on-breaking`. Against the fake store, `get-order`'s
+  `financial_status` and `total_price` were listed this way, since the fake's orders lack them.
 
 `turgon discover --catalog` (`-c`) also counts the mappings of every recipe in a catalog, compiled
 or not, and so does the console. A recipe waiting for mapping review does not compile yet, but its
@@ -2020,8 +2033,8 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
 ## Not built yet
 
-In rough roadmap order (§16, §19): a REST API without an OpenAPI description has only its events'
-lists discovered (sampled), not its write targets. Debezium topics in JSON Schema and Protobuf are
+In rough roadmap order (§16, §19): a REST API without an OpenAPI description has its records
+sampled, so a field a write sends becoming required is not seen until the write fails. Debezium topics in JSON Schema and Protobuf are
 tested with records built as Confluent's converters build them, not yet against Kafka Connect itself
 (Avro was). Managed subscriptions are tested against the fake org's Pub/Sub
 and Tooling APIs, not yet against a real org. The Camel/Java connectors are SAP ECC, Power BI, Shopify and Stripe. SAP ECC is
