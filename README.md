@@ -421,6 +421,18 @@ connector. The Java fake (`connectors/stripe-fake`) runs with
 `--port 9600 --key rk_test_demo --customer ada@example.com=Ada`. It prints the customer's ID, and
 `POST /fake/pay?invoice=in_...` pays an invoice.
 
+Measured end to end with a Temporal 1.28 dev server (`temporal server start-dev`), the Java
+sidecar and fake, Postgres 16, and one worker run with `--webhook-listen` and
+`--reconcile 30s`:
+- **Webhook:** a paid invoice's `invoice.paid` delivery, signed with the endpoint's secret, started
+  its run at once. The run recorded the ERP payment, and the invoice's metadata then held
+  `erp_payment_id`.
+- **Forged delivery:** a delivery with a wrong signature got 401.
+- **Missed delivery:** an invoice paid with no delivery reached the ERP at the next reconcile,
+  within 30 seconds.
+- **Redelivery:** delivering the first event again stored nothing new (`"new":0`), and no second
+  run started.
+
 ### HubSpot to ERP: order entry from the CRM
 
 `hubspot-won-deals-to-erp` turns every deal won in HubSpot into an ERP sales order (a person
@@ -929,6 +941,15 @@ curl -s localhost:9500/fake/orders/5600000000001             # "note": "ERP orde
 cancels its ERP order. In the Helm chart, add the connector to `connectors.sidecars` with the image
 `ghcr.io/<owner>/turgon-connector-shopify`, and allow egress to the store.
 
+Measured end to end the same way (Temporal 1.28 dev server, sidecar and fake, a worker with
+`--webhook-listen`):
+- **Approved order:** an `orders/create` delivery signed with the app's client secret started its
+  run, which waited for approval. After `turgon approve`, the ERP order was created, and the
+  Shopify order's note became `ERP order 2`.
+- **Forged delivery:** a delivery with a wrong signature got 401.
+- **Compensation:** with `/fake/reject-update` set for a second order, Shopify refused the note,
+  and the saga cancelled that ERP order (`status = cancelled`). Temporal shows that run as failed.
+
 ### Webhooks: events in seconds, polling as the safety net
 
 Turgon runs next to the customer's systems, often where nothing may connect in, so events are
@@ -1387,12 +1408,23 @@ granted it. `credit-check` is the example. It is installed next to a recipe
 (`shop-orders-with-credit-check`) or in a stack blueprint (`eu-distributor-core`).
 
 When a sales order is committed, `credit-check`:
-- reads the customer's credit limit;
+- reads the customer's credit limit (a customer the system keeps no limit for goes to `review`);
 - asks the risk service at `api.acme-risk.example` for the customer's score, with an API key
   Turgon puts in for it;
 - proposes the order's credit status: `approved` within the limit and with a score of 50 or
   more, `review` otherwise (if the risk service does not answer, the limit decides alone);
 - publishes `credit.checked` for other plugins.
+
+The whole `eu-distributor-core` stack ran end to end against a Temporal 1.28 dev server. It used
+the fake Salesforce org, the fake ECC (the `sap-ecc` demo sidecar), and the Shopify, Stripe and
+Power BI sidecars with their fakes:
+- **Won deal:** a won Salesforce deal became an SAP order after approval. The test run's preview
+  came from `BAPI_SALESORDER_CREATEFROMDAT2` with `TESTRUN`.
+- **Shopify order:** an order delivered by a signed webhook to `/webhooks/commerce/Order.Created`
+  became an SAP order too.
+- **credit-check:** it read each order's customer from the ERP slot and decided `review`, since
+  ECC's `get-customer` gives no credit limit. Its proposal was refused, as the verifier warns:
+  `sap-ecc` has no `update-sales-order`.
 
 ```yaml
 # examples/plugins/credit-check.yaml          # examples/recipes/shop-orders-with-credit-check.yaml
@@ -1470,10 +1502,14 @@ spec:                                         spec:
 - **Which operations serve them.** By convention, `get-<entity>` reads and
   `update-<entity>` applies proposals, on a connection that declares the entity: `erp-db`
   gains `update-sales-order`, which sets `credit_status`. The verifier warns when an entity
-  has no such operation.
+  has no such operation. When several connections declare it (a stack whose CRM, ERP and
+  billing all hold customers), the plugin uses the one that writes the entities whose events it
+  subscribes to: in `eu-distributor-core`, `credit-check` reads customers from the ERP slot.
 - **When plugins run.** After a write step commits, every plugin subscribed to the model event
   the write causes (`model.SalesOrder.created`, `.updated`, `.deleted`, by operation name)
-  runs once with the written record. A redelivered event that finds the write already done runs
+  runs once with the written record: the model document the run wrote (`customerId`,
+  `netValue`), with the system's answer on top (its order number, or a database's row). So a
+  plugin reads the same fields whichever system the stack writes to. A redelivered event that finds the write already done runs
   nothing again. Runs started by older workers are unaffected (a recorded history replays in
   the tests).
 - **The code is part of the spec.** The compiler embeds the module and its SHA-256 in the

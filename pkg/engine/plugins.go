@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -15,7 +16,9 @@ import (
 
 // Logic plugins (architecture §18.4) react to the entities a run writes:
 // after a write commits, every plugin subscribed to the model event it
-// causes (model.SalesOrder.created) runs once, with the written record.
+// causes (model.SalesOrder.created) runs once, with the written record:
+// the model document the run wrote (customerId, netValue), with what the
+// system answered on top (its ID and, for a database, the row).
 // They read and propose changes through the write guard; a plugin failing
 // never fails the run.
 
@@ -75,4 +78,34 @@ func runPlugins(ctx workflow.Context, wf string, step string, w *compiler.WriteC
 			workflow.GetLogger(ctx).Warn("plugin failed", "plugin", w.Plugins[i], "event", w.Event, "error", err)
 		}
 	}
+}
+
+// modelRecord is a model event's record: the canonical document a write
+// sent, with the system's result over it. A plugin then reads the model's
+// fields whichever system the stack writes to; a result that is not an
+// object (or a payload that is not) is passed as it is.
+func modelRecord(payload, result json.RawMessage) json.RawMessage {
+	doc, res := object(payload), object(result)
+	if doc == nil || res == nil {
+		return result
+	}
+	for k, v := range res {
+		doc[k] = v
+	}
+	b, err := json.Marshal(doc)
+	if err != nil {
+		return result
+	}
+	return b
+}
+
+// object decodes a JSON object keeping its numbers exact, or is nil.
+func object(b json.RawMessage) map[string]any {
+	var m map[string]any
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.UseNumber()
+	if d.Decode(&m) != nil {
+		return nil
+	}
+	return m
 }
