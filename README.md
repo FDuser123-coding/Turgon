@@ -1408,12 +1408,23 @@ granted it. `credit-check` is the example. It is installed next to a recipe
 (`shop-orders-with-credit-check`) or in a stack blueprint (`eu-distributor-core`).
 
 When a sales order is committed, `credit-check`:
-- reads the customer's credit limit;
+- reads the customer's credit limit (a customer the system keeps no limit for goes to `review`);
 - asks the risk service at `api.acme-risk.example` for the customer's score, with an API key
   Turgon puts in for it;
 - proposes the order's credit status: `approved` within the limit and with a score of 50 or
   more, `review` otherwise (if the risk service does not answer, the limit decides alone);
 - publishes `credit.checked` for other plugins.
+
+The whole `eu-distributor-core` stack ran end to end against a Temporal 1.28 dev server. It used
+the fake Salesforce org, the fake ECC (the `sap-ecc` demo sidecar), and the Shopify, Stripe and
+Power BI sidecars with their fakes:
+- **Won deal:** a won Salesforce deal became an SAP order after approval. The test run's preview
+  came from `BAPI_SALESORDER_CREATEFROMDAT2` with `TESTRUN`.
+- **Shopify order:** an order delivered by a signed webhook to `/webhooks/commerce/Order.Created`
+  became an SAP order too.
+- **credit-check:** it read each order's customer from the ERP slot and decided `review`, since
+  ECC's `get-customer` gives no credit limit. Its proposal was refused, as the verifier warns:
+  `sap-ecc` has no `update-sales-order`.
 
 ```yaml
 # examples/plugins/credit-check.yaml          # examples/recipes/shop-orders-with-credit-check.yaml
@@ -1491,10 +1502,14 @@ spec:                                         spec:
 - **Which operations serve them.** By convention, `get-<entity>` reads and
   `update-<entity>` applies proposals, on a connection that declares the entity: `erp-db`
   gains `update-sales-order`, which sets `credit_status`. The verifier warns when an entity
-  has no such operation.
+  has no such operation. When several connections declare it (a stack whose CRM, ERP and
+  billing all hold customers), the plugin uses the one that writes the entities whose events it
+  subscribes to: in `eu-distributor-core`, `credit-check` reads customers from the ERP slot.
 - **When plugins run.** After a write step commits, every plugin subscribed to the model event
   the write causes (`model.SalesOrder.created`, `.updated`, `.deleted`, by operation name)
-  runs once with the written record. A redelivered event that finds the write already done runs
+  runs once with the written record: the model document the run wrote (`customerId`,
+  `netValue`), with the system's answer on top (its order number, or a database's row). So a
+  plugin reads the same fields whichever system the stack writes to. A redelivered event that finds the write already done runs
   nothing again. Runs started by older workers are unaffected (a recorded history replays in
   the tests).
 - **The code is part of the spec.** The compiler embeds the module and its SHA-256 in the

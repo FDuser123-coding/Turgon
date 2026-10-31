@@ -188,7 +188,7 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 			done = append(done, committedWrite{step: st.Name, request: prep.Request, result: out.Result})
 			doc = withOutput(doc, st.Write.Output, out.Result)
 			if len(st.Write.Plugins) > 0 && out.Status == writeguard.StatusCommitted && pluginsOn() {
-				runPlugins(ctx, in.Workflow.Name, st.Name, st.Write, out.Result)
+				runPlugins(ctx, in.Workflow.Name, st.Name, st.Write, modelRecord(prep.Request.Payload, out.Result))
 			}
 		}
 	}
