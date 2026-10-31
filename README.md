@@ -421,6 +421,18 @@ connector. The Java fake (`connectors/stripe-fake`) runs with
 `--port 9600 --key rk_test_demo --customer ada@example.com=Ada`. It prints the customer's ID, and
 `POST /fake/pay?invoice=in_...` pays an invoice.
 
+Measured end to end with a Temporal 1.28 dev server (`temporal server start-dev`), the Java
+sidecar and fake, Postgres 16, and one worker run with `--webhook-listen` and
+`--reconcile 30s`:
+- **Webhook:** a paid invoice's `invoice.paid` delivery, signed with the endpoint's secret, started
+  its run at once. The run recorded the ERP payment, and the invoice's metadata then held
+  `erp_payment_id`.
+- **Forged delivery:** a delivery with a wrong signature got 401.
+- **Missed delivery:** an invoice paid with no delivery reached the ERP at the next reconcile,
+  within 30 seconds.
+- **Redelivery:** delivering the first event again stored nothing new (`"new":0`), and no second
+  run started.
+
 ### HubSpot to ERP: order entry from the CRM
 
 `hubspot-won-deals-to-erp` turns every deal won in HubSpot into an ERP sales order (a person
@@ -928,6 +940,15 @@ curl -s localhost:9500/fake/orders/5600000000001             # "note": "ERP orde
 `POST /fake/reject-update?order=<id>` makes the next update of an order fail, and the saga then
 cancels its ERP order. In the Helm chart, add the connector to `connectors.sidecars` with the image
 `ghcr.io/<owner>/turgon-connector-shopify`, and allow egress to the store.
+
+Measured end to end the same way (Temporal 1.28 dev server, sidecar and fake, a worker with
+`--webhook-listen`):
+- **Approved order:** an `orders/create` delivery signed with the app's client secret started its
+  run, which waited for approval. After `turgon approve`, the ERP order was created, and the
+  Shopify order's note became `ERP order 2`.
+- **Forged delivery:** a delivery with a wrong signature got 401.
+- **Compensation:** with `/fake/reject-update` set for a second order, Shopify refused the note,
+  and the saga cancelled that ERP order (`status = cancelled`). Temporal shows that run as failed.
 
 ### Webhooks: events in seconds, polling as the safety net
 
