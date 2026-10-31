@@ -827,6 +827,18 @@ config:
       reverse: { negate: [NetValue, Lines], set: { Reversal: true } }
 ```
 
+The dataset can also be named instead (`datasetName: Turgon Sales`), and found by its name in
+the workspace. With `create: true`, the connector creates the push dataset if it is not there,
+and adds any configured tables it lacks:
+- **When:** only on the first write. `turgon check` and dry runs create nothing; the check says
+  what the first write will create.
+- **Schema:** the configured tables and column types, with `retention: none` (default) or
+  `basicFIFO`, under which Power BI keeps the newest 200,000 rows.
+- **Several workers:** two workers creating the same name at once each make one, but both then
+  write to the same dataset, the one with the lowest ID.
+- **Existing tables:** a table that already exists is left as it is, since Power BI does not list
+  a push dataset's columns to compare.
+
 The recipe `shop-orders-to-powerbi` adds each new web-shop order to the sales dataset, with the
 mapping `sales-order-to-sales-row`. Without Power BI, run the fake (`connectors/powerbi-fake`).
 It signs in like Entra, answers like the push dataset API, and shows the rows it holds at
@@ -2040,7 +2052,7 @@ tested with records built as Confluent's converters build them, not yet against 
 and Tooling APIs, not yet against a real org. The Camel/Java connectors are SAP ECC, Power BI, Shopify and Stripe. SAP ECC is
 tested against a fake ECC and a JCo stand-in, not yet against a real SAP system or gateway. It reads
 IDocs as SAP pushes them and polls change pointers through `RFC_READ_TABLE`. Power BI is tested against a fake Entra and push
-dataset API, not yet against a real tenant; it adds rows to existing push datasets but does not
-create them. Shopify is tested against a fake GraphQL Admin API, not yet against a real store, and its
+dataset API, not yet against a real tenant; it creates push datasets and missing tables, but does
+not change the columns of an existing table. Shopify is tested against a fake GraphQL Admin API, not yet against a real store, and its
 webhooks only with deliveries signed in the tests. The `stripe` connector is tested against a
 fake Stripe, not yet against a real account; its webhooks likewise.

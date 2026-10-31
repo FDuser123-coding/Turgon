@@ -30,6 +30,11 @@ import java.util.Set;
  * repeats a write that succeeded; one that failed in flight may have added
  * its rows, so a table's key column carries each row's idempotency key for
  * reports to count rows once.
+ *
+ * <p>The dataset is configured by ID, or found by name. With {@code create},
+ * the first write creates a dataset that is not there, with the configured
+ * tables, and adds the tables an existing one lacks; a check or a dry run
+ * never creates anything.
  */
 final class PowerBiEndpoint implements Endpoint {
     /** Power BI's limit on rows per request. */
@@ -40,6 +45,8 @@ final class PowerBiEndpoint implements Endpoint {
     private final String name;
     private final PowerBiConfig cfg;
     private final PowerBiClient client;
+    private String datasetId; // resolved: configured, found by name, or created
+    private boolean tablesReady; // with create: the configured tables are in the dataset
 
     PowerBiEndpoint(String name, PowerBiConfig cfg, PowerBiClient client) {
         this.name = name;
@@ -133,17 +140,84 @@ final class PowerBiEndpoint implements Endpoint {
     public JsonNode commit(String operation, String key, JsonNode payload) throws Exception {
         if (operation.equals("delete-rows")) {
             PowerBiConfig.Table t = cfg.table(payload == null ? "" : payload.path("table").asText(""));
-            send("DELETE", "/tables/" + PowerBiConfig.encode(t.name()) + "/rows", null);
+            send("DELETE", cfg.datasetPath(dataset(true)) + "/tables/" + PowerBiConfig.encode(t.name()) + "/rows", null);
             return JSON.createObjectNode().put("table", t.name()).put("deleted", true);
         }
         Batch b = prepare(operation, key, payload);
-        String path = "/tables/" + PowerBiConfig.encode(b.table().name()) + "/rows";
+        String path = cfg.datasetPath(dataset(true)) + "/tables/" + PowerBiConfig.encode(b.table().name()) + "/rows";
         for (int from = 0; from < b.rows().size(); from += BATCH) {
             ObjectNode body = JSON.createObjectNode();
             body.putArray("rows").addAll(b.rows().subList(from, Math.min(b.rows().size(), from + BATCH)));
             send("POST", path, body);
         }
         return b.result();
+    }
+
+    /**
+     * The dataset's ID. A name is looked up in the workspace; when writing
+     * with create, a dataset that is not there is created and tables it
+     * lacks are added. Null when the named dataset is not there and this
+     * is not a write that may create it.
+     */
+    private synchronized String dataset(boolean write) throws Exception {
+        if (datasetId == null && !cfg.dataset().isEmpty()) {
+            datasetId = cfg.dataset();
+        }
+        if (datasetId == null) {
+            List<String> ids = named();
+            if (ids.size() > 1 && !cfg.create()) {
+                throw new ConnectorException.Invalid("the workspace has " + ids.size() + " datasets named " + cfg.datasetName()
+                        + ": set dataset to the ID of the one to write to");
+            }
+            if (!ids.isEmpty()) {
+                datasetId = ids.getFirst(); // with create, several writers that each created one agree on the same
+            } else if (!write) {
+                return null;
+            } else if (!cfg.create()) {
+                throw new ConnectorException.Invalid("the workspace has no dataset named " + cfg.datasetName()
+                        + ": create it, or set create: true to have the connector create it");
+            } else {
+                ObjectNode body = JSON.createObjectNode().put("name", cfg.datasetName()).put("defaultMode", "Push");
+                ArrayNode tables = body.putArray("tables");
+                cfg.tables().values().forEach(t -> tables.add(schema(t)));
+                String policy = cfg.retention().equals("basicFIFO") ? "basicFIFO" : "None";
+                JsonNode created = send("POST", cfg.datasetsPath() + "?defaultRetentionPolicy=" + policy, body);
+                // Another writer may have created one at the same time: use the same as it.
+                List<String> now = named();
+                datasetId = now.isEmpty() ? created.path("id").asText() : now.getFirst();
+                tablesReady = datasetId.equals(created.path("id").asText());
+            }
+        }
+        if (write && cfg.create() && !tablesReady) {
+            Set<String> present = tables(datasetId);
+            for (PowerBiConfig.Table t : cfg.tables().values()) {
+                if (!present.contains(t.name())) {
+                    send("PUT", cfg.datasetPath(datasetId) + "/tables/" + PowerBiConfig.encode(t.name()), schema(t));
+                }
+            }
+            tablesReady = true;
+        }
+        return datasetId;
+    }
+
+    /** The IDs of the workspace's datasets with the configured name, in order. */
+    private List<String> named() throws Exception {
+        List<String> ids = new ArrayList<>();
+        send("GET", cfg.datasetsPath(), null).path("value").forEach(d -> {
+            if (cfg.datasetName().equals(d.path("name").asText())) {
+                ids.add(d.path("id").asText());
+            }
+        });
+        ids.sort(null);
+        return ids;
+    }
+
+    /** A table as a push dataset is created with it. */
+    private static ObjectNode schema(PowerBiConfig.Table t) {
+        ObjectNode o = JSON.createObjectNode().put("name", t.name());
+        ArrayNode cols = o.putArray("columns");
+        t.columns().forEach((c, type) -> cols.addObject().put("name", c).put("dataType", type.wire));
+        return o;
     }
 
     private JsonNode send(String method, String path, JsonNode body) throws Exception {
@@ -169,24 +243,45 @@ final class PowerBiEndpoint implements Endpoint {
             return out;
         }
         Set<String> present;
+        String id;
         try {
-            JsonNode d = client.call("GET", "", null);
+            id = dataset(false);
+        } catch (Exception e) {
+            out.add(CheckResult.fail("dataset", e.getMessage(), apiFix(e)));
+            return out;
+        }
+        if (id == null) {
+            if (cfg.create()) {
+                out.add(CheckResult.pass("dataset", "no dataset named " + cfg.datasetName() + " yet: the first write creates it with tables "
+                        + String.join(", ", cfg.tables().keySet())));
+            } else {
+                out.add(CheckResult.fail("dataset", "the workspace has no dataset named " + cfg.datasetName(),
+                        "Create the push dataset, or set create: true to have the connector create it on the first write."));
+            }
+            return out;
+        }
+        try {
+            JsonNode d = client.call("GET", cfg.datasetPath(id), null);
             if (!d.path("addRowsAPIEnabled").asBoolean(false)) {
-                out.add(CheckResult.fail("dataset", d.path("name").asText(cfg.dataset()) + " is not a push dataset",
+                out.add(CheckResult.fail("dataset", d.path("name").asText(id) + " is not a push dataset",
                         "Rows can only be added to push datasets (or streaming datasets with historic data analysis on). "
-                                + "Create one through the REST API (Push Datasets - PostDatasetInGroup) with the tables in the connection's config."));
+                                + "Create one through the REST API (Push Datasets - PostDatasetInGroup) with the tables in the connection's config,"
+                                + " or name a new one with datasetName and create: true."));
                 return out;
             }
-            out.add(CheckResult.pass("dataset", d.path("name").asText(cfg.dataset()) + " (push dataset " + cfg.dataset() + ")"));
-            present = tables();
+            out.add(CheckResult.pass("dataset", d.path("name").asText(id) + " (push dataset " + id + ")"));
+            present = tables(id);
         } catch (Exception e) {
             out.add(CheckResult.fail("dataset", e.getMessage(), apiFix(e)));
             return out;
         }
         for (PowerBiConfig.Table t : cfg.tables().values()) {
-            if (!present.contains(t.name())) {
+            if (!present.contains(t.name()) && cfg.create()) {
+                out.add(CheckResult.pass("table " + t.name(), "not in the dataset yet: the first write adds it"));
+            } else if (!present.contains(t.name())) {
                 out.add(CheckResult.fail("table " + t.name(), "not in the dataset (it has: " + String.join(", ", present) + ")",
-                        "Add the table to the push dataset (Push Datasets - PutTableInGroup), or correct its name in the connection's config."));
+                        "Add the table to the push dataset (Push Datasets - PutTableInGroup), correct its name in the connection's config,"
+                                + " or set create: true to have the connector add it."));
                 continue;
             }
             out.add(CheckResult.pass("table " + t.name(), t.columns().size() + " columns" + (t.key().isEmpty() ? "" : ", key " + t.key())));
@@ -200,9 +295,9 @@ final class PowerBiEndpoint implements Endpoint {
         return out;
     }
 
-    private Set<String> tables() throws Exception {
+    private Set<String> tables(String id) throws Exception {
         Set<String> present = new LinkedHashSet<>();
-        client.call("GET", "/tables", null).path("value").forEach(v -> present.add(v.path("name").asText()));
+        client.call("GET", cfg.datasetPath(id) + "/tables", null).path("value").forEach(v -> present.add(v.path("name").asText()));
         return present;
     }
 
@@ -233,7 +328,8 @@ final class PowerBiEndpoint implements Endpoint {
      */
     @Override
     public JsonNode discover(List<String> objects) throws Exception {
-        Set<String> present = tables();
+        String id = dataset(false);
+        Set<String> present = id == null ? Set.of() : tables(id);
         ObjectNode cat = JSON.createObjectNode();
         ArrayNode objs = cat.putArray("objects"), uses = cat.putArray("uses");
         for (PowerBiConfig.Table t : cfg.tables().values()) {

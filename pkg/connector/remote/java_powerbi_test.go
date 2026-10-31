@@ -80,7 +80,7 @@ func TestJavaSidecarPowerBI(t *testing.T) {
 	pool := NewPool()
 	defer pool.Close()
 	ctx := context.Background()
-	cfg := compiler.ConnectorConfig{Endpoint: "powerbi-sales", Name: "powerbi-export", Version: "1.1.0", Runtime: "camel-java",
+	cfg := compiler.ConnectorConfig{Endpoint: "powerbi-sales", Name: "powerbi-export", Version: "1.2.0", Runtime: "camel-java",
 		SecretRef: "openbao://powerbi/sales/client-secret", Config: json.RawMessage(`{"tenant":"contoso","clientId":"app-1",
 			"workspace":"ws-1","dataset":"ds-1","authority":"` + url + `","api":"` + url + `",
 			"tables":{"SalesOrders":{"columns":{"OrderId":"String","Customer":"String","NetValue":"Double","Reversal":"Boolean","TurgonKey":"String"},
@@ -98,7 +98,7 @@ func TestJavaSidecarPowerBI(t *testing.T) {
 			t.Fatalf("check %+v", c)
 		}
 	}
-	if !strings.Contains(checks[0].Detail, "powerbi-export 1.1.0") {
+	if !strings.Contains(checks[0].Detail, "powerbi-export 1.2.0") {
 		t.Fatalf("checks %+v", checks)
 	}
 
@@ -135,6 +135,32 @@ func TestJavaSidecarPowerBI(t *testing.T) {
 	if _, err := inst.Commit(ctx, "push-rows", "K", row); err == nil || errors.Is(err, writeguard.ErrInvalid) || errors.Is(err, writeguard.ErrRejected) ||
 		!strings.Contains(err.Error(), "429") {
 		t.Fatalf("throttled push must be retried: %v", err)
+	}
+
+	// A dataset named, not there yet, and created by the first write.
+	named := cfg
+	named.Config = json.RawMessage(strings.Replace(string(cfg.Config), `"dataset":"ds-1"`, `"datasetName":"Turgon Sales","create":true`, 1))
+	created, err := pool.Factory(Address{Target: "unix://" + sock, Token: "tok"})(ctx, named,
+		connector.StaticSecrets{"openbao://powerbi/sales/client-secret": "s3cret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.Close()
+	if checks := created.(connector.Checker).Check(ctx); !checks[2].OK || !strings.Contains(checks[2].Detail, "the first write creates it") {
+		t.Fatalf("checks before the dataset %+v", checks)
+	}
+	if _, err := created.Commit(ctx, "push-rows", "SHOP-2001", row); err != nil {
+		t.Fatal(err)
+	}
+	var got struct{ Value []map[string]any }
+	resp, err = http.Get(url + "/fake/datasets/Turgon%20Sales/tables/SalesOrders/rows")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = json.NewDecoder(resp.Body).Decode(&got)
+	resp.Body.Close()
+	if len(got.Value) != 1 || got.Value[0]["TurgonKey"] != "SHOP-2001" {
+		t.Fatalf("rows in the created dataset %v", got.Value)
 	}
 
 	cat, err := inst.(connector.Discoverer).Discover(ctx, nil)
