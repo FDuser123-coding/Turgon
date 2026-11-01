@@ -513,6 +513,15 @@ bin/turgon xref set --entity Customer --system hubspot-crm --source ada@lovelace
   --master 6a1c0e2f-8b3d-4f5a-9c7e-1d2b3a4c5e6f
 ```
 
+Measured against a Temporal 1.28 dev server and the fakes:
+- **Dynamics 365:** a won HubSpot deal became a Dynamics sales order after approval, upserted by
+  its alternate key, and the order's GUID was written onto the deal.
+- **NetSuite:** a Shopify order became NetSuite sales order SO5465540, and the Shopify order's
+  note was set to `ERP order 5465540`.
+- **NetSuite prices:** the NetSuite order is priced from NetSuite's item list, because
+  `sales-order-to-netsuite-order` sends items and quantities, not the shop's prices. To keep the
+  shop's price, map each line's `rate` as well.
+
 ### SAP S/4HANA: sales orders through SAP's released APIs
 
 The `sap-odata` connector reaches SAP S/4HANA (Cloud, and on-premise 1909 or later) only through
