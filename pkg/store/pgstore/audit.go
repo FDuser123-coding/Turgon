@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/fduser123-coding/turgon/pkg/audit"
+	"github.com/fduser123-coding/turgon/pkg/meta"
 )
 
 // auditSchema stores each entry's canonical JSON line, so hashes verify
@@ -146,6 +147,31 @@ func (a *AuditLog) Tail(ctx context.Context, limit int) ([]audit.Entry, error) {
 		var e audit.Entry
 		if json.Unmarshal([]byte(line), &e) == nil {
 			out = append(out, e)
+		}
+	}
+	return out, rows.Err()
+}
+
+// Refusals returns the writes to target that failed since a time, oldest
+// first, as their commits recorded them ("writeback.failed"): for
+// connectors to read what the system refused (see meta.Refusal).
+func (a *AuditLog) Refusals(ctx context.Context, target string, since time.Time) ([]meta.Refusal, error) {
+	rows, err := a.pool.Query(ctx, `SELECT line FROM turgon_audit
+		WHERE action = 'writeback.failed' AND time > $1 AND line::jsonb->'data'->>'target' = $2 ORDER BY seq`, since, target)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []meta.Refusal
+	for rows.Next() {
+		var line string
+		if err := rows.Scan(&line); err != nil {
+			return nil, err
+		}
+		var e audit.Entry
+		var d struct{ Operation, Error string }
+		if json.Unmarshal([]byte(line), &e) == nil && json.Unmarshal(e.Data, &d) == nil && d.Operation != "" {
+			out = append(out, meta.Refusal{Operation: d.Operation, Error: d.Error, At: e.Time})
 		}
 	}
 	return out, rows.Err()

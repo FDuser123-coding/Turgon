@@ -72,8 +72,11 @@ type Field struct {
 	Length int `json:"length,omitempty"`
 	// Required: the system refuses a record without it.
 	Required bool `json:"required,omitempty"`
-	Key      bool `json:"key,omitempty"`
-	ReadOnly bool `json:"readOnly,omitempty"`
+	// RequiredBy says how a sampled object's field is known to be
+	// required: the write the system refused without it (see Learn).
+	RequiredBy string `json:"requiredBy,omitempty"`
+	Key        bool   `json:"key,omitempty"`
+	ReadOnly   bool   `json:"readOnly,omitempty"`
 }
 
 // Link is a relation from a field (or navigation) to another object.
@@ -223,14 +226,18 @@ func Diff(old, new Catalog) []Change {
 			was, ok := oldFields[f.Name]
 			delete(oldFields, f.Name)
 			if !ok {
-				out = append(out, Change{Kind: FieldAdded, Object: name, Field: f.Name, New: f.Type, Breaking: f.Required})
+				added := f.Type
+				if f.RequiredBy != "" {
+					added = strings.TrimPrefix(added+"; required: "+f.RequiredBy, "; ")
+				}
+				out = append(out, Change{Kind: FieldAdded, Object: name, Field: f.Name, New: added, Breaking: f.Required})
 				continue
 			}
 			if was.Type != f.Type && !(sampled && (was.Type == "" || f.Type == "")) { // a sample of nulls has no type
 				out = append(out, Change{Kind: TypeChanged, Object: name, Field: f.Name, Old: was.Type, New: f.Type, Breaking: true})
 			}
 			if !was.Required && f.Required {
-				out = append(out, Change{Kind: BecameRequired, Object: name, Field: f.Name, Breaking: true})
+				out = append(out, Change{Kind: BecameRequired, Object: name, Field: f.Name, New: f.RequiredBy, Breaking: true})
 			}
 			if was.Required && !f.Required {
 				out = append(out, Change{Kind: RequiredDropped, Object: name, Field: f.Name})
