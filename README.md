@@ -857,6 +857,11 @@ and adds any configured tables it lacks:
 - **Existing tables:** a table that already exists is left as it is, since Power BI does not list
   a push dataset's columns to compare.
 
+Measured end to end against a Temporal 1.28 dev server, with the sidecar and the fake: the
+connection named `datasetName: Turgon Sales Live` with `create: true`. `turgon check` said the
+first write would create the dataset. A web-shop order put in the outbox then started its run,
+whose push created the dataset (`basicFIFO`) and added the row keyed `SHOP-2001`.
+
 The recipe `shop-orders-to-powerbi` adds each new web-shop order to the sales dataset, with the
 mapping `sales-order-to-sales-row`. Without Power BI, run the fake (`connectors/powerbi-fake`).
 It signs in like Entra, answers like the push dataset API, and shows the rows it holds at
