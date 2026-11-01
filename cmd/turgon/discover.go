@@ -176,7 +176,19 @@ func discoverAll(ctx context.Context, spec *compiler.RuntimeSpec, registry conne
 		}
 		delete(want, c.Endpoint)
 		d := discovery{Endpoint: c.Endpoint, Connector: c.Name}
-		cat, err := discoverOne(ctx, c, registry, secretsFrom, extra[c.Endpoint])
+		var prev meta.Catalog
+		var had bool
+		var refusals []meta.Refusal
+		if store != nil {
+			var err error
+			if prev, had, err = store.LatestCatalog(ctx, c.Endpoint); err != nil {
+				return nil, err
+			}
+			if refusals, err = store.Audit().Refusals(ctx, c.Endpoint, time.Now().Add(-learnWindow)); err != nil {
+				return nil, err
+			}
+		}
+		cat, err := discoverOne(ctx, c, registry, secretsFrom, extra[c.Endpoint], refusals)
 		if err != nil {
 			d.Error = err.Error()
 			out = append(out, d)
@@ -189,10 +201,9 @@ func discoverAll(ctx context.Context, spec *compiler.RuntimeSpec, registry conne
 		}
 		d.Missing = meta.MissingUses(cat)
 		if store != nil {
-			prev, had, err := store.LatestCatalog(ctx, c.Endpoint)
-			if err != nil {
-				return nil, err
-			}
+			meta.KeepRequired(prev, &cat)
+			cat.Normalize()
+			d.Catalog = cat
 			snap, created, err := store.SaveCatalog(ctx, cat)
 			if err != nil {
 				return nil, err
@@ -213,7 +224,13 @@ func discoverAll(ctx context.Context, spec *compiler.RuntimeSpec, registry conne
 	return out, nil
 }
 
-func discoverOne(ctx context.Context, c compiler.ConnectorConfig, registry connector.Registry, secretsFrom connector.SecretResolver, objects []string) (meta.Catalog, error) {
+// learnWindow is how far back `turgon discover` reads refused writes, for
+// connectors to learn required fields from; what they learned is kept in
+// the snapshots after that.
+const learnWindow = 30 * 24 * time.Hour
+
+func discoverOne(ctx context.Context, c compiler.ConnectorConfig, registry connector.Registry, secretsFrom connector.SecretResolver,
+	objects []string, refusals []meta.Refusal) (meta.Catalog, error) {
 	factory, ok := registry[c.Name]
 	if !ok {
 		return meta.Catalog{}, fmt.Errorf("no runtime for connector %s in this worker", c.Name)
@@ -230,6 +247,9 @@ func discoverOne(ctx context.Context, c compiler.ConnectorConfig, registry conne
 	cat, err := d.Discover(ctx, objects)
 	if err != nil {
 		return meta.Catalog{}, err
+	}
+	if l, ok := inst.(connector.RefusalLearner); ok && len(refusals) > 0 {
+		l.LearnRefusals(&cat, refusals)
 	}
 	cat.Endpoint, cat.Connector, cat.Version = c.Endpoint, c.Name, c.Version
 	cat.Normalize()

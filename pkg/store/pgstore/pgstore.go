@@ -377,3 +377,6 @@ func (s *Store) Candidates(ctx context.Context, entity string, attrs identity.At
 	}
 	return out, rows.Err()
 }
+
+// Audit returns the audit log kept in the store's database.
+func (s *Store) Audit() *AuditLog { return NewAuditLog(s.pool) }

@@ -80,6 +80,14 @@ type Discoverer interface {
 	Discover(ctx context.Context, objects []string) (meta.Catalog, error)
 }
 
+// RefusalLearner is implemented by discoverers whose systems declare no
+// schema for some records (a REST API without an OpenAPI description):
+// from writes the system refused, it marks the fields the refusals name
+// as missing and required in the catalog, with meta.Learn.
+type RefusalLearner interface {
+	LearnRefusals(cat *meta.Catalog, refusals []meta.Refusal)
+}
+
 // Exporter is implemented by sources that read a large set of records at
 // once (Salesforce's Bulk API), for loads such as linking every record to
 // its master record at go-live.

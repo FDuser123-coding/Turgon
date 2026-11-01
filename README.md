@@ -1139,6 +1139,20 @@ segments and format extension (`/orders/{{orderId}}.json` is `/orders`).
 - **Not seen:** a field something uses that no sampled record has is listed as `NOT SEEN`, not
   `MISSING`, and does not fail `--fail-on-breaking`. Against the fake store, `get-order`'s
   `financial_status` and `total_price` were listed this way, since the fake's orders lack them.
+- **Required fields:** records cannot show which fields a write must send. The API's refusal of a
+  write can show it, so `turgon discover` reads the failed writes of the last 30 days from the
+  audit log (`writeback.failed`). Answers of 400 or 422 that name a missing field mark that field
+  required in the object the operation writes.
+  - **Shapes understood:** problem details' `invalid-params` (RFC 9457), Stripe's `error.param`,
+    a field-to-messages map (`{"errors": {"email": ["can't be blank"]}}`, as Rails APIs such as
+    Shopify's answer), JSON:API error pointers, lists of errors naming their field, and messages
+    such as `Missing required param: email`.
+  - **What you see:** the next discovery reports the field as `became-required`, or as a required
+    `field-added`, with the refused operation and its date. The change is breaking for every
+    operation that creates those records, not only the refused one, so the other flows are warned
+    before they fail too.
+  - **How long it lasts:** the field stays required in later snapshots, because a sample can never
+    show that it stopped being required.
 
 `turgon discover --catalog` (`-c`) also counts the mappings of every recipe in a catalog, compiled
 or not, and so does the console. A recipe waiting for mapping review does not compile yet, but its
@@ -2142,7 +2156,8 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 ## Not built yet
 
 In rough roadmap order (§16, §19): a REST API without an OpenAPI description has its records
-sampled, so a field a write sends becoming required is not seen until the write fails. Debezium topics in JSON Schema and Protobuf are
+sampled, so a field becoming required is seen only once a write has been refused without it; the
+next discovery then warns every flow that creates those records. Debezium topics in JSON Schema and Protobuf are
 tested with records built as Confluent's converters build them, not yet against Kafka Connect itself
 (Avro was). Managed subscriptions are tested against the fake org's Pub/Sub
 and Tooling APIs, not yet against a real org. The Camel/Java connectors are SAP ECC, Power BI, Shopify and Stripe. SAP ECC is
