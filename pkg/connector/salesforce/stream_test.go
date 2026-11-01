@@ -190,8 +190,7 @@ func TestSubscriptionMatchSplitAndKeepalive(t *testing.T) {
 	org := sftest.New()
 	defer org.Close()
 	defer org.ClosePubSub()
-	defer func(d time.Duration) { sftest.KeepAlive = d }(sftest.KeepAlive)
-	sftest.KeepAlive = 50 * time.Millisecond
+	defer sftest.SetKeepAlive(50 * time.Millisecond)()
 	c := streamConn(t, org, Subscription{Topic: oppTopic, Match: map[string]any{"StageName": "Closed Won"}})
 	ch, stop := collect(t, c, nil)
 	defer stop()

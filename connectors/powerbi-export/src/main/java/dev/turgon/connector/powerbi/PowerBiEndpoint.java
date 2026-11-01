@@ -35,6 +35,12 @@ import java.util.Set;
  * the first write creates a dataset that is not there, with the configured
  * tables, and adds the tables an existing one lacks; a check or a dry run
  * never creates anything.
+ *
+ * <p>Power BI does not list a push dataset's columns, so the connector cannot
+ * tell that a table lacks a column its config added. With {@code
+ * updateTables}, the first write sets each existing table's columns to the
+ * configured ones (Push Datasets - PutTable): columns added to the config
+ * are added, and columns no longer in it are removed.
  */
 final class PowerBiEndpoint implements Endpoint {
     /** Power BI's limit on rows per request. */
@@ -46,7 +52,7 @@ final class PowerBiEndpoint implements Endpoint {
     private final PowerBiConfig cfg;
     private final PowerBiClient client;
     private String datasetId; // resolved: configured, found by name, or created
-    private boolean tablesReady; // with create: the configured tables are in the dataset
+    private boolean tablesReady; // with create or updateTables: the configured tables are in the dataset as configured
 
     PowerBiEndpoint(String name, PowerBiConfig cfg, PowerBiClient client) {
         this.name = name;
@@ -188,10 +194,10 @@ final class PowerBiEndpoint implements Endpoint {
                 tablesReady = datasetId.equals(created.path("id").asText());
             }
         }
-        if (write && cfg.create() && !tablesReady) {
+        if (write && (cfg.create() || cfg.updateTables()) && !tablesReady) {
             Set<String> present = tables(datasetId);
             for (PowerBiConfig.Table t : cfg.tables().values()) {
-                if (!present.contains(t.name())) {
+                if (present.contains(t.name()) ? cfg.updateTables() : cfg.create()) {
                     send("PUT", cfg.datasetPath(datasetId) + "/tables/" + PowerBiConfig.encode(t.name()), schema(t));
                 }
             }
@@ -284,7 +290,8 @@ final class PowerBiEndpoint implements Endpoint {
                                 + " or set create: true to have the connector add it."));
                 continue;
             }
-            out.add(CheckResult.pass("table " + t.name(), t.columns().size() + " columns" + (t.key().isEmpty() ? "" : ", key " + t.key())));
+            String update = cfg.updateTables() && present.contains(t.name()) ? "; the first write sets the table's columns to these" : "";
+            out.add(CheckResult.pass("table " + t.name(), t.columns().size() + " columns" + (t.key().isEmpty() ? "" : ", key " + t.key()) + update));
             if (t.reversible()) {
                 out.add(CheckResult.pass("reverse " + t.name(), "negates " + String.join(", ", t.negate())));
             } else {

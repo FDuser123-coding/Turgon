@@ -220,4 +220,46 @@ class EccEndpointTest {
         assertThrows(ConnectorException.Invalid.class, () -> EccConfig.from(config("{}", "{broken"), 0));
         assertThrows(ConnectorException.Invalid.class, () -> new SapEccConnector().bind(config("{\"rfc\":{\"provider\":\"nope\"}}", "u:p")));
     }
+
+    @Test
+    void creditStatusIsTheDeliveryBlockAndCanBeRestored() throws Exception {
+        String doc = ecc.commit("create-sales-order", "PO-CR", json(ORDER)).path("salesOrder").asText();
+        // The dry run changes nothing and shows the block before and after.
+        JsonNode prev = ecc.simulate("update-sales-order", json("{\"id\": \"" + doc + "\", \"creditStatus\": \"review\"}"));
+        assertEquals("", prev.path("current").path("deliveryBlock").asText());
+        assertEquals("01", prev.path("proposed").path("deliveryBlock").asText());
+        assertEquals("", sap.orders().get(doc).deliveryBlock());
+
+        // A plugin's proposal keys the order by id; the number is ALPHA-padded.
+        JsonNode res = ecc.commit("update-sales-order", "K1", json("{\"id\": \"" + Long.parseLong(doc) + "\", \"creditStatus\": \"review\"}"));
+        assertEquals("01", sap.orders().get(doc).deliveryBlock());
+        assertEquals("", res.path("previous").path("deliveryBlock").asText());
+        ecc.confirm("update-sales-order", res);
+
+        // The compensation puts the block back.
+        assertTrue(ecc.commit("restore-sales-order", "K1#compensate", res).path("restored").asBoolean());
+        assertEquals("", sap.orders().get(doc).deliveryBlock());
+
+        // Approving clears only the credit block: another block is someone else's.
+        ecc.commit("update-sales-order", "K2", json("{\"salesOrder\": \"" + doc + "\", \"creditStatus\": \"review\"}"));
+        ecc.commit("update-sales-order", "K3", json("{\"salesOrder\": \"" + doc + "\", \"creditStatus\": \"approved\"}"));
+        assertEquals("", sap.orders().get(doc).deliveryBlock());
+        sap.orders().computeIfPresent(doc, (k, o) -> new FakeEcc.Order(o.number(), o.customer(), o.salesOrg(), o.purchaseOrder(), o.date(),
+                o.items(), false, "03"));
+        JsonNode kept = ecc.commit("update-sales-order", "K4", json("{\"salesOrder\": \"" + doc + "\", \"creditStatus\": \"approved\"}"));
+        assertEquals("03", kept.path("deliveryBlock").asText());
+        assertEquals("03", sap.orders().get(doc).deliveryBlock());
+        // A block changed since the update is not undone.
+        JsonNode rev = ecc.commit("update-sales-order", "K5", json("{\"salesOrder\": \"" + doc + "\", \"creditStatus\": \"review\"}"));
+        sap.orders().computeIfPresent(doc, (k, o) -> new FakeEcc.Order(o.number(), o.customer(), o.salesOrg(), o.purchaseOrder(), o.date(),
+                o.items(), false, "02"));
+        assertFalse(ecc.commit("restore-sales-order", "K5#compensate", rev).path("restored").asBoolean());
+        assertEquals("02", sap.orders().get(doc).deliveryBlock());
+
+        assertThrows(ConnectorException.Invalid.class, () -> ecc.commit("update-sales-order", "K6", json("{\"salesOrder\": \"" + doc + "\", \"creditStatus\": \"maybe\"}")));
+        assertThrows(ConnectorException.NotFound.class, () -> ecc.commit("update-sales-order", "K7", json("{\"salesOrder\": \"4711\", \"creditStatus\": \"review\"}")));
+        sap.deliver(doc);
+        // A delivered order's block cannot change.
+        assertThrows(ConnectorException.Rejected.class, () -> ecc.commit("update-sales-order", "K8", json("{\"salesOrder\": \"" + doc + "\", \"creditStatus\": \"review\"}")));
+    }
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/iskorotkov/avro/v2"
@@ -232,9 +233,22 @@ func (s *Server) Fetches() []pubsub.FetchRequest {
 	return append([]pubsub.FetchRequest{}, s.ps.fetches...)
 }
 
-// KeepAlive is how long a subscription without events waits before an
+// keepAlive is how long a subscription without events waits before an
 // empty response carrying the latest replay ID (Salesforce: 270s).
-var KeepAlive = 270 * time.Second
+// Tests shorten it with SetKeepAlive; it is read by the subscriptions'
+// goroutines, so it is atomic.
+var keepAlive atomic.Int64
+
+func init() { keepAlive.Store(int64(270 * time.Second)) }
+
+// SetKeepAlive changes how long an idle subscription waits before its
+// keepalive, and returns a function that puts the previous value back.
+func SetKeepAlive(d time.Duration) (restore func()) {
+	old := keepAlive.Swap(int64(d))
+	return func() { keepAlive.Store(old) }
+}
+
+func keepAliveFor() time.Duration { return time.Duration(keepAlive.Load()) }
 
 func (s *Server) authenticate(ctx context.Context) error {
 	md, _ := metadata.FromIncomingContext(ctx)
@@ -405,7 +419,7 @@ func (s *Server) subscribe(st grpc.ServerStream) error {
 			}
 			after = evs[start+n-1].replay
 			resp.LatestReplayID = after
-		} else if time.Since(idle) >= KeepAlive && len(evs) > 0 {
+		} else if time.Since(idle) >= keepAliveFor() && len(evs) > 0 {
 			resp.LatestReplayID = evs[len(evs)-1].replay
 			after = resp.LatestReplayID
 		}

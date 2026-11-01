@@ -27,6 +27,7 @@ import java.util.Map;
  * dataset: 33333333-3333-3333-3333-333333333333   # the push dataset's ID, or:
  * datasetName: Turgon Sales                       # its name in the workspace, found by name
  * create: true                                    # create the dataset, and tables it lacks, on the first write
+ * updateTables: true                              # on the first write, set existing tables' columns to the configured ones
  * retention: none                                 # a created dataset's retention: none or basicFIFO (the newest 200,000 rows)
  * table: SalesOrders                              # the table a payload without "table" goes to
  * tables:
@@ -44,7 +45,7 @@ import java.util.Map;
  * the dry run.
  */
 public record PowerBiConfig(URI authority, URI api, String tenant, String clientId, String workspace, String dataset,
-        String datasetName, boolean create, String retention, String table, Map<String, Table> tables) {
+        String datasetName, boolean create, boolean updateTables, String retention, String table, Map<String, Table> tables) {
 
     /** Power BI's push dataset column types. */
     public enum Type {
@@ -87,6 +88,7 @@ public record PowerBiConfig(URI authority, URI api, String tenant, String client
             throw new ConnectorException.Invalid("set dataset (the push dataset's ID) or datasetName (its name in the workspace), not both");
         }
         boolean create = c.path("create").asBoolean(false);
+        boolean updateTables = c.path("updateTables").asBoolean(false);
         String retention = c.path("retention").asText("none");
         if (!retention.equals("none") && !retention.equals("basicFIFO")) {
             throw new ConnectorException.Invalid("retention must be none or basicFIFO");
@@ -140,7 +142,7 @@ public record PowerBiConfig(URI authority, URI api, String tenant, String client
             throw new ConnectorException.Invalid("table: " + table + " is not one of tables");
         }
         return new PowerBiConfig(uri(c, "authority", "https://login.microsoftonline.com"), uri(c, "api", "https://api.powerbi.com"),
-                tenant, clientId, c.path("workspace").asText(""), dataset, datasetName, create, retention, table, tables);
+                tenant, clientId, c.path("workspace").asText(""), dataset, datasetName, create, updateTables, retention, table, tables);
     }
 
     private static String required(JsonNode c, String field) throws ConnectorException.Invalid {

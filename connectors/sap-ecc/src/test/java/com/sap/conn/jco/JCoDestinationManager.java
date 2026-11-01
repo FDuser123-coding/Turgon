@@ -31,7 +31,7 @@ public final class JCoDestinationManager {
             "BAPI_SALESORDER_GETLIST", List.of(Set.of("CUSTOMER_NUMBER", "SALES_ORGANIZATION", "PURCHASE_ORDER_NUMBER"),
                     Set.of("[RETURN]"), Set.of("SALES_ORDERS")),
             "BAPI_SALESORDER_GETSTATUS", List.of(Set.of("SALESDOCUMENT"), Set.of("[RETURN]"), Set.of("STATUSINFO")),
-            "BAPI_SALESORDER_CHANGE", List.of(Set.of("SALESDOCUMENT", "[ORDER_HEADER_INX]"), Set.of(), Set.of("RETURN")),
+            "BAPI_SALESORDER_CHANGE", List.of(Set.of("SALESDOCUMENT", "[ORDER_HEADER_IN]", "[ORDER_HEADER_INX]", "SIMULATION"), Set.of(), Set.of("RETURN")),
             "BAPI_TRANSACTION_COMMIT", List.of(Set.of("WAIT"), Set.of("[RETURN]"), Set.of()),
             "BAPI_TRANSACTION_ROLLBACK", List.of(Set.of(), Set.of("[RETURN]"), Set.of()),
             "BAPI_CUSTOMER_GETDETAIL2", List.of(Set.of("CUSTOMERNO"), Set.of("[CUSTOMERADDRESS]", "[RETURN]"), Set.of()),
@@ -40,6 +40,7 @@ public final class JCoDestinationManager {
 
     static {
         SIGNATURES.put("IDOCTYPE_READ_COMPLETE", List.of(Set.of("PI_IDOCTYP", "PI_CIMTYP"), Set.of(), Set.of("PT_SEGMENTS", "PT_FIELDS")));
+        SIGNATURES.put("BAPISDORDER_GETDETAILEDLIST", List.of(Set.of("[I_BAPI_VIEW]"), Set.of(), Set.of("SALES_DOCUMENTS", "ORDER_HEADERS_OUT")));
         SIGNATURES.put("IDOC_INBOUND_ASYNCHRONOUS", List.of(Set.of(), Set.of(), Set.of("IDOC_CONTROL_REC_40", "IDOC_DATA_REC_40")));
     }
 

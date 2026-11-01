@@ -80,7 +80,7 @@ func TestJavaSidecarPowerBI(t *testing.T) {
 	pool := NewPool()
 	defer pool.Close()
 	ctx := context.Background()
-	cfg := compiler.ConnectorConfig{Endpoint: "powerbi-sales", Name: "powerbi-export", Version: "1.2.0", Runtime: "camel-java",
+	cfg := compiler.ConnectorConfig{Endpoint: "powerbi-sales", Name: "powerbi-export", Version: "1.3.0", Runtime: "camel-java",
 		SecretRef: "openbao://powerbi/sales/client-secret", Config: json.RawMessage(`{"tenant":"contoso","clientId":"app-1",
 			"workspace":"ws-1","dataset":"ds-1","authority":"` + url + `","api":"` + url + `",
 			"tables":{"SalesOrders":{"columns":{"OrderId":"String","Customer":"String","NetValue":"Double","Reversal":"Boolean","TurgonKey":"String"},
@@ -98,7 +98,7 @@ func TestJavaSidecarPowerBI(t *testing.T) {
 			t.Fatalf("check %+v", c)
 		}
 	}
-	if !strings.Contains(checks[0].Detail, "powerbi-export 1.2.0") {
+	if !strings.Contains(checks[0].Detail, "powerbi-export 1.3.0") {
 		t.Fatalf("checks %+v", checks)
 	}
 

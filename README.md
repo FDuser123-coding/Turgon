@@ -112,6 +112,13 @@ config:
 - **`turgon check`** asks the Pub/Sub API whether each topic exists and whether the
   integration user may subscribe to it.
 
+Measured against a Temporal 1.28 dev server and the fake org, with two workers:
+- **Normal run:** a won deal's change event started its run at once. After approval it became an
+  ERP order.
+- **Failover:** the worker holding the subscription was killed with `kill -9`, and a deal was won
+  right after. The standby worker took the subscription over and started that deal's run within
+  seconds.
+
 **Managed subscriptions.** With `managed: <DeveloperName>` on a subscription, Turgon subscribes
 through a managed event subscription (Pub/Sub API `ManagedSubscribe`), and Salesforce keeps the
 position. Each batch's replay ID is committed only after the inbox has stored the batch. A worker
@@ -462,6 +469,13 @@ echo "won grace@lovelace-gmbh.example 900" >> hs.cmds             # goes to the 
 The deal needs two custom properties: `customer_email` (a HubSpot workflow can copy it from the
 deal's primary contact) and `erp_order_number`.
 
+Measured against a Temporal 1.28 dev server and the fake account:
+- **Matched deal:** the matched deal waited for approval, became ERP order 6, and the deal then
+  carried `erp_order_number: "6"`.
+- **Unmatched deal:** the deal without a master record stopped with "needs a data steward". Once
+  a steward linked the contact (`turgon xref set`), `turgon retry` ran it again, and its deal got
+  `erp_order_number: "8"`.
+
 ### Dynamics 365 and NetSuite: ERPs through the REST connector
 
 Two more ERPs need no new connector, only configuration of `rest`
@@ -498,6 +512,15 @@ bin/turgon xref set --entity Customer --system shopify-store --source ada@exampl
 bin/turgon xref set --entity Customer --system hubspot-crm --source ada@lovelace-gmbh.example \
   --master 6a1c0e2f-8b3d-4f5a-9c7e-1d2b3a4c5e6f
 ```
+
+Measured against a Temporal 1.28 dev server and the fakes:
+- **Dynamics 365:** a won HubSpot deal became a Dynamics sales order after approval, upserted by
+  its alternate key, and the order's GUID was written onto the deal.
+- **NetSuite:** a Shopify order became NetSuite sales order SO5465540, and the Shopify order's
+  note was set to `ERP order 5465540`.
+- **NetSuite prices:** the NetSuite order is priced from NetSuite's item list, because
+  `sales-order-to-netsuite-order` sends items and quantities, not the shop's prices. To keep the
+  shop's price, map each line's `rate` as well.
 
 ### SAP S/4HANA: sales orders through SAP's released APIs
 
@@ -539,12 +562,24 @@ sed -i 's|    baseURL: https://my300000-api.s4hana.cloud.sap|    baseURL: http:/
 bin/turgon compile -c my-catalog shopify-store-orders-to-s4 -o s4.json
 export TURGON_SECRET_S4_PROD_COMM_USER=TURGON_COMM:demo
 bin/turgon check -s s4.json                                     # services, entity sets, properties
+bin/turgon xref set --entity Customer --system shopify-store --source lin@example.com --master 17100001
 bin/turgon run -s s4.json &
-echo "ada@example.com 310.00" >> shop.cmds
+echo "lin@example.com 420.00" >> shop.cmds
 ```
 
 The approval shows SAP's simulated order. Once approved, the fake prints the new sales order, and
-the Shopify order's note gets its number.
+the Shopify order's note gets its number. The master ID of a customer is its ERP number, so a
+shop customer already linked for another ERP (`ada@example.com` to ECC's 1001 above) is refused
+by S/4HANA with `Sold-to party 1001 not maintained for sales area 1710 10 00`. The fake knows
+C-100, C-200 and 17100001.
+
+Measured against a Temporal 1.28 dev server and the fake: a Shopify order passed SAP's
+simulation, was approved, and became sales order 35466650 for sold-to party 17100001; the
+Shopify order's note was set to `ERP order 35466650`. As with NetSuite, SAP priced the order
+from its own conditions (10.00 EUR), not the shop's 420.00. The run started without the Event
+Mesh secret: secrets that only connector configuration uses (webhook signing secrets, an event
+broker) may be unset. A missing one is recorded as absent, and if it is set later, secret
+rotation notices it and reconnects.
 
 ### SAP ECC: BAPIs from a Camel/Java connector
 
@@ -592,6 +627,12 @@ Errors are status codes:
   - **cancel-sales-order** is its compensation. It deletes the order through
     `BAPI_SALESORDER_CHANGE`, which SAP refuses once there is a delivery.
   - **get-customer** calls `BAPI_CUSTOMER_GETDETAIL2`.
+  - **update-sales-order** sets an order's credit status as SAP lets an integration set one: as
+    its delivery block. `review` sets `creditBlock` (`01` by default); `approved` clears that
+    block and leaves any other. It goes through `BAPI_SALESORDER_CHANGE`, with `SIMULATION` for
+    the preview. The block it replaced, read with `BAPISDORDER_GETDETAILEDLIST`, is kept in the
+    result. Its compensation **restore-sales-order** puts that block back, unless the order's
+    block changed since. This is what `credit-check`'s proposals do in `eu-distributor-core`.
   - **Events** are the IDocs ECC sends, or change pointers the connector polls (see below).
   - **Messages:** SAP's `RETURN` messages become the rejection's reason, such as
     `V1 462: Sold-to party 0000001002 is blocked for sales`.
@@ -850,6 +891,23 @@ and adds any configured tables it lacks:
   write to the same dataset, the one with the lowest ID.
 - **Existing tables:** a table that already exists is left as it is, since Power BI does not list
   a push dataset's columns to compare.
+
+Columns are added or removed with `updateTables: true` (connector 1.3), with or without
+`create`:
+- **What it does:** the first write sets each configured table that exists to the configured
+  columns, through Push Datasets - PutTable. A column added to the config is added to the table,
+  and one taken out is removed.
+- **What `turgon check` shows:** each such table, saying the first write will set its columns.
+  The check itself changes nothing.
+- **Existing rows:** Microsoft's reference does not say what happens to the rows already in the
+  table. Try it on a copy of the dataset first. In the fake, the rows stay.
+- **Turning it off:** take the option out again once the change is made, so a later edit to the
+  config does not change the table by accident.
+
+Measured end to end against a Temporal 1.28 dev server, with the sidecar and the fake: the
+connection named `datasetName: Turgon Sales Live` with `create: true`. `turgon check` said the
+first write would create the dataset. A web-shop order put in the outbox then started its run,
+whose push created the dataset (`basicFIFO`) and added the row keyed `SHOP-2001`.
 
 The recipe `shop-orders-to-powerbi` adds each new web-shop order to the sales dataset, with the
 mapping `sales-order-to-sales-row`. Without Power BI, run the fake (`connectors/powerbi-fake`).
@@ -1423,8 +1481,10 @@ Power BI sidecars with their fakes:
 - **Shopify order:** an order delivered by a signed webhook to `/webhooks/commerce/Order.Created`
   became an SAP order too.
 - **credit-check:** it read each order's customer from the ERP slot and decided `review`, since
-  ECC's `get-customer` gives no credit limit. Its proposal was refused, as the verifier warns:
-  `sap-ecc` has no `update-sales-order`.
+  ECC's `get-customer` gives no credit limit. Its proposal went through the write guard as
+  `update-sales-order`, allowed without approval at low risk. It set the order's delivery block
+  to `01`, and the block it replaced (none) was kept for the compensation. `credit.checked` was
+  published.
 
 ```yaml
 # examples/plugins/credit-check.yaml          # examples/recipes/shop-orders-with-credit-check.yaml
@@ -2088,7 +2148,7 @@ tested with records built as Confluent's converters build them, not yet against 
 and Tooling APIs, not yet against a real org. The Camel/Java connectors are SAP ECC, Power BI, Shopify and Stripe. SAP ECC is
 tested against a fake ECC and a JCo stand-in, not yet against a real SAP system or gateway. It reads
 IDocs as SAP pushes them and polls change pointers through `RFC_READ_TABLE`. Power BI is tested against a fake Entra and push
-dataset API, not yet against a real tenant; it creates push datasets and missing tables, but does
-not change the columns of an existing table. Shopify is tested against a fake GraphQL Admin API, not yet against a real store, and its
+dataset API, not yet against a real tenant; it creates push datasets and missing tables, and with
+`updateTables` sets an existing table's columns, without knowing what Power BI does to the rows already there. Shopify is tested against a fake GraphQL Admin API, not yet against a real store, and its
 webhooks only with deliveries signed in the tests. The `stripe` connector is tested against a
 fake Stripe, not yet against a real account; its webhooks likewise.

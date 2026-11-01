@@ -31,7 +31,8 @@ public final class FakeEcc {
     private static final Map<String, FakeEcc> SYSTEMS = new ConcurrentHashMap<>();
     static final Set<String> FUNCTIONS = Set.of("RFC_PING", "BAPI_SALESORDER_CREATEFROMDAT2", "BAPI_SALESORDER_GETLIST",
             "BAPI_SALESORDER_GETSTATUS", "BAPI_SALESORDER_CHANGE", "BAPI_TRANSACTION_COMMIT", "BAPI_TRANSACTION_ROLLBACK",
-            "BAPI_CUSTOMER_GETDETAIL2", "IDOCTYPE_READ_COMPLETE", "RFC_GET_FUNCTION_INTERFACE", "DDIF_FIELDINFO_GET", "RFC_READ_TABLE");
+            "BAPI_CUSTOMER_GETDETAIL2", "IDOCTYPE_READ_COMPLETE", "RFC_GET_FUNCTION_INTERFACE", "DDIF_FIELDINFO_GET", "RFC_READ_TABLE",
+            "BAPISDORDER_GETDETAILEDLIST");
 
     /** BDCP2's fields and their lengths as RFC_READ_TABLE gives them. */
     static final Map<String, Integer> BDCP2 = new LinkedHashMap<>();
@@ -67,7 +68,10 @@ public final class FakeEcc {
             "BAPI_SALESORDER_GETSTATUS", List.<String[]>of(new String[] {"I", "SALESDOCUMENT", "BAPIVBELN-VBELN", ""},
                     new String[] {"E", "RETURN", "BAPIRETURN", ""}, new String[] {"T", "STATUSINFO", "BAPISDSTAT", ""}),
             "BAPI_SALESORDER_CHANGE", List.<String[]>of(new String[] {"I", "SALESDOCUMENT", "BAPIVBELN-VBELN", ""},
-                    new String[] {"I", "ORDER_HEADER_INX", "BAPISDH1X", ""}, new String[] {"T", "RETURN", "BAPIRET2", ""}),
+                    new String[] {"I", "ORDER_HEADER_IN", "BAPISDH1", "X"}, new String[] {"I", "ORDER_HEADER_INX", "BAPISDH1X", ""},
+                    new String[] {"I", "SIMULATION", "BAPIFLAG-BAPIFLAG", "X"}, new String[] {"T", "RETURN", "BAPIRET2", ""}),
+            "BAPISDORDER_GETDETAILEDLIST", List.<String[]>of(new String[] {"I", "I_BAPI_VIEW", "ORDER_VIEW", ""},
+                    new String[] {"T", "SALES_DOCUMENTS", "SALES_KEY", ""}, new String[] {"T", "ORDER_HEADERS_OUT", "BAPISDHD", "X"}),
             "BAPI_TRANSACTION_COMMIT", List.<String[]>of(new String[] {"I", "WAIT", "BAPITA-WAIT", "X"}, new String[] {"E", "RETURN", "BAPIRET2", ""}),
             "BAPI_TRANSACTION_ROLLBACK", List.<String[]>of(new String[] {"E", "RETURN", "BAPIRET2", ""}),
             "BAPI_CUSTOMER_GETDETAIL2", List.<String[]>of(new String[] {"I", "CUSTOMERNO", "BAPI1007-CUSTOMER", ""},
@@ -84,7 +88,14 @@ public final class FakeEcc {
     public record Customer(String name, String street, String postalCode, String city, String country, boolean blocked) {}
 
     public record Order(String number, String customer, String salesOrg, String purchaseOrder, String date,
-            List<Map<String, String>> items, boolean delivered) {}
+            List<Map<String, String>> items, boolean delivered, String deliveryBlock) {
+        Order withBlock(String block) {
+            return new Order(number, customer, salesOrg, purchaseOrder, date, items, delivered, block);
+        }
+    }
+
+    /** Delivery blocks customized (TVLS): 01 credit limit, 02 missing documents, 03 manual check. */
+    public static final Set<String> DELIVERY_BLOCKS = Set.of("01", "02", "03");
 
     private final Map<String, Customer> customers = new ConcurrentHashMap<>();
     private final Set<String> materials = ConcurrentHashMap.newKeySet();
@@ -267,7 +278,7 @@ public final class FakeEcc {
     /** Gives the order a delivery, after which SAP refuses to delete it. */
     public void deliver(String number) {
         orders.computeIfPresent(number, (k, o) -> new Order(o.number(), o.customer(), o.salesOrg(), o.purchaseOrder(),
-                o.date(), o.items(), true));
+                o.date(), o.items(), true, o.deliveryBlock()));
     }
 
     static Map<String, String> msg(String type, String id, String number, String text) {
@@ -519,15 +530,31 @@ public final class FakeEcc {
                 }
             }
             case "BAPI_SALESORDER_CHANGE" -> {
-                allow(function, p, "SALESDOCUMENT", "ORDER_HEADER_IN", "ORDER_HEADER_INX");
+                allow(function, p, "SALESDOCUMENT", "ORDER_HEADER_IN", "ORDER_HEADER_INX", "SIMULATION");
                 String doc = get(p, "SALESDOCUMENT", "");
+                Map<String, String> in = get(p, "ORDER_HEADER_IN", Map.of());
                 Map<String, String> inx = get(p, "ORDER_HEADER_INX", Map.of());
                 Order o = orders.get(doc);
                 List<Map<String, String>> ret = new ArrayList<>();
                 if (o == null) {
                     ret.add(msg("E", "V1", "302", "Sales document " + doc + " is not in the database"));
+                } else if ("U".equals(inx.get("UPDATEFLAG")) && "X".equals(inx.get("DLV_BLOCK"))) {
+                    String block = in.getOrDefault("DLV_BLOCK", "");
+                    if (!block.isEmpty() && !DELIVERY_BLOCKS.contains(block)) {
+                        ret.add(msg("E", "VL", "123", "Delivery block " + block + " is not defined"));
+                    } else if (o.delivered()) {
+                        ret.add(msg("E", "V1", "085", "Sales document " + doc + " is delivered: its delivery block cannot change"));
+                    } else {
+                        if (!"X".equals(p.get("SIMULATION"))) {
+                            luw.add(() -> {
+                                orders.computeIfPresent(doc, (k, cur) -> cur.withBlock(block));
+                                pointers("VERKBELEG", doc, "VBAK", "100" + doc, "RFC_TURGON", "U", "LIFSK");
+                            });
+                        }
+                        ret.add(msg("S", "V1", "042", "Standard Order " + doc + " has been saved"));
+                    }
                 } else if (!"D".equals(inx.get("UPDATEFLAG"))) {
-                    ret.add(msg("E", "V4", "219", "Only deletion is supported by this fake"));
+                    ret.add(msg("E", "V4", "219", "Only deletion and the delivery block are supported by this fake"));
                 } else if (o.delivered()) {
                     ret.add(msg("E", "V1", "084", "Sales document " + doc + " cannot be deleted: subsequent documents exist"));
                 } else {
@@ -538,6 +565,18 @@ public final class FakeEcc {
                     ret.add(msg("S", "V1", "041", "Standard Order " + doc + " has been deleted"));
                 }
                 out.put("RETURN", ret);
+            }
+            case "BAPISDORDER_GETDETAILEDLIST" -> {
+                allow(function, p, "I_BAPI_VIEW", "SALES_DOCUMENTS");
+                List<Map<String, String>> headers = new ArrayList<>();
+                for (Map<String, String> k : FakeEcc.<List<Map<String, String>>>get(p, "SALES_DOCUMENTS", List.of())) {
+                    Order o = orders.get(k.getOrDefault("VBELN", ""));
+                    if (o != null) {
+                        headers.add(Map.of("DOC_NUMBER", o.number(), "SOLD_TO", o.customer(), "PURCH_NO_C", o.purchaseOrder(),
+                                "DLV_BLOCK", o.deliveryBlock(), "SALES_ORG", o.salesOrg()));
+                    }
+                }
+                out.put("ORDER_HEADERS_OUT", headers);
             }
             case "BAPI_CUSTOMER_GETDETAIL2" -> {
                 allow(function, p, "CUSTOMERNO", "COMPANYCODE");
@@ -639,7 +678,7 @@ public final class FakeEcc {
         }
         String number = String.format("%010d", next.getAndIncrement());
         String date = h.getOrDefault("REQ_DATE_H", LocalDate.now().toString().replace("-", ""));
-        Order o = new Order(number, soldTo, h.get("SALES_ORG"), h.getOrDefault("PURCH_NO_C", ""), date, List.copyOf(items), false);
+        Order o = new Order(number, soldTo, h.get("SALES_ORG"), h.getOrDefault("PURCH_NO_C", ""), date, List.copyOf(items), false, "");
         luw.add(() -> {
             orders.put(number, o);
             pointers("VERKBELEG", number, "VBAK", "100" + number, "RFC_TURGON", "I", "KEY");

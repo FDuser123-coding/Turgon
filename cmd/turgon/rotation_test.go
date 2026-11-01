@@ -38,8 +38,8 @@ func TestRegressionsHoldBackOnlyWorseConnections(t *testing.T) {
 func TestFingerprintsNoticeChangesWithoutKeepingValues(t *testing.T) {
 	ctx := context.Background()
 	refs := []string{"openbao://a/x", "openbao://b/y"}
-	f1, _ := fingerprint(ctx, connector.StaticSecrets{"openbao://a/x": "one", "openbao://b/y": "two"}, refs)
-	f2, _ := fingerprint(ctx, connector.StaticSecrets{"openbao://a/x": "one", "openbao://b/y": "three"}, refs)
+	f1, _ := fingerprint(ctx, connector.StaticSecrets{"openbao://a/x": "one", "openbao://b/y": "two"}, refs, nil)
+	f2, _ := fingerprint(ctx, connector.StaticSecrets{"openbao://a/x": "one", "openbao://b/y": "three"}, refs, nil)
 	if got := f1.changed(f2); !reflect.DeepEqual(got, []string{"openbao://b/y"}) {
 		t.Fatalf("changed = %v", got)
 	}
@@ -48,8 +48,21 @@ func TestFingerprintsNoticeChangesWithoutKeepingValues(t *testing.T) {
 			t.Fatalf("fingerprint %q", h)
 		}
 	}
-	if _, err := fingerprint(ctx, connector.StaticSecrets{}, refs); err == nil {
+	if _, err := fingerprint(ctx, connector.StaticSecrets{}, refs, nil); err == nil {
 		t.Fatal("an unreadable secret gave a fingerprint")
+	}
+	// An optional secret that is not set is absent, and setting it later
+	// is a change.
+	opt := map[string]bool{"openbao://b/y": true}
+	f3, err := fingerprint(ctx, connector.StaticSecrets{"openbao://a/x": "one"}, refs, opt)
+	if err != nil || f3["openbao://b/y"] != absent {
+		t.Fatalf("optional unset: %v %v", f3, err)
+	}
+	if got := f3.changed(f1); !reflect.DeepEqual(got, []string{"openbao://b/y"}) {
+		t.Fatalf("set later: changed = %v", got)
+	}
+	if _, err := fingerprint(ctx, connector.StaticSecrets{"openbao://b/y": "two"}, refs, opt); err == nil {
+		t.Fatal("a required secret was treated as optional")
 	}
 }
 
@@ -74,8 +87,8 @@ type fakeSecrets struct{ connector.StaticSecrets }
 func (fakeSecrets) Rotates() bool             { return true }
 func (fakeSecrets) Where(ref string) string   { return ref }
 func (fakeSecrets) Missing(ref string) string { return ref }
-func (f fakeSecrets) Fingerprints(ctx context.Context, refs []string) (fingerprints, error) {
-	return fingerprint(ctx, f, refs)
+func (f fakeSecrets) Fingerprints(ctx context.Context, refs []string, optional map[string]bool) (fingerprints, error) {
+	return fingerprint(ctx, f, refs, optional)
 }
 
 func TestRotationSwitchesOnlyToWorkingConnections(t *testing.T) {
@@ -138,5 +151,18 @@ func TestRotationSwitchesOnlyToWorkingConnections(t *testing.T) {
 	}
 	if strings.Contains(out.String()+auditLog.String(), "wrong@") {
 		t.Fatal("a secret value was logged")
+	}
+}
+
+func TestOptionalSecretRefsAreConfigOnly(t *testing.T) {
+	cfg, _ := json.Marshal(map[string]any{
+		"eventMesh": map[string]any{"secretRef": "openbao://s4/event-mesh"},
+		"also":      map[string]any{"secretRef": "openbao://s4/comm"},
+	})
+	spec := &compiler.RuntimeSpec{}
+	spec.Spec.Connectors = []compiler.ConnectorConfig{{Endpoint: "s4", SecretRef: "openbao://s4/comm", Config: cfg}}
+	spec.Spec.Plugins = []compiler.PluginDeployment{{Secrets: map[string]string{"key": "openbao://p/key"}}}
+	if got := optionalSecretRefs(spec); !reflect.DeepEqual(got, map[string]bool{"openbao://s4/event-mesh": true}) {
+		t.Fatalf("optional = %v", got)
 	}
 }

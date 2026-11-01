@@ -22,6 +22,7 @@ type rotation[T any] struct {
 	spec    *compiler.RuntimeSpec
 	secrets secretBackend
 	refs    []string
+	opt     map[string]bool // refs that may be unset
 	prints  fingerprints
 	refused string // the last refusal reported, not repeated at every check
 
@@ -39,8 +40,8 @@ type rotation[T any] struct {
 // newRotation reads the secrets' fingerprints, before the first
 // connections are opened with them.
 func newRotation[T any](ctx context.Context, out io.Writer, log audit.Recorder, spec *compiler.RuntimeSpec, secrets secretBackend) (*rotation[T], error) {
-	r := &rotation[T]{out: out, log: log, spec: spec, secrets: secrets, refs: specSecretRefs(spec)}
-	p, err := secrets.Fingerprints(ctx, r.refs)
+	r := &rotation[T]{out: out, log: log, spec: spec, secrets: secrets, refs: specSecretRefs(spec), opt: optionalSecretRefs(spec)}
+	p, err := secrets.Fingerprints(ctx, r.refs, r.opt)
 	if err != nil {
 		return nil, err
 	}
@@ -61,7 +62,7 @@ func (r *rotation[T]) every(d time.Duration) (<-chan time.Time, func()) {
 
 // hup reconnects with every secret as it is now.
 func (r *rotation[T]) hup(ctx context.Context) {
-	p, err := r.secrets.Fingerprints(ctx, r.refs)
+	p, err := r.secrets.Fingerprints(ctx, r.refs, r.opt)
 	if r.reload(ctx, "reload requested (SIGHUP)", nil) && err == nil {
 		r.prints = p
 	}
@@ -70,7 +71,7 @@ func (r *rotation[T]) hup(ctx context.Context) {
 // refresh reads the secrets again and reconnects if one changed. A refused
 // change is tried again at the next refresh.
 func (r *rotation[T]) refresh(ctx context.Context) {
-	p, err := r.secrets.Fingerprints(ctx, r.refs)
+	p, err := r.secrets.Fingerprints(ctx, r.refs, r.opt)
 	if err != nil {
 		// The secret manager is unreachable: keep going with what the
 		// connectors have.

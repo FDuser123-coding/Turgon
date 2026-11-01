@@ -285,7 +285,7 @@ func (s *Server) managedSubscribe(st grpc.ServerStream) error {
 				}
 				after = evs[from+n-1].replay
 				resp.LatestReplayID = after
-			} else if time.Since(idle) >= KeepAlive && len(evs) > 0 {
+			} else if time.Since(idle) >= keepAliveFor() && len(evs) > 0 {
 				resp.LatestReplayID = evs[len(evs)-1].replay
 				after = resp.LatestReplayID
 			}
