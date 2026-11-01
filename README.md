@@ -469,6 +469,13 @@ echo "won grace@lovelace-gmbh.example 900" >> hs.cmds             # goes to the 
 The deal needs two custom properties: `customer_email` (a HubSpot workflow can copy it from the
 deal's primary contact) and `erp_order_number`.
 
+Measured against a Temporal 1.28 dev server and the fake account:
+- **Matched deal:** the matched deal waited for approval, became ERP order 6, and the deal then
+  carried `erp_order_number: "6"`.
+- **Unmatched deal:** the deal without a master record stopped with "needs a data steward". Once
+  a steward linked the contact (`turgon xref set`), `turgon retry` ran it again, and its deal got
+  `erp_order_number: "8"`.
+
 ### Dynamics 365 and NetSuite: ERPs through the REST connector
 
 Two more ERPs need no new connector, only configuration of `rest`
