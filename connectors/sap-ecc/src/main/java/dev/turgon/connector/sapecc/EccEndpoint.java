@@ -31,6 +31,14 @@ import org.apache.camel.builder.RouteBuilder;
  *   <li>cancel-sales-order: deletes the order (BAPI_SALESORDER_CHANGE,
  *       UPDATEFLAG D); SAP refuses once it has follow-on documents.
  *   <li>get-customer: BAPI_CUSTOMER_GETDETAIL2.
+ *   <li>update-sales-order: sets an order's credit status as SAP holds
+ *       one an integration can set, its delivery block: "review" sets
+ *       creditBlock, "approved" clears it (and leaves any other block).
+ *       BAPI_SALESORDER_CHANGE, with SIMULATION to simulate; the block
+ *       before is read with BAPISDORDER_GETDETAILEDLIST and kept in the
+ *       result. Confirmed by reading it back.
+ *   <li>restore-sales-order: update-sales-order's compensation, putting the
+ *       block back unless the order's block changed since.
  * </ul>
  *
  * Events come from IDocs SAP sends ({@link Idocs}, streamed) or from change
@@ -39,7 +47,7 @@ import org.apache.camel.builder.RouteBuilder;
 final class EccEndpoint extends CamelEndpoint {
     static final List<String> FUNCTIONS = List.of("BAPI_SALESORDER_CREATEFROMDAT2", "BAPI_SALESORDER_GETLIST",
             "BAPI_SALESORDER_GETSTATUS", "BAPI_SALESORDER_CHANGE", "BAPI_TRANSACTION_COMMIT", "BAPI_TRANSACTION_ROLLBACK",
-            "BAPI_CUSTOMER_GETDETAIL2");
+            "BAPI_CUSTOMER_GETDETAIL2", "BAPISDORDER_GETDETAILEDLIST");
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final EccConfig cfg;
@@ -220,6 +228,16 @@ final class EccEndpoint extends CamelEndpoint {
                         .choice()
                             .when(header(MODE).isEqualTo("commit")).process(orders::cancel)
                             .otherwise().process(Orders::unsupported);
+                from("direct:update-sales-order").routeId("update-sales-order")
+                        .choice()
+                            .when(header(MODE).isEqualTo("simulate")).process(orders::simulateBlock)
+                            .when(header(MODE).isEqualTo("confirm")).process(orders::confirmBlock)
+                            .when(header(MODE).isEqualTo("commit")).process(orders::block)
+                            .otherwise().process(Orders::unsupported);
+                from("direct:restore-sales-order").routeId("restore-sales-order")
+                        .choice()
+                            .when(header(MODE).isEqualTo("commit")).process(orders::restoreBlock)
+                            .otherwise().process(Orders::unsupported);
                 from("direct:get-customer").routeId("get-customer")
                         .choice()
                             .when(header(MODE).isEqualTo("read")).process(orders::customer)
@@ -230,7 +248,7 @@ final class EccEndpoint extends CamelEndpoint {
 
     @Override
     public void confirm(String operation, JsonNode result) throws Exception {
-        if (operation.equals("create-sales-order")) {
+        if (operation.equals("create-sales-order") || operation.equals("update-sales-order")) {
             super.confirm(operation, result);
         }
     }
@@ -506,6 +524,116 @@ final class EccEndpoint extends CamelEndpoint {
                 return null;
             });
             ex.getMessage().setBody(JSON.createObjectNode().put("salesOrder", doc).put("deleted", true));
+        }
+
+        /** The order an update names: salesOrder, or id as a plugin's proposal keys it. */
+        static String document(JsonNode o) throws ConnectorException.Invalid {
+            String doc = o == null ? "" : o.path("salesOrder").asText(o.path("id").asText(""));
+            if (doc.isEmpty() || doc.length() > 10) {
+                throw new ConnectorException.Invalid("salesOrder (or id) must name the sales order (at most 10 characters)");
+            }
+            return doc.chars().allMatch(Character::isDigit) ? String.format("%10s", doc).replace(' ', '0') : doc;
+        }
+
+        /** The order's delivery block now; NotFound when SAP has no such order. */
+        String currentBlock(String doc) throws Exception {
+            Map<String, Object> r = rfc.call("BAPISDORDER_GETDETAILEDLIST", Map.of("I_BAPI_VIEW", Map.of("HEADER", "X"),
+                    "SALES_DOCUMENTS", List.of(Map.of("VBELN", doc))));
+            for (Map<String, String> h : Rfc.table(r, "ORDER_HEADERS_OUT")) {
+                if (doc.equals(h.getOrDefault("DOC_NUMBER", "").trim())) {
+                    return h.getOrDefault("DLV_BLOCK", "").trim();
+                }
+            }
+            throw new ConnectorException.NotFound("sales order " + doc + " is not in SAP");
+        }
+
+        /** The block the credit status asks for, given the one the order has. */
+        String target(JsonNode o, String current) throws ConnectorException.Invalid {
+            return switch (o.path("creditStatus").asText("")) {
+                case "review" -> cfg.creditBlock();
+                case "approved" -> current.equals(cfg.creditBlock()) ? "" : current; // another block is someone else's
+                default -> throw new ConnectorException.Invalid("creditStatus must be approved or review");
+            };
+        }
+
+        private Map<String, Object> change(String doc, String block, boolean simulate) {
+            Map<String, Object> p = new LinkedHashMap<>();
+            p.put("SALESDOCUMENT", doc);
+            p.put("ORDER_HEADER_IN", Map.of("DLV_BLOCK", block));
+            p.put("ORDER_HEADER_INX", Map.of("UPDATEFLAG", "U", "DLV_BLOCK", "X"));
+            if (simulate) {
+                p.put("SIMULATION", "X");
+            }
+            return p;
+        }
+
+        void simulateBlock(Exchange ex) throws Exception {
+            JsonNode o = ex.getIn().getBody(JsonNode.class);
+            String doc = document(o), current = currentBlock(doc), next = target(o, current);
+            Map<String, Object> r = rfc.call("BAPI_SALESORDER_CHANGE", change(doc, next, true));
+            Bapi.failOnError(r, "the simulation");
+            ObjectNode out = JSON.createObjectNode().put("salesOrder", doc).put("simulated", true);
+            out.putObject("current").put("deliveryBlock", current);
+            out.putObject("proposed").put("deliveryBlock", next);
+            out.set("messages", Bapi.messages(r));
+            ex.getMessage().setBody(out);
+        }
+
+        void block(Exchange ex) throws Exception {
+            JsonNode o = ex.getIn().getBody(JsonNode.class);
+            String doc = document(o), current = currentBlock(doc), next = target(o, current);
+            if (!next.equals(current)) {
+                setBlock(doc, next);
+            }
+            ObjectNode out = JSON.createObjectNode().put("salesOrder", doc).put("creditStatus", o.path("creditStatus").asText())
+                    .put("deliveryBlock", next);
+            out.putObject("previous").put("deliveryBlock", current);
+            ex.getMessage().setBody(out);
+        }
+
+        private void setBlock(String doc, String block) throws Exception {
+            rfc.session(s -> {
+                Map<String, Object> r = s.call("BAPI_SALESORDER_CHANGE", change(doc, block, false));
+                if (Bapi.hasError(r)) {
+                    s.call("BAPI_TRANSACTION_ROLLBACK", Map.of());
+                    Bapi.failOnError(r, "the delivery block");
+                }
+                Bapi.failOnError(s.call("BAPI_TRANSACTION_COMMIT", Map.of("WAIT", "X")), "the commit");
+                return null;
+            });
+        }
+
+        void confirmBlock(Exchange ex) throws Exception {
+            JsonNode res = ex.getIn().getBody(JsonNode.class);
+            String doc = document(res), want = res.path("deliveryBlock").asText("");
+            String got = currentBlock(doc);
+            if (!got.equals(want)) {
+                throw new ConnectorException.NotFound("sales order " + doc + " has delivery block '" + got + "', not '" + want + "', after the change");
+            }
+            ex.getMessage().setBody(JSON.createObjectNode().put("salesOrder", doc).put("deliveryBlock", got));
+        }
+
+        void restoreBlock(Exchange ex) throws Exception {
+            JsonNode res = ex.getIn().getBody(JsonNode.class);
+            if (res == null || !res.path("previous").has("deliveryBlock")) {
+                throw new ConnectorException.Invalid("restore-sales-order needs the result of update-sales-order");
+            }
+            String doc = document(res), set = res.path("deliveryBlock").asText(""), previous = res.path("previous").path("deliveryBlock").asText("");
+            String current;
+            try {
+                current = currentBlock(doc);
+            } catch (ConnectorException.NotFound e) {
+                ex.getMessage().setBody(JSON.createObjectNode().put("salesOrder", doc).put("alreadyGone", true));
+                return;
+            }
+            ObjectNode out = JSON.createObjectNode().put("salesOrder", doc).put("deliveryBlock", current);
+            if (current.equals(set) && !current.equals(previous)) {
+                setBlock(doc, previous);
+                out.put("deliveryBlock", previous).put("restored", true);
+            } else {
+                out.put("restored", false); // changed since: not ours to undo
+            }
+            ex.getMessage().setBody(out);
         }
 
         void customer(Exchange ex) throws Exception {

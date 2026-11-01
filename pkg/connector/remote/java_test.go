@@ -67,7 +67,7 @@ func TestJavaSidecar(t *testing.T) {
 			t.Fatalf("check %+v", c)
 		}
 	}
-	if !strings.Contains(checks[0].Detail, "sap-ecc 0.5.0") || !strings.Contains(checks[1].Detail, "fake ECC") {
+	if !strings.Contains(checks[0].Detail, "sap-ecc 0.5.1") || !strings.Contains(checks[1].Detail, "fake ECC") {
 		t.Fatalf("checks %+v", checks)
 	}
 
@@ -111,6 +111,17 @@ func TestJavaSidecar(t *testing.T) {
 	}
 	if more, err := src.Poll(ctx, "SalesOrder.Changed", evs[0].Position, 10); err != nil || len(more) != 0 {
 		t.Fatalf("after the cursor %+v %v", more, err)
+	}
+	// The credit status a plugin proposes is the order's delivery block.
+	blocked, err := inst.Commit(ctx, "update-sales-order", "CR-1", json.RawMessage(`{"id":"12000","creditStatus":"review"}`))
+	if err != nil || !strings.Contains(string(blocked), `"deliveryBlock":"01"`) || !strings.Contains(string(blocked), `"previous":{"deliveryBlock":""}`) {
+		t.Fatalf("update-sales-order %s %v", blocked, err)
+	}
+	if err := inst.(writeguard.Confirmer).Confirm(ctx, "update-sales-order", blocked); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := inst.Commit(ctx, "restore-sales-order", "CR-1#compensate", blocked); err != nil || !strings.Contains(string(out), `"restored":true`) {
+		t.Fatalf("restore-sales-order %s %v", out, err)
 	}
 
 	// The sidecar restarts (and its fake ECC forgets everything): the
@@ -233,7 +244,7 @@ func TestJavaSidecarDiscover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cat.Connector != "sap-ecc" || cat.Endpoint != "sap-ecc" || cat.Version != "0.5.0" {
+	if cat.Connector != "sap-ecc" || cat.Endpoint != "sap-ecc" || cat.Version != "0.5.1" {
 		t.Fatalf("catalog %s/%s %s", cat.Endpoint, cat.Connector, cat.Version)
 	}
 	hd, ok := cat.Object("BAPISDHD1")

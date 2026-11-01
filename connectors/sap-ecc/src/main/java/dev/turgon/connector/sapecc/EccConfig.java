@@ -22,6 +22,7 @@ import java.util.TreeMap;
  *     lang: EN
  * salesArea: { salesOrg: "1000", distributionChannel: "10", division: "00" }
  * orderType: TA                  # TA is the standard order (OR with English keys)
+ * creditBlock: "01"              # the delivery block update-sales-order sets on an order to review
  * partnerRole: AG                # the sold-to party (SP with English keys)
  * lookupByPurchaseOrder: true    # find a retried create by its purchase order number
  * idoc:                          # events: IDocs SAP sends to a registered server program
@@ -41,7 +42,7 @@ import java.util.TreeMap;
  */
 public record EccConfig(String provider, Map<String, String> destination, String salesOrg, String distributionChannel,
         String division, String orderType, String partnerRole, boolean lookupByPurchaseOrder, int peakLimit,
-        Map<String, String> server, Map<String, IdocEvent> idocEvents, ChangePointerConfig changePointers) {
+        Map<String, String> server, Map<String, IdocEvent> idocEvents, ChangePointerConfig changePointers, String creditBlock) {
 
     /** Polled change pointer events: each names its message type, and optionally a read that fills "record". */
     public record ChangePointerConfig(int pageRows, long settleSeconds, Map<String, ChangePointerEvent> events) {}
@@ -135,11 +136,15 @@ public record EccConfig(String provider, Map<String, String> destination, String
         if (settle < 0 || settle > 3600) {
             throw new ConnectorException.Invalid("changePointers.settleSeconds must be between 0 and 3600");
         }
+        String creditBlock = c.path("creditBlock").asText("01").trim();
+        if (!creditBlock.matches("[A-Z0-9]{2}")) {
+            throw new ConnectorException.Invalid("creditBlock must be a delivery block (two characters, such as 01; TVLS lists them)");
+        }
         return new EccConfig(c.path("rfc").path("provider").asText(""), new LinkedHashMap<>(dest),
                 area.path("salesOrg").asText("1000"), area.path("distributionChannel").asText("10"),
                 area.path("division").asText("00"), c.path("orderType").asText("TA"), c.path("partnerRole").asText("AG"),
                 c.path("lookupByPurchaseOrder").asBoolean(true), peak, server, events,
-                new ChangePointerConfig(pageRows, settle, cpEvents));
+                new ChangePointerConfig(pageRows, settle, cpEvents), creditBlock);
     }
 
     /** "ashost" -> "jco.client.ashost"; full property names pass through. */

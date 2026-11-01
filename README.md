@@ -592,6 +592,12 @@ Errors are status codes:
   - **cancel-sales-order** is its compensation. It deletes the order through
     `BAPI_SALESORDER_CHANGE`, which SAP refuses once there is a delivery.
   - **get-customer** calls `BAPI_CUSTOMER_GETDETAIL2`.
+  - **update-sales-order** sets an order's credit status as SAP lets an integration set one: as
+    its delivery block. `review` sets `creditBlock` (`01` by default); `approved` clears that
+    block and leaves any other. It goes through `BAPI_SALESORDER_CHANGE`, with `SIMULATION` for
+    the preview. The block it replaced, read with `BAPISDORDER_GETDETAILEDLIST`, is kept in the
+    result. Its compensation **restore-sales-order** puts that block back, unless the order's
+    block changed since. This is what `credit-check`'s proposals do in `eu-distributor-core`.
   - **Events** are the IDocs ECC sends, or change pointers the connector polls (see below).
   - **Messages:** SAP's `RETURN` messages become the rejection's reason, such as
     `V1 462: Sold-to party 0000001002 is blocked for sales`.
@@ -1423,8 +1429,10 @@ Power BI sidecars with their fakes:
 - **Shopify order:** an order delivered by a signed webhook to `/webhooks/commerce/Order.Created`
   became an SAP order too.
 - **credit-check:** it read each order's customer from the ERP slot and decided `review`, since
-  ECC's `get-customer` gives no credit limit. Its proposal was refused, as the verifier warns:
-  `sap-ecc` has no `update-sales-order`.
+  ECC's `get-customer` gives no credit limit. Its proposal went through the write guard as
+  `update-sales-order`, allowed without approval at low risk. It set the order's delivery block
+  to `01`, and the block it replaced (none) was kept for the compensation. `credit.checked` was
+  published.
 
 ```yaml
 # examples/plugins/credit-check.yaml          # examples/recipes/shop-orders-with-credit-check.yaml
