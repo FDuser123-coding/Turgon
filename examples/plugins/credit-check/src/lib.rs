@@ -2,7 +2,8 @@
 // "approved" when the order is within the customer's credit limit and the
 // risk service (api.acme-risk.example) scores the customer 50 or more;
 // "review" otherwise. If the risk service is unavailable, the credit limit
-// decides alone. The outcome is published as credit.checked for other
+// decides alone; a customer the system keeps no credit limit for goes to
+// review. The outcome is published as credit.checked for other
 // plugins (plugin.credit-check.credit.checked).
 //
 // The plugin only reads, calls the one host it is granted and proposes;
@@ -63,16 +64,18 @@ impl Guest for CreditCheck {
         }
         let order = &ev["record"];
         let id = ev["id"].as_str().ok_or("the event has no order id")?;
-        let customer_id = order["customer_id"].as_str().ok_or("the order has no customer_id")?;
-        let net = number(&order["net_value"]).ok_or("the order has no net_value")?;
+        // The model's fields, or a database row's columns for records written before they were sent.
+        let customer_id = order["customerId"].as_str().or(order["customer_id"].as_str()).ok_or("the order has no customerId")?;
+        let net = number(&order["netValue"]).or(number(&order["net_value"])).ok_or("the order has no netValue")?;
 
         let customer = get(&EntityRef { kind: "Customer".into(), id: customer_id.into() })
             .map_err(|e| format!("customer {customer_id}: {}", describe(e)))?;
         let customer: Value = serde_json::from_str(&customer).map_err(|e| format!("customer: {e}"))?;
-        let limit = number(&customer["credit_limit"]).ok_or("the customer has no credit_limit")?;
+        // A system that keeps no credit limit cannot approve on it: a person reviews.
+        let limit = number(&customer["creditLimit"]).or(number(&customer["credit_limit"]));
 
         let score = risk_score(customer_id);
-        let ok = net <= limit && score.map_or(true, |s| s >= 50.0);
+        let ok = limit.map_or(false, |l| net <= l) && score.map_or(true, |s| s >= 50.0);
         let status = if ok { "approved" } else { "review" };
         let patch = json!({ "creditStatus": status }).to_string();
         propose_change(&EntityRef { kind: "SalesOrder".into(), id: id.into() }, &patch)

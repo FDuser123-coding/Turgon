@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -700,11 +701,21 @@ func ConnectionConfig(cat *catalog.Catalog, name string) (ConnectorConfig, error
 }
 
 // wirePlugins gives each logic plugin the operations its grants need, and
-// each write step the plugins subscribed to the event it causes.
+// each write step the plugins subscribed to the event it causes. Where
+// several endpoints serve an entity (a stack whose CRM, ERP and billing
+// all hold customers), a plugin reads from and proposes to the endpoints
+// that write the entities whose events it subscribes to: credit-check,
+// subscribed to model.SalesOrder.created, reads customers from the ERP the
+// orders are created in. Otherwise the first endpoint by name serves.
 func (b *builder) wirePlugins() {
-	pick := func(entity, opName, dir string) (EntityOperation, bool) {
-		ops := b.entityOps[entity]
-		sort.Slice(ops, func(i, j int) bool { return ops[i].endpoint < ops[j].endpoint })
+	pick := func(entity, opName, dir string, preferred map[string]bool) (EntityOperation, bool) {
+		ops := slices.Clone(b.entityOps[entity])
+		sort.Slice(ops, func(i, j int) bool {
+			if pi, pj := preferred[ops[i].endpoint], preferred[ops[j].endpoint]; pi != pj {
+				return pi
+			}
+			return ops[i].endpoint < ops[j].endpoint
+		})
 		for _, o := range ops {
 			if o.op.Name != opName || o.op.Direction != dir {
 				continue
@@ -723,8 +734,16 @@ func (b *builder) wirePlugins() {
 		if d.Type != v1alpha1.PluginLogic || d.Grants.Entities == nil {
 			continue
 		}
+		preferred := map[string]bool{} // the endpoints whose writes cause the plugin's events
+		for _, wf := range b.body.Workflows {
+			for _, st := range wf.Steps {
+				if w := st.Write; w != nil && w.Entity != "" && contains(d.Subscribes, plugin.ModelEvent(w.Entity, w.Operation)) {
+					preferred[w.Endpoint] = true
+				}
+			}
+		}
 		for _, ref := range d.Grants.Entities.Read {
-			if eo, ok := pick(entity(ref), plugin.ReadOperation(entity(ref)), v1alpha1.DirectionRead); ok {
+			if eo, ok := pick(entity(ref), plugin.ReadOperation(entity(ref)), v1alpha1.DirectionRead, preferred); ok {
 				if d.Reads == nil {
 					d.Reads = map[string]EntityOperation{}
 				}
@@ -732,7 +751,7 @@ func (b *builder) wirePlugins() {
 			}
 		}
 		for _, ref := range d.Grants.Entities.Propose {
-			if eo, ok := pick(entity(ref), plugin.ProposeOperation(entity(ref)), v1alpha1.DirectionWrite); ok {
+			if eo, ok := pick(entity(ref), plugin.ProposeOperation(entity(ref)), v1alpha1.DirectionWrite, preferred); ok {
 				if d.Proposals == nil {
 					d.Proposals = map[string]EntityOperation{}
 				}

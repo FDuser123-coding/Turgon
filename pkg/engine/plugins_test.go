@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -71,5 +72,23 @@ func TestRunPluginClassifiesFailures(t *testing.T) {
 	}
 	if err := x.RunPlugin(context.Background(), PluginInput{Plugin: "q"}); err == nil || errType(err) == ErrTypePlugin {
 		t.Fatalf("host failure: %v (want retryable)", err)
+	}
+}
+
+// A model event's record is the document the run wrote, with the system's
+// answer over it: an ERP that answers only with its order number still
+// gives plugins the order's customer and amount.
+func TestModelRecordIsTheDocumentWithTheResult(t *testing.T) {
+	doc := json.RawMessage(`{"customerId":"1000","netValue":349.9,"externalId":"SO-1"}`)
+	got := string(modelRecord(doc, json.RawMessage(`{"salesOrder":"0000012000","id":"0000012000"}`)))
+	if got != `{"customerId":"1000","externalId":"SO-1","id":"0000012000","netValue":349.9,"salesOrder":"0000012000"}` {
+		t.Fatalf("record %s", got)
+	}
+	// The system's values win; a result that is not an object is kept as it is.
+	if got := string(modelRecord(doc, json.RawMessage(`{"customerId":"C-9","net_value":"349.90"}`))); got != `{"customerId":"C-9","externalId":"SO-1","netValue":349.9,"net_value":"349.90"}` {
+		t.Fatalf("record %s", got)
+	}
+	if got := string(modelRecord(doc, json.RawMessage(`"ok"`))); got != `"ok"` {
+		t.Fatalf("record %s", got)
 	}
 }

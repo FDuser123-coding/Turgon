@@ -137,6 +137,23 @@ func TestBlueprintSlotsCarryTheirConnections(t *testing.T) {
 	}
 }
 
+// In a stack whose CRM, ERP, commerce and billing slots all hold
+// customers, credit-check reads them from the ERP its orders are created
+// in, not from the first slot by name (billing).
+func TestBlueprintPluginsReadFromTheSystemTheyReactTo(t *testing.T) {
+	cat, _ := catalog.Load("../../examples")
+	rt := compileNamed(t, cat, "eu-distributor-core")
+	for _, p := range rt.Spec.Plugins {
+		if p.Name == "credit-check" {
+			if got := p.Reads["Customer"]; got.Endpoint != "erp" || got.Operation != "get-customer" {
+				t.Fatalf("credit-check reads customers with %+v", got)
+			}
+			return
+		}
+	}
+	t.Fatal("no credit-check in the stack")
+}
+
 func TestCompileRefusesBlockedRecipe(t *testing.T) {
 	cat, _ := catalog.Load("../../examples")
 	obj, _ := cat.Find("shopify-orders-to-sap") // slot-based; not deployable alone
