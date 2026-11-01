@@ -112,6 +112,13 @@ config:
 - **`turgon check`** asks the Pub/Sub API whether each topic exists and whether the
   integration user may subscribe to it.
 
+Measured against a Temporal 1.28 dev server and the fake org, with two workers:
+- **Normal run:** a won deal's change event started its run at once. After approval it became an
+  ERP order.
+- **Failover:** the worker holding the subscription was killed with `kill -9`, and a deal was won
+  right after. The standby worker took the subscription over and started that deal's run within
+  seconds.
+
 **Managed subscriptions.** With `managed: <DeveloperName>` on a subscription, Turgon subscribes
 through a managed event subscription (Pub/Sub API `ManagedSubscribe`), and Salesforce keeps the
 position. Each batch's replay ID is committed only after the inbox has stored the batch. A worker
