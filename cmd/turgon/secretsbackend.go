@@ -25,8 +25,9 @@ type secretBackend interface {
 	// Missing says how to provide a reference that could not be read.
 	Missing(ref string) string
 	// Fingerprints reads every reference now (not from a cache) and
-	// returns a hash of each value, to notice rotations.
-	Fingerprints(ctx context.Context, refs []string) (fingerprints, error)
+	// returns a hash of each value, to notice rotations. References in
+	// optional that cannot be read are recorded as absent.
+	Fingerprints(ctx context.Context, refs []string, optional map[string]bool) (fingerprints, error)
 	// Rotates reports whether values can change while Turgon runs.
 	Rotates() bool
 }
@@ -46,10 +47,18 @@ func (f fingerprints) changed(now fingerprints) []string {
 	return out
 }
 
-func fingerprint(ctx context.Context, r connector.SecretResolver, refs []string) (fingerprints, error) {
+// absent is the fingerprint of an optional secret that is not set; it is
+// not a hash, so no value has it. One set later counts as a change.
+const absent = "absent"
+
+func fingerprint(ctx context.Context, r connector.SecretResolver, refs []string, optional map[string]bool) (fingerprints, error) {
 	out := fingerprints{}
 	for _, ref := range refs {
 		v, err := r.Resolve(ctx, ref)
+		if err != nil && optional[ref] {
+			out[ref] = absent
+			continue
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -104,8 +113,8 @@ type envBackend struct{ connector.EnvSecrets }
 
 // Environment variables cannot change inside a running process.
 func (envBackend) Rotates() bool { return false }
-func (b envBackend) Fingerprints(ctx context.Context, refs []string) (fingerprints, error) {
-	return fingerprint(ctx, b, refs)
+func (b envBackend) Fingerprints(ctx context.Context, refs []string, optional map[string]bool) (fingerprints, error) {
+	return fingerprint(ctx, b, refs, optional)
 }
 
 func (envBackend) Where(ref string) string { return connector.EnvName(ref) }
@@ -116,9 +125,9 @@ func (envBackend) Missing(ref string) string {
 type openBaoBackend struct{ *secrets.OpenBao }
 
 func (openBaoBackend) Rotates() bool { return true }
-func (b openBaoBackend) Fingerprints(ctx context.Context, refs []string) (fingerprints, error) {
+func (b openBaoBackend) Fingerprints(ctx context.Context, refs []string, optional map[string]bool) (fingerprints, error) {
 	b.Forget() // read what OpenBao holds now, not the cache
-	return fingerprint(ctx, b, refs)
+	return fingerprint(ctx, b, refs, optional)
 }
 
 func (b openBaoBackend) Missing(ref string) string {
@@ -128,9 +137,9 @@ func (b openBaoBackend) Missing(ref string) string {
 type cloudBackend struct{ *secrets.Cloud }
 
 func (cloudBackend) Rotates() bool { return true }
-func (b cloudBackend) Fingerprints(ctx context.Context, refs []string) (fingerprints, error) {
+func (b cloudBackend) Fingerprints(ctx context.Context, refs []string, optional map[string]bool) (fingerprints, error) {
 	b.Forget()
-	return fingerprint(ctx, b, refs)
+	return fingerprint(ctx, b, refs, optional)
 }
 func (b cloudBackend) Missing(ref string) string {
 	return fmt.Sprintf("Put the secret in %s, readable by the identity Turgon runs as.", b.Where(ref))
@@ -157,6 +166,33 @@ func specSecretRefs(spec *compiler.RuntimeSpec) []string {
 		out = append(out, r)
 	}
 	sort.Strings(out)
+	return out
+}
+
+// optionalSecretRefs are the references only connector configuration
+// uses (webhook signing secrets, an event broker a spec may not use):
+// connectors say themselves when they need one that is not set, so a
+// missing one does not stop a run. Connection and plugin secrets are
+// always required.
+func optionalSecretRefs(spec *compiler.RuntimeSpec) map[string]bool {
+	required, out := map[string]bool{}, map[string]bool{}
+	for _, c := range spec.Spec.Connectors {
+		if c.SecretRef != "" {
+			required[c.SecretRef] = true
+		}
+	}
+	for _, p := range spec.Spec.Plugins {
+		for _, ref := range p.Secrets {
+			required[ref] = true
+		}
+	}
+	for _, c := range spec.Spec.Connectors {
+		for _, ref := range connector.ConfigSecretRefs(c.Config) {
+			if !required[ref] {
+				out[ref] = true
+			}
+		}
+	}
 	return out
 }
 

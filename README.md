@@ -562,12 +562,24 @@ sed -i 's|    baseURL: https://my300000-api.s4hana.cloud.sap|    baseURL: http:/
 bin/turgon compile -c my-catalog shopify-store-orders-to-s4 -o s4.json
 export TURGON_SECRET_S4_PROD_COMM_USER=TURGON_COMM:demo
 bin/turgon check -s s4.json                                     # services, entity sets, properties
+bin/turgon xref set --entity Customer --system shopify-store --source lin@example.com --master 17100001
 bin/turgon run -s s4.json &
-echo "ada@example.com 310.00" >> shop.cmds
+echo "lin@example.com 420.00" >> shop.cmds
 ```
 
 The approval shows SAP's simulated order. Once approved, the fake prints the new sales order, and
-the Shopify order's note gets its number.
+the Shopify order's note gets its number. The master ID of a customer is its ERP number, so a
+shop customer already linked for another ERP (`ada@example.com` to ECC's 1001 above) is refused
+by S/4HANA with `Sold-to party 1001 not maintained for sales area 1710 10 00`. The fake knows
+C-100, C-200 and 17100001.
+
+Measured against a Temporal 1.28 dev server and the fake: a Shopify order passed SAP's
+simulation, was approved, and became sales order 35466650 for sold-to party 17100001; the
+Shopify order's note was set to `ERP order 35466650`. As with NetSuite, SAP priced the order
+from its own conditions (10.00 EUR), not the shop's 420.00. The run started without the Event
+Mesh secret: secrets that only connector configuration uses (webhook signing secrets, an event
+broker) may be unset. A missing one is recorded as absent, and if it is set later, secret
+rotation notices it and reconnects.
 
 ### SAP ECC: BAPIs from a Camel/Java connector
 
