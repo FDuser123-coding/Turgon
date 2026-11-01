@@ -1154,6 +1154,17 @@ segments and format extension (`/orders/{{orderId}}.json` is `/orders`).
   - **How long it lasts:** the field stays required in later snapshots, because a sample can never
     show that it stopped being required.
 
+Measured against a Temporal 1.28 dev server with `shopify-store-orders-to-s4`, the S/4HANA fake
+and the Shopify fake:
+- A first order went through, and `turgon discover --endpoint shopify-store` stored a snapshot.
+- `echo "require tags" >> shop.cmds` made the fake refuse order updates without `tags`, answering
+  `422 {"errors":{"tags":["can't be blank"]}}`.
+- The next order's run created the S/4HANA order, had its note update refused, and compensated by
+  deleting the S/4HANA order.
+- The next discovery reported
+  `BREAKING field-added Order.Created.tags (required: operation update-order was refused without it on 2026-11-01); used by operation update-order (writes)`,
+  and `--fail-on-breaking` exited non-zero. The discovery after that found the snapshot unchanged.
+
 `turgon discover --catalog` (`-c`) also counts the mappings of every recipe in a catalog, compiled
 or not, and so does the console. A recipe waiting for mapping review does not compile yet, but its
 mappings read fields all the same.

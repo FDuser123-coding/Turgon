@@ -1,6 +1,9 @@
 package rest
 
 import (
+	"context"
+	"encoding/json"
+	"fmt"
 	"reflect"
 	"testing"
 	"time"
@@ -81,6 +84,9 @@ func TestLearnRefusalsMarksTheWrittenObject(t *testing.T) {
 	for _, ch := range meta.Compare(before, cat) {
 		if ch.Breaks() {
 			breaking = append(breaking, ch.String())
+			if !reflect.DeepEqual(ch.UsedBy, []string{"operation create-customer (writes)"}) {
+				t.Errorf("%s used by %q", ch, ch.UsedBy)
+			}
 		}
 	}
 	if !reflect.DeepEqual(breaking, []string{
@@ -88,5 +94,29 @@ func TestLearnRefusalsMarksTheWrittenObject(t *testing.T) {
 		"field-added /customers.taxId (required: operation create-customer was refused without it on 2026-11-01)",
 	}) {
 		t.Fatalf("breaking: %v", breaking)
+	}
+}
+
+// A store that starts requiring tags refuses the note update the way
+// Shopify does; the refusal names tags, not the request's order wrapper.
+func TestShopifyRefusalNamesTheMissingField(t *testing.T) {
+	shop, c := newShop(t)
+	id := shop.AddOrder(order(1001))
+	shop.Require("tags")
+	_, err := c.Commit(context.Background(), "update-order", "k", json.RawMessage(fmt.Sprintf(`{"orderId": %d, "note": "x"}`, id)))
+	if err == nil {
+		t.Fatal("the update without tags was taken")
+	}
+	if got := requiredFields(err.Error()); !reflect.DeepEqual(got, []string{"tags"}) {
+		t.Fatalf("%v from %v", got, err)
+	}
+	cat, err := c.Discover(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.LearnRefusals(&cat, []meta.Refusal{{Operation: "update-order", Error: "writeguard: commit shop.update-order: write payload invalid: PUT /orders/1.json: HTTP 422: {\"errors\":{\"tags\":[\"can't be blank\"]}}", At: time.Now()}})
+	o, _ := cat.Object(cat.Events["Order.Created"])
+	if f, ok := o.Field("tags"); !ok || !f.Required {
+		t.Fatalf("%s: %+v", o.Name, o.Fields)
 	}
 }
