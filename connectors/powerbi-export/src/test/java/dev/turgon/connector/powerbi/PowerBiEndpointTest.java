@@ -55,7 +55,7 @@ class PowerBiEndpointTest {
     }
 
     private Endpoint bind(JsonNode config, String secret) throws Exception {
-        return new PowerBiConnector().bind(new EndpointConfig("powerbi-sales", "powerbi-export", "1.2.0", config, secret, Map.of()));
+        return new PowerBiConnector().bind(new EndpointConfig("powerbi-sales", "powerbi-export", "1.3.0", config, secret, Map.of()));
     }
 
     private Endpoint bind() throws Exception {
@@ -338,5 +338,26 @@ class PowerBiEndpointTest {
         assertThrows(ConnectorException.Invalid.class, () -> bind(both, "s3cret"));
         ObjectNode retention = createConfig("x").put("retention", "forever");
         assertThrows(ConnectorException.Invalid.class, () -> bind(retention, "s3cret"));
+    }
+
+    @Test
+    void updateTablesSetsAnExistingTablesColumnsOnTheFirstWrite() throws Exception {
+        ObjectNode c = config().put("updateTables", true);
+        ((ObjectNode) c.at("/tables/SalesOrders/columns")).put("Currency", "String");
+        String row = "{\"OrderId\": \"SO-2\", \"NetValue\": 10, \"Currency\": \"EUR\"}";
+        // Without updateTables the table keeps its columns and refuses the new one.
+        try (Endpoint e = bind(c.deepCopy().put("updateTables", false), "s3cret")) {
+            assertThrows(ConnectorException.Invalid.class, () -> e.commit("push-rows", "K-0", json(row)));
+        }
+        try (Endpoint e = bind(c, "s3cret")) {
+            CheckResult t = e.check().stream().filter(r -> r.name().equals("table SalesOrders")).findFirst().orElseThrow();
+            assertTrue(t.ok() && t.detail().contains("the first write sets the table's columns"), t.toString());
+            assertEquals(COLUMNS, pbi.columns("Sales", "SalesOrders"), "a check changes nothing");
+            e.commit("push-rows", "K-1", json(row));
+            Set<String> want = new LinkedHashSet<>(COLUMNS);
+            want.add("Currency");
+            assertEquals(want, pbi.columns("Sales", "SalesOrders"));
+            assertEquals("EUR", pbi.rows("SalesOrders").getFirst().path("Currency").asText());
+        }
     }
 }

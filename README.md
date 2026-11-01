@@ -892,6 +892,18 @@ and adds any configured tables it lacks:
 - **Existing tables:** a table that already exists is left as it is, since Power BI does not list
   a push dataset's columns to compare.
 
+Columns are added or removed with `updateTables: true` (connector 1.3), with or without
+`create`:
+- **What it does:** the first write sets each configured table that exists to the configured
+  columns, through Push Datasets - PutTable. A column added to the config is added to the table,
+  and one taken out is removed.
+- **What `turgon check` shows:** each such table, saying the first write will set its columns.
+  The check itself changes nothing.
+- **Existing rows:** Microsoft's reference does not say what happens to the rows already in the
+  table. Try it on a copy of the dataset first. In the fake, the rows stay.
+- **Turning it off:** take the option out again once the change is made, so a later edit to the
+  config does not change the table by accident.
+
 Measured end to end against a Temporal 1.28 dev server, with the sidecar and the fake: the
 connection named `datasetName: Turgon Sales Live` with `create: true`. `turgon check` said the
 first write would create the dataset. A web-shop order put in the outbox then started its run,
@@ -2136,7 +2148,7 @@ tested with records built as Confluent's converters build them, not yet against 
 and Tooling APIs, not yet against a real org. The Camel/Java connectors are SAP ECC, Power BI, Shopify and Stripe. SAP ECC is
 tested against a fake ECC and a JCo stand-in, not yet against a real SAP system or gateway. It reads
 IDocs as SAP pushes them and polls change pointers through `RFC_READ_TABLE`. Power BI is tested against a fake Entra and push
-dataset API, not yet against a real tenant; it creates push datasets and missing tables, but does
-not change the columns of an existing table. Shopify is tested against a fake GraphQL Admin API, not yet against a real store, and its
+dataset API, not yet against a real tenant; it creates push datasets and missing tables, and with
+`updateTables` sets an existing table's columns, without knowing what Power BI does to the rows already there. Shopify is tested against a fake GraphQL Admin API, not yet against a real store, and its
 webhooks only with deliveries signed in the tests. The `stripe` connector is tested against a
 fake Stripe, not yet against a real account; its webhooks likewise.
