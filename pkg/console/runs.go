@@ -17,6 +17,7 @@ import (
 
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/engine"
+	"github.com/fduser123-coding/turgon/pkg/meta"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
 )
 
@@ -41,6 +42,9 @@ type RunDetail struct {
 	Result      *engine.RunResult   `json:"result,omitempty"`
 	Failure     string              `json:"failure,omitempty"`
 	FailureType string              `json:"failureType,omitempty"`
+	// MissingFields are the fields a refused write's system said were
+	// missing (see meta.RequiredFields).
+	MissingFields []string `json:"missingFields,omitempty"`
 }
 
 // Runs is what the console needs from the workflow engine.
@@ -169,25 +173,38 @@ func (t TemporalRuns) Get(ctx context.Context, id string) (RunDetail, error) {
 			}
 		}
 		if a := ev.GetWorkflowExecutionFailedEventAttributes(); a != nil {
-			// Temporal wraps the cause ("activity error"); the application
-			// error with its type and message is the innermost useful one.
 			// Decoding goes through the failure converter: with payload
 			// encryption, messages are encrypted too.
-			for e := engine.FailureConverter().FailureToError(a.GetFailure()); e != nil; e = errors.Unwrap(e) {
-				var app *temporal.ApplicationError
-				if errors.As(e, &app) && app == e && app.Type() != "" {
-					d.FailureType, d.Failure = app.Type(), app.Message()
-					// Some failures keep what they quote from records in
-					// their details, which only Turgon can decrypt.
-					var detail string
-					if app.HasDetails() && app.Details(&detail) == nil && detail != "" {
-						d.Failure += ": " + detail
-					}
-				} else if d.Failure == "" {
-					d.Failure = e.Error()
-				}
-			}
+			d.FailureType, d.Failure = describeFailure(engine.FailureConverter().FailureToError(a.GetFailure()))
 		}
 	}
+	if d.FailureType == engine.ErrTypeInvalid {
+		d.MissingFields = meta.RequiredFields(d.Failure)
+	}
 	return d, nil
+}
+
+// describeFailure is a run's failure as people read it. Temporal wraps the
+// cause ("activity error"): the type is Turgon's own application error's
+// (TurgonInvalid), not that of a Go error wrapped inside it (wrapError),
+// and the message is the innermost, most specific one.
+func describeFailure(err error) (typ, msg string) {
+	for e := err; e != nil; e = errors.Unwrap(e) {
+		var app *temporal.ApplicationError
+		if errors.As(e, &app) && app == e && app.Type() != "" {
+			if !strings.HasPrefix(typ, "Turgon") {
+				typ = app.Type()
+			}
+			msg = app.Message()
+			// Some failures keep what they quote from records in their
+			// details, which only Turgon can decrypt.
+			var detail string
+			if app.HasDetails() && app.Details(&detail) == nil && detail != "" {
+				msg += ": " + detail
+			}
+		} else if msg == "" {
+			msg = e.Error()
+		}
+	}
+	return typ, msg
 }

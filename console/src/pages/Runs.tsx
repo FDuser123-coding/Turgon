@@ -88,6 +88,12 @@ export function RunDetail({ id, user }: { id: string; user: User }) {
           {run.failure && (
             <div className="banner banner-bad">
               <strong>{run.failureType ?? "Failed"}</strong>: {run.failure}
+              {run.missingFields?.length ? (
+                <p>
+                  The system requires {run.missingFields.join(", ")}, which the write did not send. Map{" "}
+                  {run.missingFields.length > 1 ? "them" : "it"} in the recipe, then retry the run with the corrected spec.
+                </p>
+              ) : null}
             </div>
           )}
           {retryable(run.status) && <Retry id={id} user={user} onDone={refresh} />}

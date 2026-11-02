@@ -281,7 +281,9 @@ function ObjectCard({ object: o, filter, usedOnly }: { object: MetaObject; filte
                   </td>
                   <td className="mono small">{f.type}</td>
                   <td className="small">{f.length || ""}</td>
-                  <td className="small">{flags(f).join(", ")}</td>
+                  <td className="small" title={f.requiredBy}>
+                    {flags(f).join(", ")}
+                  </td>
                   <td className="small">{f.usedBy?.join(", ") ?? ""}</td>
                 </tr>
               ))}

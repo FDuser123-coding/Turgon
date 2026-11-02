@@ -1291,7 +1291,8 @@ The other pages are:
 - the approval queue: each pending write with its dry-run preview, the reasons policy asked for
   a person, and approve or reject with a note that goes into the audit log;
 - the data-steward queue;
-- runs, with their writes and failures;
+- runs, with their writes and failures. A write the system refused names the fields it said were
+  missing (`The system requires tags, which the write did not send`), with what to do next;
 - the audit logs, with live chain verification;
 - verifier reports for the catalog, including the mapping review queue;
 - the metadata graph, with what each system holds and what changed (see `turgon discover`).
