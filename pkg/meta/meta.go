@@ -501,9 +501,13 @@ func Annotate(changes []Change, usage, creators map[string][]string) []Change {
 		}
 		if ch.Breaking && (ch.Kind == FieldAdded || ch.Kind == BecameRequired) {
 			for _, by := range creators[ch.Object] {
-				if !slices.Contains(ch.UsedBy, by) {
-					ch.UsedBy = append(ch.UsedBy, by+" (writes)")
+				if slices.Contains(ch.UsedBy, by) {
+					continue
 				}
+				if !strings.HasSuffix(by, " (writes)") { // a sampled REST write already says so
+					by += " (writes)"
+				}
+				ch.UsedBy = append(ch.UsedBy, by)
 			}
 		}
 		sort.Strings(ch.UsedBy)

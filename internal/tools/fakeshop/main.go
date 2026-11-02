@@ -1,6 +1,8 @@
 // Command fakeshop runs the test fake of the Shopify Admin REST API for
 // local demos. It accepts new orders on stdin, one "<email> <amount>" per
-// line, and prints each order's note when it changes.
+// line, and prints each order's note when it changes. "require <field>"
+// makes order updates without that field fail with 422, as Shopify answers
+// a validation error.
 package main
 
 import (
@@ -52,8 +54,14 @@ func main() {
 	in := bufio.NewScanner(os.Stdin)
 	for n := 1001; in.Scan(); n++ {
 		f := strings.Fields(in.Text())
+		if len(f) == 2 && f[0] == "require" {
+			shop.Require(f[1])
+			fmt.Fprintf(os.Stderr, "order updates now need %s\n", f[1])
+			n--
+			continue
+		}
 		if len(f) != 2 {
-			fmt.Fprintln(os.Stderr, "usage: <email> <amount>")
+			fmt.Fprintln(os.Stderr, "usage: <email> <amount> | require <field>")
 			continue
 		}
 		if _, err := strconv.ParseFloat(f[1], 64); err != nil {

@@ -33,6 +33,8 @@ type Shop struct {
 	// FailUpdates makes order updates fail with 422, as when Shopify
 	// rejects a field.
 	FailUpdates bool
+	// required are fields an order update must send (see Require).
+	required []string
 	// Requests counts requests by "METHOD path".
 	Requests map[string]int
 	// DropWebhooks skips webhook deliveries, as when Shopify gives up on
@@ -44,6 +46,15 @@ type Shop struct {
 	webhookURL, webhookSecret string
 
 	srv *httptest.Server
+}
+
+// Require makes order updates without field fail with 422, the way
+// Shopify answers a validation error ({"errors": {"tags": ["can't be
+// blank"]}}), as when a store's app or settings start requiring it.
+func (s *Shop) Require(field string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.required = append(s.required, field)
 }
 
 // SendWebhooks makes the store post each new order to url as an
@@ -219,6 +230,16 @@ func (s *Shop) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Order == nil {
 				write(w, http.StatusBadRequest, map[string]any{"errors": map[string]any{"order": "Required parameter missing or invalid"}})
+				return
+			}
+			blank := map[string]any{}
+			for _, f := range s.required {
+				if v, ok := body.Order[f]; !ok || v == nil || v == "" {
+					blank[f] = []string{"can't be blank"}
+				}
+			}
+			if len(blank) > 0 {
+				write(w, http.StatusUnprocessableEntity, map[string]any{"errors": blank})
 				return
 			}
 			for k, v := range body.Order {
