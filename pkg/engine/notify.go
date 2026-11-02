@@ -11,6 +11,8 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/fduser123-coding/turgon/pkg/compiler"
+	"github.com/fduser123-coding/turgon/pkg/meta"
 	"github.com/fduser123-coding/turgon/pkg/notify"
 )
 
@@ -116,6 +118,38 @@ func compensationFailed(step, stepErr string, undo []string) notify.Notification
 		Text:  "A step failed and undoing the writes before it failed too, so the systems disagree. An operator must reconcile them.",
 		Facts: notify.SortedFacts(map[string]string{"Failed step": step, "Step error": clip(stepErr), "Undo errors": clip(strings.Join(undo, "; "))}),
 	}
+}
+
+// notifyRefusedVersion gates the notification of a refused write, which
+// runs that failed before it existed did not send.
+const notifyRefusedVersion = "notify-refused"
+
+// writeRefused tells an operator that a write was refused as invalid (by
+// the system, or by Turgon's own validation): retrying cannot help until
+// the mapping, the recipe or the record changes. The fields a refusal says
+// were missing are named, their values never are, so the error itself
+// stays in the console.
+func writeRefused(step string, w *compiler.WriteConfig, err error, undone int) (notify.Notification, bool) {
+	var app *temporal.ApplicationError
+	if w == nil || !errors.As(err, &app) || app.Type() != ErrTypeInvalid {
+		return notify.Notification{}, false
+	}
+	facts := map[string]string{"Target": w.Endpoint, "Operation": w.Operation, "Step": step}
+	text := "The write was refused as invalid, so the run stopped."
+	if fields := meta.RequiredFields(cause(err)); len(fields) > 0 {
+		facts["Missing fields"] = strings.Join(fields, ", ")
+		text = "The system refused the write because fields it requires were missing, so the run stopped."
+	}
+	if undone > 0 {
+		text += fmt.Sprintf(" The %d write(s) before it were undone.", undone)
+	}
+	text += " Fix the mapping or the record, then retry the run (with the corrected spec, if the mapping changed)."
+	return notify.Notification{
+		Kind: notify.WriteRefused, Step: step,
+		Title: fmt.Sprintf("Write refused: %s on %s", w.Operation, w.Endpoint),
+		Text:  text,
+		Facts: notify.SortedFacts(facts),
+	}, true
 }
 
 // cause is an activity error's own message, without Temporal's wrapping.
