@@ -30,6 +30,7 @@ const (
 	ApprovalTimedOut   = "approval.timed-out"
 	StewardNeeded      = "steward.needed"
 	CompensationFailed = "compensation.failed"
+	WriteRefused       = "write.refused"
 )
 
 // Notification is one message about one run.

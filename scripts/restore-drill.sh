@@ -30,7 +30,12 @@ echo "dump: $(wc -c < "$dump") bytes"
 
 echo "== restore into $scratch"
 psql -q "$admin" -c "DROP DATABASE IF EXISTS \"$scratch\"" -c "CREATE DATABASE \"$scratch\""
-pg_restore --no-owner --exit-on-error --dbname="$dst" "$dump"
+# pg_restore writes the SQL and psql applies it, stopping at the first
+# error. A client newer than the server (pg_restore 17 or later against a
+# Postgres 16 server) sets parameters the server does not know
+# (transaction_timeout), which are dropped.
+pg_restore --no-owner --file=- "$dump" | sed -e '/^SET transaction_timeout = /d' |
+  psql -q -X -v ON_ERROR_STOP=1 --dbname="$dst" >/dev/null
 
 echo "== audit chain"
 before=$("$turgon" audit verify --database-url "$src")

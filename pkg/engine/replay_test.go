@@ -15,7 +15,9 @@ import (
 //     existed, one finished and one waiting for approval;
 //   - new-completed, new-steward: runs that sent notifications;
 //   - local-steps-completed: map and resolve steps as local activities;
-//   - plugins-completed: a logic plugin run after the write committed.
+//   - plugins-completed: a logic plugin run after the write committed;
+//   - old-refused, new-refused: a write the system refused, before and
+//     after refused writes were notified.
 //
 // Record a new one with `temporal workflow show -w <id> -o json`.
 func TestRecordedRunsReplay(t *testing.T) {

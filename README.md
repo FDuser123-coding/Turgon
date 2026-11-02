@@ -1255,6 +1255,7 @@ Workers tell people when a run needs them, so nobody has to watch the console:
 | A write waits for approval (a recipe's, or one an agent asked for: the message names the agent and the user it acts for) | an approver, before the deadline shown | the run |
 | Nobody decided in time (the write was rejected) | an operator, who retries the run to ask again | the run |
 | A record matches no master record | a data steward | the steward queue |
+| A system refused a write as invalid (the message names the fields the refusal says were missing, and says whether the earlier writes were undone) | an operator, who fixes the mapping or the record and retries the run | the run |
 | A step failed and its earlier writes could not be undone | an operator, to reconcile | the run |
 
 Channels are set with environment variables, because webhook URLs are credentials:

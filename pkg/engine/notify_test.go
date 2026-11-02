@@ -173,3 +173,39 @@ func TestApproversAreToldAboutAgentWrites(t *testing.T) {
 		t.Fatalf("%+v", n)
 	}
 }
+
+// A store that starts requiring tags refuses the note update: the operator
+// is told which write, what was missing and that the ERP order was undone,
+// without the record's values.
+func TestOperatorsAreToldOfARefusedWrite(t *testing.T) {
+	f, shop, _ := newShopifyFixture(t)
+	rec := f.listen()
+	shop.Require("tags")
+	if _, err, _ := f.run(f.dispatch()[0], approve("03-write")); errType(err) != ErrTypeInvalid {
+		t.Fatalf("err = %v", err)
+	}
+	// The ERP order was approved first.
+	if rec.kinds() != notify.ApprovalPending+","+notify.WriteRefused {
+		t.Fatalf("sent %s", rec.kinds())
+	}
+	n := rec.sent[1]
+	if n.Title != "Write refused: update-order on shopify-store" || n.Step != "05-write" || fact(n, "Missing fields") != "tags" ||
+		!strings.Contains(n.Text, "The 1 write(s) before it were undone.") || !strings.Contains(n.Text, "retry the run") {
+		t.Fatalf("%+v", n)
+	}
+	if b, _ := json.Marshal(n); strings.Contains(strings.ToLower(string(b)), "ada@") || strings.Contains(string(b), "can't be blank") {
+		t.Fatalf("values or the raw error in a notification: %s", b)
+	}
+}
+
+// A refusal that names no missing field still tells the operator.
+func TestARefusalWithoutMissingFieldsIsToldToo(t *testing.T) {
+	f, shop, _ := newShopifyFixture(t)
+	rec := f.listen()
+	shop.FailUpdates = true
+	_, _, _ = f.run(f.dispatch()[0], approve("03-write"))
+	if rec.kinds() != notify.ApprovalPending+","+notify.WriteRefused || fact(rec.sent[1], "Missing fields") != "" ||
+		!strings.HasPrefix(rec.sent[1].Text, "The write was refused as invalid") {
+		t.Fatalf("%+v", rec.sent)
+	}
+}

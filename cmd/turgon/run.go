@@ -382,7 +382,7 @@ func runCmd() *cobra.Command {
 				for _, ch := range hub.Channels {
 					names = append(names, ch.Name())
 				}
-				fmt.Fprintf(out, "turgon: notifying %s about approvals, steward work and failed compensations\n", strings.Join(names, ", "))
+				fmt.Fprintf(out, "turgon: notifying %s about approvals, steward work, refused writes and failed compensations\n", strings.Join(names, ", "))
 			}
 			for ep, events := range rt.Streams {
 				for ev := range events {

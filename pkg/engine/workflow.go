@@ -11,6 +11,7 @@ import (
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/policy"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
 )
@@ -73,11 +74,26 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 	var result RunResult
 	var done []committedWrite
 	failedStep := ""
+	failedWrite := func() *compiler.WriteConfig {
+		for _, st := range in.Workflow.Steps {
+			if st.Name == failedStep {
+				return st.Write
+			}
+		}
+		return nil
+	}
+	refused := func(err error, undone int) {
+		if n, ok := writeRefused(failedStep, failedWrite(), err, undone); ok &&
+			workflow.GetVersion(ctx, notifyRefusedVersion, workflow.DefaultVersion, 1) == 1 {
+			tell(ctx, in.Workflow.Name, n)
+		}
+	}
 	fail := func(err error) (RunResult, error) {
 		if n, ok := stewardNeeded(err); ok {
 			tell(ctx, in.Workflow.Name, n)
 		}
 		if len(done) == 0 {
+			refused(err, 0)
 			return result, err
 		}
 		logger.Warn("step failed; compensating committed writes", "error", err, "writes", len(done))
@@ -93,6 +109,7 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 		}
 		if len(errs) == 0 {
 			// Every write was undone: report the step's own failure.
+			refused(err, len(done))
 			return result, err
 		}
 		// Some writes could not be undone; an operator must act.
