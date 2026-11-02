@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -177,4 +178,47 @@ func TestResolveWithSplink(t *testing.T) {
 			t.Fatalf("got %v", err)
 		}
 	})
+}
+
+// A resolve step can read the reference from, and set the master ID in,
+// fields of its own naming.
+func TestResolveNamesItsFields(t *testing.T) {
+	in := ResolveInput{
+		Config: compiler.ResolveConfig{Entity: "model.Customer", Strategy: v1alpha1.StrategyProbabilistic, AutoMatchAbove: 0.8,
+			Match: []v1alpha1.MatchField{{Field: "buyerEmail", Kind: v1alpha1.MatchEmail}, {Field: "buyerEmail", Kind: v1alpha1.MatchDomain}},
+			Ref:   "buyerEmail", Into: "soldTo"},
+		System: "marketplace",
+		Doc:    map[string]any{"buyerEmail": "r7-1@relay.marketplace.example"},
+	}
+	out, err := (&Activities{Resolver: &matchResolver{}}).Resolve(context.Background(), in)
+	if err != nil || out["soldTo"] != "C-7" || out["customerId"] != nil {
+		t.Fatalf("%v %v", out, err)
+	}
+	in.Doc = map[string]any{"customerRef": "r7-1@relay.marketplace.example"}
+	if _, err := (&Activities{Resolver: &matchResolver{}}).Resolve(context.Background(), in); err == nil || !strings.Contains(err.Error(), "document has no buyerEmail to resolve") {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestAmountAt(t *testing.T) {
+	doc := map[string]any{"netValue": 5.0, "totals": map[string]any{"net": json.Number("1250.50"), "text": "310.00", "bad": "n/a"}}
+	for path, want := range map[string]float64{"netValue": 5, "totals.net": 1250.5, "totals.text": 310, "totals.bad": 0, "totals.none": 0, "netValue.x": 0, "missing": 0} {
+		if got := AmountAt(doc, path); got != want {
+			t.Errorf("%s: %v, want %v", path, got, want)
+		}
+	}
+}
+
+// A write that names its amount field is weighed by it; one that does not
+// keeps netValue, amount or totalAmount.
+func TestWritesAreWeighedByTheirAmountField(t *testing.T) {
+	in := PrepareInput{Workflow: "w", Step: "03-write", Config: compiler.WriteConfig{Endpoint: "erp", Operation: "create-sales-order", IdempotencyKey: "k"},
+		Doc: map[string]any{"netValue": 10.0, "totals": map[string]any{"gross": "1220.00"}}}
+	if req, err := buildRequest(in); err != nil || req.Amount != 10 {
+		t.Fatalf("default: %v %v", req.Amount, err)
+	}
+	in.Config.Amount = "totals.gross"
+	if req, err := buildRequest(in); err != nil || req.Amount != 1220 {
+		t.Fatalf("named: %v %v", req.Amount, err)
+	}
 }

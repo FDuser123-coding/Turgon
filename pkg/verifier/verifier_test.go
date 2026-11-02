@@ -396,3 +396,28 @@ func TestConnectionLimits(t *testing.T) {
 		}
 	}
 }
+
+// A resolve step reads the reference a preceding mapping must set, and a
+// write's amount must be a field the document has: either mistake would
+// fail every run, or let every write past the approval thresholds.
+func TestResolveAndAmountFieldsMustBeMapped(t *testing.T) {
+	cat := load(t)
+	r := recipe(t, cat, "salesforce-won-deals-to-sap-orders")
+	if rep := New(cat, Options{}).Recipe(r); len(findings(rep, SeverityError, "resolve reads")) != 0 || len(findings(rep, SeverityError, "amount is read")) != 0 {
+		t.Fatalf("the default fields flagged: %+v", rep.Findings)
+	}
+	r.Spec.Steps[1].Resolve.Ref = "accountRef"
+	r.Spec.Steps[2].Write.Amount = "totals.net"
+	rep := New(cat, Options{}).Recipe(r)
+	if len(findings(rep, SeverityError, "resolve reads the source record's reference from accountRef, which mapping sf-opportunity-to-order@3 does not set")) != 1 ||
+		len(findings(rep, SeverityError, "the amount is read from totals.net, which mapping sf-opportunity-to-order@3 does not set")) != 1 || rep.Deployable {
+		t.Fatalf("not caught: %+v", rep.Findings)
+	}
+	// Fields the mapping sets, and the master ID the resolve step adds,
+	// are fine.
+	r.Spec.Steps[1].Resolve.Ref, r.Spec.Steps[1].Resolve.Into = "customerRef", "soldTo"
+	r.Spec.Steps[2].Write.Amount = "netValue"
+	if rep := New(cat, Options{}).Recipe(r); len(findings(rep, SeverityError, "resolve reads")) != 0 || len(findings(rep, SeverityError, "amount is read")) != 0 {
+		t.Fatalf("mapped fields flagged: %+v", rep.Findings)
+	}
+}

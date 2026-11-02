@@ -127,6 +127,24 @@ type ResolveConfig struct {
 	Strategy       string                `json:"strategy"`
 	AutoMatchAbove float64               `json:"autoMatchAbove"`
 	Match          []v1alpha1.MatchField `json:"match,omitempty"`
+	// Ref and Into are the document fields read and set (see
+	// v1alpha1.ResolveStep); empty means <entity>Ref and <entity>Id.
+	Ref  string `json:"ref,omitempty"`
+	Into string `json:"into,omitempty"`
+}
+
+// Fields returns the document fields the step reads the reference from
+// and writes the master ID to.
+func (r ResolveConfig) Fields() (ref, into string) {
+	field := lowerFirst(strings.TrimPrefix(r.Entity, "model."))
+	ref, into = r.Ref, r.Into
+	if ref == "" {
+		ref = field + "Ref"
+	}
+	if into == "" {
+		into = field + "Id"
+	}
+	return ref, into
 }
 
 type WriteConfig struct {
@@ -147,6 +165,9 @@ type WriteConfig struct {
 	// logic plugins subscribed to it, which run after the write commits.
 	Event   string   `json:"event,omitempty"`
 	Plugins []string `json:"plugins,omitempty"`
+	// Amount is the document field with the monetary amount policy reads
+	// (see v1alpha1.WriteStep); empty means netValue, amount or totalAmount.
+	Amount string `json:"amount,omitempty"`
 }
 
 // PluginDeployment is a plugin with the capabilities granted to it.
@@ -367,10 +388,12 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 			}
 			step.Map = &MapConfig{Mapping: ref(m.Metadata), From: s.Map.From, To: s.Map.To, Fields: fields}
 		case s.Resolve != nil:
-			step.Resolve = &ResolveConfig{Entity: s.Resolve.Entity, Strategy: s.Resolve.Strategy, AutoMatchAbove: s.Resolve.AutoMatchAbove, Match: s.Resolve.Match}
+			step.Resolve = &ResolveConfig{Entity: s.Resolve.Entity, Strategy: s.Resolve.Strategy, AutoMatchAbove: s.Resolve.AutoMatchAbove, Match: s.Resolve.Match,
+				Ref: s.Resolve.Ref, Into: s.Resolve.Into}
 			if doc != nil {
-				// The resolve activity adds <entity>Id.
-				doc[lowerFirst(strings.TrimPrefix(s.Resolve.Entity, "model."))+"Id"] = true
+				// The resolve activity adds the master ID.
+				_, into := step.Resolve.Fields()
+				doc[into] = true
 			}
 		case s.Write != nil:
 			w := s.Write
@@ -392,6 +415,7 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 				Endpoint: b.endpoint(w.Target), Connector: m.Metadata.Name, Operation: op.Name,
 				Interface: op.Interface, Risk: op.Risk, Entity: op.Entity, IdempotencyKey: w.IdempotencyKey,
 				Approval: approval, Compensation: comp, Metered: m.Spec.Metering.SAPDigitalAccess, Output: w.Output,
+				Amount: w.Amount,
 			}
 			if w.Simulate {
 				wc.Simulation = iface.Simulation

@@ -166,12 +166,52 @@ func (v *Verifier) recipe(rec *v1alpha1.Recipe, bound map[string]*v1alpha1.Conne
 	if hasWrites {
 		threshold = v.opts.WriteReviewThreshold
 	}
+	// The fields the document has once a map step set them (nil before:
+	// the event's own fields are not known here).
+	var fields map[string]bool
+	mapping := ""
 	for i, s := range rec.Spec.Steps {
 		path := fmt.Sprintf("spec.steps[%d]", i)
 		if s.Map != nil {
 			v.mapStep(r, path, s.Map, threshold)
+			fields, mapping = nil, s.Map.Mapping
+			if m, ok := r.Resolution.Mappings[s.Map.Mapping]; ok {
+				fields = map[string]bool{}
+				for _, f := range m.Spec.Fields {
+					fields[f.Target] = true
+				}
+			}
+		}
+		if w := s.Write; w != nil && fields != nil {
+			if w.Amount != "" && !fields[strings.SplitN(w.Amount, ".", 2)[0]] {
+				r.add(StagePolicy, SeverityError, path+".write.amount", "the amount is read from %s, which mapping %s does not set: approval thresholds would see 0", w.Amount, mapping)
+			}
+			if w.Output != "" {
+				fields[w.Output] = true
+			}
 		}
 		if s.Resolve != nil {
+			entity := strings.TrimPrefix(s.Resolve.Entity, "model.")
+			ref, into := s.Resolve.Ref, s.Resolve.Into
+			if entity != "" {
+				lower := strings.ToLower(entity[:1]) + entity[1:]
+				if ref == "" {
+					ref = lower + "Ref"
+				}
+				if into == "" {
+					into = lower + "Id"
+				}
+			}
+			if fields != nil && !fields[ref] {
+				field := path + ".resolve.ref"
+				if s.Resolve.Ref == "" {
+					field = path + ".resolve"
+				}
+				r.add(StageMapping, SeverityError, field, "resolve reads the source record's reference from %s, which mapping %s does not set; map it, or name the field with ref", ref, mapping)
+			}
+			if fields != nil {
+				fields[into] = true
+			}
 			switch s.Resolve.Strategy {
 			case v1alpha1.StrategyExact, v1alpha1.StrategyProbabilistic:
 			case v1alpha1.StrategySplink:

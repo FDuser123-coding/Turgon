@@ -80,6 +80,11 @@ type ResolveStep struct {
 	// compare them. Required for probabilistic; with exact they only feed
 	// the suggestions a steward sees.
 	Match []MatchField `json:"match,omitempty"`
+	// Ref is the document field holding the source record's reference,
+	// and Into the field that receives the master record's ID; by default
+	// <entity>Ref and <entity>Id (customerRef, customerId).
+	Ref  string `json:"ref,omitempty"`
+	Into string `json:"into,omitempty"`
 }
 
 // MatchField is one identifying field of a record.
@@ -122,6 +127,11 @@ type WriteStep struct {
 	// Output names a document field that receives the write's result, so
 	// later steps can use it (for example, a document number to link back).
 	Output string `json:"output,omitempty"`
+	// Amount is the document field (a dotted path for a nested one, such
+	// as totals.net) with the write's monetary amount, which policy
+	// compares with approval thresholds; by default the first of netValue,
+	// amount and totalAmount.
+	Amount string `json:"amount,omitempty"`
 }
 
 type Capacity struct {

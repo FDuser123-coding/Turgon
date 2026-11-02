@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -118,7 +119,7 @@ type SplinkScorer interface {
 // audited; anything else goes to a data steward with the best suggestions.
 func (x *Activities) Resolve(ctx context.Context, in ResolveInput) (map[string]any, error) {
 	entity := strings.TrimPrefix(in.Config.Entity, "model.")
-	field := lowerFirst(entity)
+	refField, into := in.Config.Fields()
 	switch in.Config.Strategy {
 	case v1alpha1.StrategyExact, v1alpha1.StrategyProbabilistic, v1alpha1.StrategySplink:
 	default:
@@ -127,9 +128,9 @@ func (x *Activities) Resolve(ctx context.Context, in ResolveInput) (map[string]a
 	if x.Resolver == nil {
 		return nil, nonRetryable(ErrTypeUnresolved, errors.New("no identity resolver configured"))
 	}
-	ref, ok := in.Doc[field+"Ref"].(string)
+	ref, ok := in.Doc[refField].(string)
 	if !ok || ref == "" {
-		return nil, nonRetryable(ErrTypeUnresolved, fmt.Errorf("document has no %sRef to resolve", field))
+		return nil, nonRetryable(ErrTypeUnresolved, fmt.Errorf("document has no %s to resolve", refField))
 	}
 	id, found, err := x.Resolver.Xref(ctx, entity, in.System, ref)
 	if err != nil {
@@ -206,7 +207,7 @@ func (x *Activities) Resolve(ctx context.Context, in ResolveInput) (map[string]a
 	for k, v := range in.Doc {
 		out[k] = v
 	}
-	out[field+"Id"] = id
+	out[into] = id
 	return out, nil
 }
 
@@ -263,6 +264,9 @@ func buildRequest(in PrepareInput) (writeguard.Request, error) {
 		return writeguard.Request{}, err
 	}
 	amount := AmountOf(in.Doc)
+	if c.Amount != "" {
+		amount = AmountAt(in.Doc, c.Amount)
+	}
 	return writeguard.Request{
 		Recipe:          in.Workflow,
 		Target:          c.Endpoint,
@@ -295,6 +299,31 @@ func AmountOf(doc map[string]any) float64 {
 			n, _ := v.Float64()
 			return n
 		}
+	}
+	return 0
+}
+
+// AmountAt returns the number at a dotted path of a document (totals.net),
+// or 0 if there is none. Numbers sent as strings ("310.00", as Shopify
+// sends prices) count too.
+func AmountAt(doc map[string]any, path string) float64 {
+	var v any = doc
+	for _, k := range strings.Split(path, ".") {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return 0
+		}
+		v = m[k]
+	}
+	switch v := v.(type) {
+	case float64:
+		return v
+	case json.Number:
+		n, _ := v.Float64()
+		return n
+	case string:
+		n, _ := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return n
 	}
 	return 0
 }
