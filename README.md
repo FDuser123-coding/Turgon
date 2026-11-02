@@ -1350,6 +1350,8 @@ already linked with a Fellegi-Sunter model, as record-linkage tools such as Spli
     match:
       - { field: customerRef, kind: email }
       - { field: customerRef, kind: domain }
+    # ref: customerRef           # the field with the source record's reference (default <entity>Ref)
+    # into: customerId           # the field that receives the master ID (default <entity>Id)
 ```
 
 With `probabilistic`, a match at or above `autoMatchAbove` whose runner-up is below 0.5 is linked
@@ -2160,8 +2162,19 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
   `Commit` phases let a workflow wait durably for a person between them.
 - **Write outputs.** A write step's `output` puts its result into the document, so later steps
   can use it (the ERP order number linked back to Salesforce).
-- **Recipe conventions (prototype).** Resolve steps read `<entity>Ref` and set `<entity>Id`
-  (`customerRef` → `customerId`); approval thresholds read the amount from `netValue`.
+- **Document fields, by convention or by name.**
+  - **Resolve steps:** by default they read `<entity>Ref` and set `<entity>Id` (`customerRef` →
+    `customerId`). `ref` and `into` name other fields (`ref: buyerEmail`, `into: soldTo`).
+  - **Amount for approval thresholds:** by default it is the first of `netValue`, `amount` and
+    `totalAmount`. A write step's `amount` names another field, as a dotted path for a nested
+    one (`totals.gross`). Numbers sent as strings (`"310.00"`) count.
+  - **`turgon verify` checks both against the preceding mapping.** A resolve step whose reference
+    the mapping does not set would fail every run. An amount the mapping does not set would show
+    the thresholds 0 and let every write past them. Either is an error.
+  - **Measured live:** against a Temporal 1.28 dev server and the fakes, with
+    `shopify-store-orders-to-s4` resolving `into: soldTo` and the S/4HANA connection mapping
+    `SoldToParty: soldTo`. The approval's payload had `soldTo: 17100001` and no `customerId`,
+    and the order became sales order 36296140 for that sold-to party.
 - **Deterministic output.** The compiler sorts everything and hashes canonical JSON, so runtime
   specs can live in Git and be diffed, signed and rolled back.
 
