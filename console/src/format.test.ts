@@ -60,5 +60,8 @@ describe("metadata changes", () => {
   it("lists a field's flags", () => {
     expect(flags({ name: "id", type: "bigint", key: true, required: true })).toEqual(["key", "required"]);
     expect(flags({ name: "total", type: "bigint", readOnly: true })).toEqual(["read-only"]);
+    expect(flags({ name: "tags", type: "", required: true, requiredBy: "operation update-order was refused without it on 2026-11-01" })).toEqual([
+      "required (learned from a refused write)",
+    ]);
   });
 });

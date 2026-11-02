@@ -63,6 +63,8 @@ export interface RunDetail extends RunSummary {
   result?: { writes: WriteRecord[] | null };
   failure?: string;
   failureType?: string;
+  /** Fields a refused write's system said were missing. */
+  missingFields?: string[];
 }
 
 export interface AuditEntry {
@@ -247,6 +249,8 @@ export interface MetaField {
   label?: string;
   length?: number;
   required?: boolean;
+  /** How a sampled field is known to be required: the write the system refused without it. */
+  requiredBy?: string;
   key?: boolean;
   readOnly?: boolean;
   usedBy?: string[];

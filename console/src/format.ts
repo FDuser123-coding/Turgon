@@ -115,7 +115,7 @@ export function values(c: MetaChange): string {
 export function flags(f: MetaField): string[] {
   const out: string[] = [];
   if (f.key) out.push("key");
-  if (f.required) out.push("required");
+  if (f.required) out.push(f.requiredBy ? "required (learned from a refused write)" : "required");
   if (f.readOnly) out.push("read-only");
   return out;
 }
