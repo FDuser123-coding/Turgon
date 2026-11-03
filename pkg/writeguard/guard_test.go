@@ -314,3 +314,45 @@ func TestGovernorHonoursContext(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+// A write whose amount the target's dry run does not confirm (the ERP
+// priced it differently) waits for a person, with both amounts as the
+// reason, even when policy alone would let it through.
+func TestDryRunAmountMustMatch(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	req := Request{
+		Target: "erp", Operation: "create-sales-order", Tool: "create_sales_order", Risk: v1alpha1.RiskLow,
+		Subject: policy.Subject{ID: "turgon/recipe/r", Roles: []string{policy.RoleOperator}}, IdempotencyKey: "k1",
+		Payload: json.RawMessage(`{"customer":"C1","netValue":"1200.00"}`), Entity: "SalesOrder", Amount: 1200, Simulate: true,
+		Compensation: "cancel-sales-order", CheckAmount: &AmountCheck{Preview: "input.netValue"},
+	}
+	p, err := h.guard.Prepare(ctx, req)
+	if err != nil || p.NeedsApproval || p.AmountMismatch != "" {
+		t.Fatalf("agreeing amounts: %+v %v", p, err)
+	}
+
+	req.Amount = 1000
+	p, err = h.guard.Prepare(ctx, req)
+	want := "the target's dry run shows 1200.00 at input.netValue, the source 1000.00"
+	if err != nil || !p.NeedsApproval || p.AmountMismatch != want || p.Decision.Reasons[len(p.Decision.Reasons)-1] != want {
+		t.Fatalf("differing amounts: %+v %v", p, err)
+	}
+	if a := h.actions(t); a[len(a)-1] != "writeback.amount-mismatch" {
+		t.Fatalf("audit: %v", a)
+	}
+
+	req.CheckAmount.Tolerance = 0.25
+	if p, _ := h.guard.Prepare(ctx, req); p.NeedsApproval {
+		t.Fatalf("within tolerance: %+v", p)
+	}
+	req.CheckAmount = &AmountCheck{Preview: "input.total"}
+	if p, _ := h.guard.Prepare(ctx, req); !p.NeedsApproval || !strings.Contains(p.AmountMismatch, "shows no amount at input.total") {
+		t.Fatalf("no amount in the dry run: %+v", p)
+	}
+	// A target that cannot dry-run cannot confirm the amount either.
+	req.Operation, req.CheckAmount = "cancel-sales-order", &AmountCheck{Preview: "input.netValue"}
+	if p, _ := h.guard.Prepare(ctx, req); !p.NeedsApproval || !strings.Contains(p.AmountMismatch, "gave no dry run") {
+		t.Fatalf("no dry run: %+v", p)
+	}
+}

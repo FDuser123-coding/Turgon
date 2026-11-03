@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -1050,5 +1051,35 @@ func TestHubSpotUnknownBuyerWaitsForASteward(t *testing.T) {
 	_, err, _ := f.run(f.dispatch()[0])
 	if errType(err) != ErrTypeUnresolved || f.orders("true") != 0 {
 		t.Fatalf("err = %v (%s)", err, errType(err))
+	}
+}
+
+// The shop sold the order for less than SAP prices it: the approver is
+// told both totals, and the commit insists on the approval.
+func TestS4PricingTheOrderDifferentlyAsksAPerson(t *testing.T) {
+	f, shop, s4, _ := newS4Fixture(t)
+	shop.AddOrder(map[string]any{
+		"name": "#1002", "email": "Ada@Example.com", "created_at": "2026-09-24T10:30:00-04:00",
+		"subtotal_price": "420.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-2", "quantity": 3}},
+	})
+	evs := f.dispatch()
+	if len(evs) != 2 {
+		t.Fatalf("events %v", evs)
+	}
+	_, err, pending := f.run(evs[1], approve("03-write"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "the target's dry run shows 705.00 at record.TotalNetAmount, the source 420.00"
+	if len(pending) != 1 || !slices.Contains(pending[0].Reasons, want) || !pending[0].Request.RequireApproval {
+		t.Fatalf("pending = %+v", pending)
+	}
+	if len(s4.Orders()) != 1 {
+		t.Fatalf("S/4 orders %v", s4.Orders())
+	}
+	// The order the shop and SAP agree on asks only for its usual approval.
+	_, err, pending = f.run(evs[0], approve("03-write"))
+	if err != nil || len(pending) != 1 || slices.Contains(pending[0].Reasons, want) || pending[0].Request.RequireApproval {
+		t.Fatalf("agreeing order: %v %+v", err, pending)
 	}
 }

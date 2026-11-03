@@ -421,3 +421,32 @@ func TestResolveAndAmountFieldsMustBeMapped(t *testing.T) {
 		t.Fatalf("mapped fields flagged: %+v", rep.Findings)
 	}
 }
+
+// Checking the amount needs a dry run that can show it.
+func TestCheckAmountNeedsADryRun(t *testing.T) {
+	cat := load(t)
+	r := recipe(t, cat, "shopify-store-orders-to-s4")
+	if rep := New(cat, Options{}).Recipe(r); !rep.Deployable {
+		t.Fatalf("the example: %+v", rep.Findings)
+	}
+	w := r.Spec.Steps[2].Write
+	if w.CheckAmount == nil {
+		t.Fatal("the example checks the S/4HANA total")
+	}
+	for name, tc := range map[string]struct {
+		change func()
+		want   string
+	}{
+		"no simulate": {func() { w.Simulate = false }, "set simulate: true"},
+		"no path":     {func() { w.CheckAmount.Preview = " " }, "name where the dry run shows the amount"},
+		"tolerance":   {func() { w.CheckAmount.Tolerance = 1.5 }, "the tolerance is a fraction of the amount"},
+	} {
+		saved, check := *w, *w.CheckAmount
+		tc.change()
+		rep := New(cat, Options{}).Recipe(r)
+		if len(findings(rep, SeverityError, tc.want)) != 1 || rep.Deployable {
+			t.Errorf("%s: %+v", name, rep.Findings)
+		}
+		*w, *w.CheckAmount = saved, check
+	}
+}

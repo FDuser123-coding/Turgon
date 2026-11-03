@@ -32,6 +32,9 @@ spec:
         # At most 35 characters: it is stored in PurchaseOrderByCustomer.
         idempotencyKey: "SHOPIFY-{{ source.id }}"
         simulate: true
+        # SAP prices the order with its own conditions: when its total
+        # differs from the shop's by more than 1%, a person is asked.
+        checkAmount: { preview: record.TotalNetAmount, tolerance: 0.01 }
         output: erpOrder
     - map:
         from: model.SalesOrder

@@ -168,6 +168,8 @@ type WriteConfig struct {
 	// Amount is the document field with the monetary amount policy reads
 	// (see v1alpha1.WriteStep); empty means netValue, amount or totalAmount.
 	Amount string `json:"amount,omitempty"`
+	// CheckAmount compares it with the dry run's (see v1alpha1.WriteStep).
+	CheckAmount *v1alpha1.AmountCheck `json:"checkAmount,omitempty"`
 }
 
 // PluginDeployment is a plugin with the capabilities granted to it.
@@ -415,7 +417,7 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 				Endpoint: b.endpoint(w.Target), Connector: m.Metadata.Name, Operation: op.Name,
 				Interface: op.Interface, Risk: op.Risk, Entity: op.Entity, IdempotencyKey: w.IdempotencyKey,
 				Approval: approval, Compensation: comp, Metered: m.Spec.Metering.SAPDigitalAccess, Output: w.Output,
-				Amount: w.Amount,
+				Amount: w.Amount, CheckAmount: w.CheckAmount,
 			}
 			if w.Simulate {
 				wc.Simulation = iface.Simulation
