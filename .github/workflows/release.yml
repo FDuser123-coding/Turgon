@@ -21,8 +21,8 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - run: go vet ./...
@@ -39,7 +39,7 @@ jobs:
     outputs:
       digest: ${{ steps.build.outputs.digest }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Registry names
         # GHCR repository names must be lowercase; the owner is not.
         run: |
@@ -49,16 +49,16 @@ jobs:
       - name: Version
         id: version
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64
@@ -100,27 +100,27 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Registry name and version
         # Tagged like the turgon image, so the chart's appVersion names both.
         run: |
           echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/turgon-splink" >> "$GITHUB_ENV"
           echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
       - name: Test
         run: pip install -r deploy/splink/requirements.txt && python -m unittest discover -s deploy/splink/tests
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: deploy/splink
           platforms: linux/amd64,linux/arm64
@@ -164,30 +164,33 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Registry name and version
         run: |
           echo "IMAGE=ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/turgon-connector-${{ matrix.connector }}" >> "$GITHUB_ENV"
           echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "8.14.3"
+          # The MIT-licensed cache: the default one is a proprietary component
+          # under Gradle's terms of use.
+          cache-provider: basic
       - name: Test
         run: gradle -p connectors build
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
+      - uses: docker/setup-qemu-action@v4
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push
         id: build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: connectors/Dockerfile
@@ -229,14 +232,14 @@ jobs:
       packages: write
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Registry names
         # GHCR repository names must be lowercase; the owner is not.
         run: |
           owner="${GITHUB_REPOSITORY_OWNER,,}"
           echo "IMAGE=ghcr.io/${owner}/turgon" >> "$GITHUB_ENV"
           echo "CHARTS=ghcr.io/${owner}/charts" >> "$GITHUB_ENV"
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v3.19.0
       - uses: sigstore/cosign-installer@v3
@@ -261,11 +264,11 @@ jobs:
       contents: write        # create the release
       id-token: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - name: Build the console
