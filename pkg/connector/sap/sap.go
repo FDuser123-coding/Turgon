@@ -117,6 +117,25 @@ type Items struct {
 	Fields     map[string]string `json:"fields"`
 	Constants  map[string]any    `json:"constants,omitempty"`
 	Types      map[string]string `json:"types,omitempty"`
+	// Price sets the price of each item that carries one, so SAP keeps
+	// the source's price instead of determining its own.
+	Price *Price `json:"price,omitempty"`
+}
+
+// Price is a manual pricing element sent with each item in the deep
+// insert (to_PricingElement in API_SALES_ORDER_SRV): a condition type the
+// system's pricing procedure lets users enter by hand, its rate taken
+// from the item.
+type Price struct {
+	// Navigation is the item's pricing elements, to_PricingElement.
+	Navigation string `json:"navigation"`
+	// ConditionType is the manual price condition, such as PPR0 in S/4HANA
+	// Cloud's standard pricing procedure.
+	ConditionType string `json:"conditionType"`
+	// Rate is the item field with the price per unit.
+	Rate string `json:"rate"`
+	// Currency is the document field with the price's currency, if any.
+	Currency string `json:"currency,omitempty"`
 }
 
 // Simulation names a simulation service's entity set.
@@ -225,6 +244,10 @@ func (c Config) validate() error {
 				}
 				if err := checkTypes(where+" items", it.Types); err != nil {
 					return err
+				}
+				if pr := it.Price; pr != nil && (!identRE.MatchString(pr.Navigation) || !identRE.MatchString(pr.ConditionType) ||
+					!pathRE.MatchString(pr.Rate) || (pr.Currency != "" && !pathRE.MatchString(pr.Currency))) {
+					return fmt.Errorf("%s: an item price needs navigation, conditionType and rate", where)
 				}
 			}
 			if s := op.Simulate; s != nil && (!serviceRE.MatchString(s.Service) || !identRE.MatchString(s.EntitySet)) {
@@ -823,6 +846,21 @@ func body(op Operation, payload json.RawMessage) (map[string]any, error) {
 			item, err := build(m, it.Fields, it.Constants, it.Types)
 			if err != nil {
 				return nil, err
+			}
+			if pr := it.Price; pr != nil {
+				if r := lookup(m, pr.Rate); r != nil {
+					rate, err := convert(fmt.Sprintf("%s[%d].%s", it.From, i, pr.Rate), r, "decimal")
+					if err != nil {
+						return nil, err
+					}
+					el := map[string]any{"ConditionType": pr.ConditionType, "ConditionRateValue": rate}
+					if pr.Currency != "" {
+						if c := lookup(doc, pr.Currency); c != nil {
+							el["ConditionCurrency"] = fmt.Sprint(c)
+						}
+					}
+					item[pr.Navigation] = []any{el}
+				}
 			}
 			items = append(items, item)
 		}

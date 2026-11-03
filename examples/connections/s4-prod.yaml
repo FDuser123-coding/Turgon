@@ -66,6 +66,9 @@ spec:
           from: lines
           fields: { Material: material, RequestedQuantity: quantity }
           types: { RequestedQuantity: decimal }
+          # The shop's price, as a manual price condition (PPR0 in the
+          # standard pricing procedure); lines without one are priced by SAP.
+          price: { navigation: to_PricingElement, conditionType: PPR0, rate: price, currency: currency }
         reference: PurchaseOrderByCustomer
         simulate: { service: API_SALES_ORDER_SIMULATION_SRV, entitySet: A_SalesOrderSimulation }
       # Undoes a create in a saga. SAP refuses once the order has

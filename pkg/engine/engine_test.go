@@ -1083,3 +1083,26 @@ func TestS4PricingTheOrderDifferentlyAsksAPerson(t *testing.T) {
 		t.Fatalf("agreeing order: %v %+v", err, pending)
 	}
 }
+
+// A shop line that carries its price reaches SAP as a manual price
+// condition: SAP keeps the shop's price, and the totals agree.
+func TestShopPricesReachS4(t *testing.T) {
+	f, shop, s4, _ := newS4Fixture(t)
+	shop.AddOrder(map[string]any{
+		"name": "#1003", "email": "Ada@Example.com", "created_at": "2026-09-24T11:30:00-04:00",
+		"subtotal_price": "420.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-2", "quantity": 3, "price": "140.00"}},
+	})
+	evs := f.dispatch()
+	_, err, pending := f.run(evs[len(evs)-1], approve("03-write"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].Request.RequireApproval || !strings.Contains(string(pending[0].Preview), `"TotalNetAmount":"420.00"`) {
+		t.Fatalf("pending %+v", pending)
+	}
+	o := s4.Order(s4.Orders()[0])
+	item := o["to_Item"].([]any)[0].(map[string]any)
+	if o["TotalNetAmount"] != "420.00" || item["NetAmount"] != "420.00" {
+		t.Fatalf("S/4 order %v", o)
+	}
+}

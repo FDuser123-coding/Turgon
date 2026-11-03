@@ -326,3 +326,48 @@ func TestConfigRejected(t *testing.T) {
 		}
 	}
 }
+
+// Items that carry a price are sent with a manual price condition, so SAP
+// keeps the source's price; items without one are priced by SAP.
+func TestItemsKeepTheSourcesPrice(t *testing.T) {
+	s4, _, _ := setup(t)
+	srv := httptest.NewServer(s4)
+	t.Cleanup(srv.Close)
+	cfg := config(srv.URL)
+	op := cfg.Operations["create-sales-order"]
+	items := *op.Items
+	items.Price = &sap.Price{Navigation: "to_PricingElement", ConditionType: saptest.ManualPrice, Rate: "price", Currency: "currency"}
+	op.Items = &items
+	cfg.Operations["create-sales-order"] = op
+	conn, err := sap.New(cfg, "TURGON_COMM:s3cret", srv.Client())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	two := json.RawMessage(`{"customerId":"C-100","orderDate":"2026-09-24","currency":"EUR",
+		"lines":[{"material":"M-2","quantity":10,"price":"21.50"},{"material":"M-1","quantity":1}]}`)
+	preview, err := conn.Simulate(ctx, "create-sales-order", two)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 10 × 21.50 by hand, plus M-1 at SAP's own price.
+	if !strings.Contains(string(preview), `"TotalNetAmount":"225.00"`) || !strings.Contains(string(preview), `"ConditionType":"PPR0"`) {
+		t.Fatalf("preview = %s", preview)
+	}
+	if _, err := conn.Commit(ctx, "create-sales-order", "k-price", two); err != nil {
+		t.Fatal(err)
+	}
+
+	// A condition type the pricing procedure does not let users enter is
+	// SAP's refusal, final.
+	items.Price.ConditionType = "PR00"
+	conn, _ = sap.New(cfg, "TURGON_COMM:s3cret", srv.Client())
+	_, err = conn.Simulate(ctx, "create-sales-order", two)
+	if !errors.Is(err, writeguard.ErrInvalid) || !strings.Contains(err.Error(), "condition type PR00 cannot be entered manually") {
+		t.Fatalf("err = %v", err)
+	}
+	items.Price = &sap.Price{Navigation: "to_PricingElement"}
+	if _, err := sap.New(cfg, "x:y", srv.Client()); err == nil {
+		t.Fatal("a price without condition type or rate was accepted")
+	}
+}

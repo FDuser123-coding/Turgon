@@ -24,6 +24,10 @@ import (
 	"time"
 )
 
+// ManualPrice is the condition type the fake lets a sales order item's
+// price be entered with.
+const ManualPrice = "PPR0"
+
 // Prefix is where the services live.
 const Prefix = "/sap/opu/odata/sap/"
 
@@ -383,10 +387,30 @@ func (s *S4) priced(r *http.Request) (map[string]any, *odataError) {
 		if err != nil || q <= 0 {
 			return nil, &odataError{http.StatusBadRequest, "/IWBEP/CM_MGW_RT/004", fmt.Sprintf("Item %d: RequestedQuantity must be a positive decimal string", (i+1)*10)}
 		}
+		// A manual price condition replaces the price SAP determines, as
+		// PPR0 does in S/4HANA Cloud's standard pricing procedure.
+		var conditions []map[string]any
+		elems, _ := it["to_PricingElement"].([]any)
+		for _, e := range elems {
+			el, _ := e.(map[string]any)
+			if str(el, "ConditionType") != ManualPrice {
+				return nil, &odataError{http.StatusBadRequest, "V1/320", fmt.Sprintf("Item %d: condition type %s cannot be entered manually", (i+1)*10, str(el, "ConditionType"))}
+			}
+			rate, err := strconv.ParseFloat(str(el, "ConditionRateValue"), 64)
+			if err != nil || rate < 0 {
+				return nil, &odataError{http.StatusBadRequest, "/IWBEP/CM_MGW_RT/004", fmt.Sprintf("Item %d: ConditionRateValue must be a decimal string", (i+1)*10)}
+			}
+			price = rate
+			conditions = append(conditions, map[string]any{"ConditionType": ManualPrice, "ConditionRateValue": str(el, "ConditionRateValue")})
+		}
 		net := price * q
 		total += net
-		items = append(items, map[string]any{"Material": mat, "RequestedQuantity": str(it, "RequestedQuantity"),
-			"NetAmount": strconv.FormatFloat(net, 'f', 2, 64), "TransactionCurrency": o["TransactionCurrency"]})
+		item := map[string]any{"Material": mat, "RequestedQuantity": str(it, "RequestedQuantity"),
+			"NetAmount": strconv.FormatFloat(net, 'f', 2, 64), "TransactionCurrency": o["TransactionCurrency"]}
+		if conditions != nil {
+			item["to_PricingElement"] = conditions
+		}
+		items = append(items, item)
 	}
 	o["to_Item"] = items
 	o["TotalNetAmount"] = strconv.FormatFloat(total, 'f', 2, 64)
