@@ -1113,7 +1113,7 @@
         },
         {
           "kind": "map",
-          "mapping": "sales-order-to-netsuite-order@1.0.0",
+          "mapping": "sales-order-to-netsuite-order@1.1.0",
           "from": "model.SalesOrder",
           "to": "model.SalesOrder",
           "fields": 5

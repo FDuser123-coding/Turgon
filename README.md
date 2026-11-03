@@ -518,9 +518,10 @@ Measured against a Temporal 1.28 dev server and the fakes:
   its alternate key, and the order's GUID was written onto the deal.
 - **NetSuite:** a Shopify order became NetSuite sales order SO5465540, and the Shopify order's
   note was set to `ERP order 5465540`.
-- **NetSuite prices:** the NetSuite order is priced from NetSuite's item list, because
-  `sales-order-to-netsuite-order` sends items and quantities, not the shop's prices. To keep the
-  shop's price, map each line's `rate` as well.
+- **NetSuite prices:** `sales-order-to-netsuite-order` 1.1 sends each line's unit price from the
+  shop as the line's `rate`, so the NetSuite order keeps the shop's total. A line without a price
+  is priced from NetSuite's item list. Measured live with the fake account: a 420.00 shop order
+  of an item NetSuite lists at 10.00 became sales order SO7331740 with a total of 420.
 
 ### SAP S/4HANA: sales orders through SAP's released APIs
 
