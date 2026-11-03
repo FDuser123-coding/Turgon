@@ -581,6 +581,18 @@ Mesh secret: secrets that only connector configuration uses (webhook signing sec
 broker) may be unset. A missing one is recorded as absent, and if it is set later, secret
 rotation notices it and reconnects.
 
+**The shop's price, sent to SAP.** An item list can set each item's price with a manual pricing
+element in the deep insert. It is configured as
+`price: { navigation: to_PricingElement, conditionType: PPR0, rate: price, currency: currency }`,
+which the S/4HANA connection now has.
+- **Which condition type:** PPR0 is the manual price condition of S/4HANA Cloud's standard
+  pricing procedure. Name the one your procedure lets users enter.
+- **Which lines:** lines without a price are priced by SAP.
+- **Where the price comes from:** the Shopify mapping (`shopify-rest-order-to-order` 1.1)
+  carries each line's unit price.
+- **Measured live:** a 420.00 shop order became sales order 37311640 at 420.00, with a `PPR0`
+  element on its item. The amount check below found the totals in agreement.
+
 **The ERP's price against the shop's.** A write step can compare its amount with the one the
 target's dry run shows. It does so with
 `checkAmount: { preview: record.TotalNetAmount, tolerance: 0.01 }`, as

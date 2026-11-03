@@ -3,7 +3,7 @@ apiVersion: turgon.dev/v1alpha1
 kind: Mapping
 metadata:
   name: shopify-rest-order-to-order
-  version: 1.0.0
+  version: 1.1.0
 spec:
   from: shopify-store.Order
   to: model.SalesOrder
@@ -14,7 +14,8 @@ spec:
     - { target: orderDate,   expression: "$substring(created_at, 0, 10)", origin: certified, confidence: 0.99 }
     - { target: netValue,    expression: "$number(subtotal_price)",       origin: certified, confidence: 0.99 }
     - { target: currency,    expression: "$uppercase(currency)",          origin: certified, confidence: 0.99 }
+    # Each line's unit price as the shop sold it, for ERPs that take it.
     - target: lines
-      expression: "line_items.{ 'material': sku, 'quantity': quantity }[]"
+      expression: "line_items.{ 'material': sku, 'quantity': quantity, 'price': price }[]"
       origin: human
       confidence: 0.98

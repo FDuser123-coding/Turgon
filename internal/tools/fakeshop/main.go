@@ -70,7 +70,7 @@ func main() {
 		}
 		id := shop.AddOrder(map[string]any{
 			"name": fmt.Sprintf("#%d", n), "email": f[0], "created_at": time.Now().Format(time.RFC3339),
-			"subtotal_price": f[1], "currency": "EUR", "line_items": []any{map[string]any{"sku": "M-1", "quantity": 1}},
+			"subtotal_price": f[1], "currency": "EUR", "line_items": []any{map[string]any{"sku": "M-1", "quantity": 1, "price": f[1]}},
 		})
 		mu.Lock()
 		ids = append(ids, id)

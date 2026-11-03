@@ -1043,7 +1043,7 @@
       "steps": [
         {
           "kind": "map",
-          "mapping": "shopify-rest-order-to-order@1.0.0",
+          "mapping": "shopify-rest-order-to-order@1.1.0",
           "from": "shopify-store.Order",
           "to": "model.SalesOrder",
           "fields": 7
@@ -1101,7 +1101,7 @@
       "steps": [
         {
           "kind": "map",
-          "mapping": "shopify-rest-order-to-order@1.0.0",
+          "mapping": "shopify-rest-order-to-order@1.1.0",
           "from": "shopify-store.Order",
           "to": "model.SalesOrder",
           "fields": 7
@@ -1166,7 +1166,7 @@
       "steps": [
         {
           "kind": "map",
-          "mapping": "shopify-rest-order-to-order@1.0.0",
+          "mapping": "shopify-rest-order-to-order@1.1.0",
           "from": "shopify-store.Order",
           "to": "model.SalesOrder",
           "fields": 7
