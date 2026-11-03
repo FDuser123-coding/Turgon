@@ -27,7 +27,7 @@ public final class JCoDestinationManager {
     // name -> {imports, exports, tables}; a name in brackets is a structure.
     public static final Map<String, List<Set<String>>> SIGNATURES = new java.util.HashMap<>(Map.of(
             "BAPI_SALESORDER_CREATEFROMDAT2", List.of(Set.of("[ORDER_HEADER_IN]", "TESTRUN"), Set.of("SALESDOCUMENT"),
-                    Set.of("RETURN", "ORDER_PARTNERS", "ORDER_ITEMS_IN", "ORDER_SCHEDULES_IN")),
+                    Set.of("RETURN", "ORDER_PARTNERS", "ORDER_ITEMS_IN", "ORDER_SCHEDULES_IN", "ORDER_CONDITIONS_IN")),
             "BAPI_SALESORDER_GETLIST", List.of(Set.of("CUSTOMER_NUMBER", "SALES_ORGANIZATION", "PURCHASE_ORDER_NUMBER"),
                     Set.of("[RETURN]"), Set.of("SALES_ORDERS")),
             "BAPI_SALESORDER_GETSTATUS", List.of(Set.of("SALESDOCUMENT"), Set.of("[RETURN]"), Set.of("STATUSINFO")),

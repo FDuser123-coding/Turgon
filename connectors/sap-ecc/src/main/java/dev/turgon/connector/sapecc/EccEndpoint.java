@@ -392,6 +392,7 @@ final class EccEndpoint extends CamelEndpoint {
             }
             List<Map<String, String>> items = new ArrayList<>();
             List<Map<String, String>> schedules = new ArrayList<>();
+            List<Map<String, String>> conditions = new ArrayList<>();
             int n = 0;
             for (JsonNode line : lines) {
                 n++;
@@ -411,12 +412,34 @@ final class EccEndpoint extends CamelEndpoint {
                 }
                 items.add(Map.of("ITM_NUMBER", item, "MATERIAL", material.toUpperCase(), "TARGET_QTY", qty.toPlainString()));
                 schedules.add(Map.of("ITM_NUMBER", item, "REQ_QTY", qty.toPlainString()));
+                // The source's price, as a manual condition SAP keeps instead
+                // of determining its own. Lines without one are priced by SAP.
+                JsonNode price = line.path("price");
+                if (!cfg.priceCondition().isEmpty() && !price.isMissingNode() && !price.isNull()) {
+                    BigDecimal rate;
+                    try {
+                        rate = new BigDecimal(price.asText(""));
+                    } catch (NumberFormatException e) {
+                        throw new ConnectorException.Invalid("lines[" + (n - 1) + "].price must be a number");
+                    }
+                    Map<String, String> cond = new LinkedHashMap<>();
+                    cond.put("ITM_NUMBER", item);
+                    cond.put("COND_TYPE", cfg.priceCondition());
+                    cond.put("COND_VALUE", rate.toPlainString());
+                    if (!currency.isEmpty()) {
+                        cond.put("CURRENCY", currency.toUpperCase());
+                    }
+                    conditions.add(cond);
+                }
             }
             Map<String, Object> p = new LinkedHashMap<>();
             p.put("ORDER_HEADER_IN", header);
             p.put("ORDER_PARTNERS", List.of(Map.of("PARTN_ROLE", cfg.partnerRole(), "PARTN_NUMB", customer)));
             p.put("ORDER_ITEMS_IN", items);
             p.put("ORDER_SCHEDULES_IN", schedules);
+            if (!conditions.isEmpty()) {
+                p.put("ORDER_CONDITIONS_IN", conditions);
+            }
             return p;
         }
 

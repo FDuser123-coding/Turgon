@@ -4,6 +4,7 @@ import dev.turgon.connector.sapecc.Rfc;
 import java.math.BigDecimal;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -61,7 +62,8 @@ public final class FakeEcc {
             "BAPI_SALESORDER_CREATEFROMDAT2", List.<String[]>of(new String[] {"I", "ORDER_HEADER_IN", "BAPISDHD1", ""},
                     new String[] {"I", "TESTRUN", "BAPIFLAG-BAPIFLAG", "X"}, new String[] {"E", "SALESDOCUMENT", "BAPIVBELN-VBELN", ""},
                     new String[] {"T", "RETURN", "BAPIRET2", "X"}, new String[] {"T", "ORDER_ITEMS_IN", "BAPISDITM", "X"},
-                    new String[] {"T", "ORDER_PARTNERS", "BAPIPARNR", ""}, new String[] {"T", "ORDER_SCHEDULES_IN", "BAPISCHDL", "X"}),
+                    new String[] {"T", "ORDER_PARTNERS", "BAPIPARNR", ""}, new String[] {"T", "ORDER_SCHEDULES_IN", "BAPISCHDL", "X"},
+                    new String[] {"T", "ORDER_CONDITIONS_IN", "BAPICOND", "X"}),
             "BAPI_SALESORDER_GETLIST", List.<String[]>of(new String[] {"I", "CUSTOMER_NUMBER", "BAPI1007-CUSTOMER", ""},
                     new String[] {"I", "SALES_ORGANIZATION", "VBAK-VKORG", ""}, new String[] {"I", "PURCHASE_ORDER_NUMBER", "VBKD-BSTKD", "X"},
                     new String[] {"E", "RETURN", "BAPIRETURN", ""}, new String[] {"T", "SALES_ORDERS", "BAPIORDERS", ""}),
@@ -203,6 +205,9 @@ public final class FakeEcc {
                 "PSGNUM", String.format("%06d", parent), "HLEVEL", String.format("%02d", level), "SDATA", sdata.toString());
     }
 
+    /** The condition type a price may be entered with by hand. */
+    public static final String MANUAL_PRICE = "PR00";
+
     /** Net prices per unit, in EUR. */
     static final Map<String, BigDecimal> PRICES = Map.of("M-1", new BigDecimal("100.00"), "M-7", new BigDecimal("49.90"),
             "M-8", new BigDecimal("12.50"), "M-9", new BigDecimal("7.00"));
@@ -227,7 +232,8 @@ public final class FakeEcc {
         }
         BigDecimal net = BigDecimal.ZERO;
         for (Map<String, String> it : o.items()) {
-            net = net.add(PRICES.getOrDefault(it.get("MATERIAL"), BigDecimal.ZERO).multiply(new BigDecimal(it.getOrDefault("TARGET_QTY", "0"))));
+            BigDecimal price = it.containsKey("COND_VALUE") ? new BigDecimal(it.get("COND_VALUE")) : PRICES.getOrDefault(it.get("MATERIAL"), BigDecimal.ZERO);
+            net = net.add(price.multiply(new BigDecimal(it.getOrDefault("TARGET_QTY", "0"))));
         }
         data.add(record(docnum, ++seg, 0, 1, "E1EDS01", Map.of("SUMID", "002", "SUMME", net.setScale(2, java.math.RoundingMode.HALF_UP).toPlainString(),
                 "WAERQ", "EUR")));
@@ -249,6 +255,8 @@ public final class FakeEcc {
                 "TARGET_QTY", "QUAN", 13, "Target quantity"));
         structures.put("BAPIPARNR", structure("PARTN_ROLE", "CHAR", 2, "Partner function", "PARTN_NUMB", "CHAR", 10, "Customer number"));
         structures.put("BAPISCHDL", structure("ITM_NUMBER", "NUMC", 6, "Item number", "REQ_QTY", "QUAN", 13, "Order quantity"));
+        structures.put("BAPICOND", structure("ITM_NUMBER", "NUMC", 6, "Item number", "COND_TYPE", "CHAR", 4, "Condition type",
+                "COND_VALUE", "DEC", 28, "Condition rate", "CURRENCY", "CUKY", 5, "Currency"));
         structures.put("BAPISDH1X", structure("UPDATEFLAG", "CHAR", 1, "Update indicator"));
         structures.put("BAPICUSTOMER_04", structure("NAME", "CHAR", 35, "Name", "STREET", "CHAR", 35, "Street",
                 "POSTL_COD1", "CHAR", 10, "Postal code", "CITY", "CHAR", 35, "City", "COUNTRY", "CHAR", 3, "Country"));
@@ -639,7 +647,7 @@ public final class FakeEcc {
 
     private void create(Map<String, Object> p, List<Runnable> luw, Map<String, Object> out) {
         allow("BAPI_SALESORDER_CREATEFROMDAT2", p, "ORDER_HEADER_IN", "ORDER_PARTNERS", "ORDER_ITEMS_IN",
-                "ORDER_SCHEDULES_IN", "TESTRUN");
+                "ORDER_SCHEDULES_IN", "ORDER_CONDITIONS_IN", "TESTRUN");
         Map<String, String> h = get(p, "ORDER_HEADER_IN", Map.of());
         List<Map<String, String>> partners = get(p, "ORDER_PARTNERS", List.of());
         List<Map<String, String>> items = get(p, "ORDER_ITEMS_IN", List.of());
@@ -663,6 +671,34 @@ public final class FakeEcc {
             } else if (new BigDecimal(it.getOrDefault("TARGET_QTY", "0")).signum() <= 0) {
                 ret.add(msg("E", "V1", "393", "Item " + it.get("ITM_NUMBER") + ": enter a quantity"));
             }
+        }
+        // Manual price conditions: PR00, the price, may be entered by hand;
+        // the item keeps the rate in place of the material's price.
+        Map<String, String> manual = new HashMap<>();
+        List<Map<String, String>> conds = get(p, "ORDER_CONDITIONS_IN", List.of());
+        for (Map<String, String> cond : conds) {
+            if (!MANUAL_PRICE.equals(cond.get("COND_TYPE"))) {
+                ret.add(msg("E", "V1", "502", "Condition " + cond.get("COND_TYPE") + " is not allowed to be entered manually"));
+                continue;
+            }
+            try {
+                new BigDecimal(cond.getOrDefault("COND_VALUE", ""));
+            } catch (NumberFormatException e) {
+                ret.add(msg("E", "V1", "503", "Item " + cond.get("ITM_NUMBER") + ": enter a condition value"));
+                continue;
+            }
+            manual.put(cond.get("ITM_NUMBER"), cond.get("COND_VALUE"));
+        }
+        if (!manual.isEmpty()) {
+            List<Map<String, String>> priced = new ArrayList<>();
+            for (Map<String, String> it : items) {
+                Map<String, String> m = new HashMap<>(it);
+                if (manual.containsKey(it.get("ITM_NUMBER"))) {
+                    m.put("COND_VALUE", manual.get(it.get("ITM_NUMBER")));
+                }
+                priced.add(m);
+            }
+            items = priced;
         }
         if (!ret.isEmpty()) {
             out.put("SALESDOCUMENT", "");

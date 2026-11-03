@@ -4,7 +4,7 @@ apiVersion: turgon.dev/v1alpha1
 kind: ConnectorManifest
 metadata:
   name: sap-ecc
-  version: 0.5.1
+  version: 0.5.2
 spec:
   system: "SAP ECC 6.0, EHP 6-8"
   runtime: camel-java
