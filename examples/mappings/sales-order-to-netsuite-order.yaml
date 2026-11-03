@@ -5,7 +5,7 @@ apiVersion: turgon.dev/v1alpha1
 kind: Mapping
 metadata:
   name: sales-order-to-netsuite-order
-  version: 1.0.0
+  version: 1.1.0
 spec:
   from: model.SalesOrder
   to: model.SalesOrder
@@ -14,7 +14,8 @@ spec:
     - { target: orderDate,  expression: "orderDate",                  origin: human, confidence: 1.0 }
     - { target: memo,       expression: "'Shopify ' & externalId",    origin: human, confidence: 0.95 }
     - target: netsuiteItems
-      expression: "lines.{ 'item': { 'id': $lookup({ 'M-1': '101', 'M-2': '102' }, material) }, 'quantity': quantity }[]"
+      # A line's rate is the shop's unit price; without one NetSuite uses its own.
+      expression: "lines.{ 'item': { 'id': $lookup({ 'M-1': '101', 'M-2': '102' }, material) }, 'quantity': quantity, 'rate': $number(price) }[]"
       origin: human
       confidence: 0.95
     - { target: shopifyId,  expression: "shopifyId",                  origin: human, confidence: 1.0 }

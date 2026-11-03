@@ -1106,3 +1106,21 @@ func TestShopPricesReachS4(t *testing.T) {
 		t.Fatalf("S/4 order %v", o)
 	}
 }
+
+// A shop line's unit price reaches NetSuite as the line's rate, so the
+// order keeps the shop's total instead of NetSuite's base prices.
+func TestShopPricesReachNetSuite(t *testing.T) {
+	f, shop, ns, _ := newNetSuiteFixture(t)
+	id := shop.AddOrder(map[string]any{
+		"name": "#1002", "email": "Ada@Example.com", "created_at": "2026-09-24T10:30:00-04:00",
+		"subtotal_price": "420.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-2", "quantity": 3, "price": "140.00"}},
+	})
+	evs := f.dispatch()
+	if _, err, _ := f.run(evs[len(evs)-1], approve("04-write")); err != nil {
+		t.Fatal(err)
+	}
+	o := ns.OrderByExternalID(fmt.Sprintf("SHOPIFY-%d", id))
+	if o == nil || o["total"] != 420.0 {
+		t.Fatalf("NetSuite order = %v", o)
+	}
+}

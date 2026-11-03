@@ -261,8 +261,21 @@ func (a *Account) upsert(w http.ResponseWriter, r *http.Request, eid string) {
 			fail(w, http.StatusBadRequest, "USER_ERROR", fmt.Sprintf("Error while accessing a resource. Line %d: invalid item reference key %s or quantity.", i+1, iid))
 			return
 		}
+		// A line's rate replaces the item's base price, as on a NetSuite
+		// sales order line with a custom price level.
+		line := map[string]any{"item": map[string]any{"id": iid}, "quantity": q}
+		if r, given := l["rate"]; given && r != nil {
+			rate, err := strconv.ParseFloat(fmt.Sprint(r), 64)
+			if err != nil || rate < 0 {
+				fail(w, http.StatusBadRequest, "USER_ERROR", fmt.Sprintf("Invalid rate reference key %v for line %d.", r, i+1))
+				return
+			}
+			price = rate
+			line["rate"] = rate
+		}
 		total += price * q
-		items = append(items, map[string]any{"item": map[string]any{"id": iid}, "quantity": q, "amount": price * q})
+		line["amount"] = price * q
+		items = append(items, line)
 	}
 	id := ""
 	for oid, o := range a.orders {
