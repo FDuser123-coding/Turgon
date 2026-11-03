@@ -581,6 +581,20 @@ Mesh secret: secrets that only connector configuration uses (webhook signing sec
 broker) may be unset. A missing one is recorded as absent, and if it is set later, secret
 rotation notices it and reconnects.
 
+**The ERP's price against the shop's.** A write step can compare its amount with the one the
+target's dry run shows. It does so with
+`checkAmount: { preview: record.TotalNetAmount, tolerance: 0.01 }`, as
+`shopify-store-orders-to-s4` now does.
+- **When they differ by more than the tolerance** (a fraction of the amount; half a cent always
+  agrees), the write waits for a person even if policy alone would let it through. The reason
+  names both amounts, and the commit insists on the approval. The same holds when the dry run
+  shows no amount at that path.
+- **What is recorded:** the audit log gets `writeback.amount-mismatch`.
+- **What `turgon verify` checks:** that the step simulates, on an interface that can.
+- **Measured live:** a 420.00 shop order that SAP priced at 10.00 asked for approval with
+  `high-risk tool; the target's dry run shows 10.00 at record.TotalNetAmount, the source
+  420.00`, as the notification's "Why approval". Once approved, it became sales order 36965750.
+
 ### SAP ECC: BAPIs from a Camel/Java connector
 
 Connectors with `runtime: camel-java` run outside the Go worker, in a sidecar container next to it,
@@ -2159,6 +2173,8 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 - **Approvals bind to content.** A pending approval carries the SHA-256 of the write request;
   a decision must echo it and name the waiting step, so an early, stale or misdirected
   decision can never approve a write nobody looked at.
+- **The target's dry run is checked, not only shown.** A write's `checkAmount` compares the
+  amount with the one the target's simulation computes, and a difference asks a person.
 - **Two-phase writes.** The write guard's `Prepare` (policy, validation, dry-run) and
   `Commit` phases let a workflow wait durably for a person between them.
 - **Write outputs.** A write step's `output` puts its result into the document, so later steps

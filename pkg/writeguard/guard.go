@@ -6,10 +6,14 @@
 package writeguard
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -107,6 +111,18 @@ type Request struct {
 	// RequireApproval asks a person even when policy would not.
 	RequireApproval bool   `json:"requireApproval,omitempty"`
 	Reason          string `json:"reason,omitempty"`
+	// CheckAmount compares Amount with the amount the target's dry run
+	// shows; a difference asks a person (see Prepared.AmountMismatch).
+	CheckAmount *AmountCheck `json:"checkAmount,omitempty"`
+}
+
+// AmountCheck names where a target's dry run shows the write's amount.
+type AmountCheck struct {
+	// Preview is the amount's dotted path in the preview (record.TotalNetAmount).
+	Preview string `json:"preview"`
+	// Tolerance is the relative difference allowed (0.01 is 1%); amounts
+	// within half a cent always agree.
+	Tolerance float64 `json:"tolerance,omitempty"`
 }
 
 // Status of a write.
@@ -211,6 +227,10 @@ type Prepared struct {
 	Decision      policy.Decision `json:"decision"`
 	Preview       json.RawMessage `json:"preview,omitempty"`
 	NeedsApproval bool            `json:"needsApproval"`
+	// AmountMismatch says how the dry run's amount differs from the
+	// request's, when a CheckAmount found it does: the write then needs a
+	// person, and its commit must carry RequireApproval.
+	AmountMismatch string `json:"amountMismatch,omitempty"`
 }
 
 func (g *Guard) target(req Request) (*target, error) {
@@ -295,7 +315,63 @@ func (g *Guard) Prepare(ctx context.Context, req Request) (Prepared, error) {
 			}
 		}
 	}
+	if c := req.CheckAmount; c != nil {
+		if why := mismatch(req.Amount, p.Preview, *c); why != "" {
+			p.NeedsApproval, p.AmountMismatch = true, why
+			p.Decision.Reasons = append(p.Decision.Reasons, why)
+			if _, err := g.cfg.Audit.Record(actor, "writeback.amount-mismatch", map[string]any{"target": req.Target, "operation": req.Operation, "key": req.IdempotencyKey, "reason": why}); err != nil {
+				return p, err
+			}
+		}
+	}
 	return p, nil
+}
+
+// mismatch says how a dry run's amount differs from the request's, or ""
+// when they agree. A dry run that shows no amount does not agree.
+func mismatch(amount float64, preview json.RawMessage, c AmountCheck) string {
+	if len(preview) == 0 {
+		return fmt.Sprintf("the amount %.2f could not be checked: the target gave no dry run", amount)
+	}
+	dec := json.NewDecoder(bytes.NewReader(preview))
+	dec.UseNumber()
+	var doc any
+	if dec.Decode(&doc) != nil {
+		return fmt.Sprintf("the amount %.2f could not be checked: the dry run is not JSON", amount)
+	}
+	shown, ok := AmountAt(doc, c.Preview)
+	if !ok {
+		return fmt.Sprintf("the amount %.2f could not be checked: the dry run shows no amount at %s", amount, c.Preview)
+	}
+	if math.Abs(shown-amount) <= math.Max(c.Tolerance*math.Abs(amount), 0.005) {
+		return ""
+	}
+	return fmt.Sprintf("the target's dry run shows %.2f at %s, the source %.2f", shown, c.Preview, amount)
+}
+
+// AmountAt returns the number at a dotted path of a decoded JSON document
+// (totals.net), and whether there is one. Numbers sent as strings
+// ("310.00", as Shopify and SAP send amounts) count too.
+func AmountAt(doc any, path string) (float64, bool) {
+	v := doc
+	for _, k := range strings.Split(path, ".") {
+		m, ok := v.(map[string]any)
+		if !ok {
+			return 0, false
+		}
+		v = m[k]
+	}
+	switch v := v.(type) {
+	case float64:
+		return v, true
+	case json.Number:
+		n, err := v.Float64()
+		return n, err == nil
+	case string:
+		n, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		return n, err == nil
+	}
+	return 0, false
 }
 
 // Commit performs a prepared write. approval must be supplied when Prepare

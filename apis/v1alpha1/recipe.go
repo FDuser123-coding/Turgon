@@ -132,6 +132,20 @@ type WriteStep struct {
 	// compares with approval thresholds; by default the first of netValue,
 	// amount and totalAmount.
 	Amount string `json:"amount,omitempty"`
+	// CheckAmount compares the amount with the one the target's dry run
+	// shows (the ERP's own price), and asks a person when they differ.
+	// It needs simulate.
+	CheckAmount *AmountCheck `json:"checkAmount,omitempty"`
+}
+
+// AmountCheck names where the target's dry run shows the write's amount.
+type AmountCheck struct {
+	// Preview is the amount's dotted path in the dry run's preview, such
+	// as record.TotalNetAmount for SAP S/4HANA.
+	Preview string `json:"preview"`
+	// Tolerance is the relative difference allowed: 0.01 is 1%. Amounts
+	// within half a cent always agree.
+	Tolerance float64 `json:"tolerance,omitempty"`
 }
 
 type Capacity struct {

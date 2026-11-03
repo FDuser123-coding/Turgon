@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -221,6 +220,11 @@ func (x *Activities) PrepareWrite(ctx context.Context, in PrepareInput) (Prepare
 	if err != nil {
 		return PrepareOutput{}, classify(err)
 	}
+	if p.AmountMismatch != "" {
+		// The commit, which does not dry-run again, must insist on the
+		// approval the mismatch asked for.
+		req.RequireApproval = true
+	}
 	return PrepareOutput{Request: req, Prepared: p}, nil
 }
 
@@ -267,6 +271,10 @@ func buildRequest(in PrepareInput) (writeguard.Request, error) {
 	if c.Amount != "" {
 		amount = AmountAt(in.Doc, c.Amount)
 	}
+	var check *writeguard.AmountCheck
+	if c.CheckAmount != nil {
+		check = &writeguard.AmountCheck{Preview: c.CheckAmount.Preview, Tolerance: c.CheckAmount.Tolerance}
+	}
 	return writeguard.Request{
 		Recipe:          in.Workflow,
 		Target:          c.Endpoint,
@@ -281,6 +289,7 @@ func buildRequest(in PrepareInput) (writeguard.Request, error) {
 		Simulate:        c.Simulation != "",
 		Compensation:    c.Compensation,
 		RequireApproval: c.Approval == "required",
+		CheckAmount:     check,
 		Reason:          fmt.Sprintf("recipe %s step %s", in.Workflow, in.Step),
 	}, nil
 }
@@ -304,28 +313,10 @@ func AmountOf(doc map[string]any) float64 {
 }
 
 // AmountAt returns the number at a dotted path of a document (totals.net),
-// or 0 if there is none. Numbers sent as strings ("310.00", as Shopify
-// sends prices) count too.
+// or 0 if there is none (see writeguard.AmountAt).
 func AmountAt(doc map[string]any, path string) float64 {
-	var v any = doc
-	for _, k := range strings.Split(path, ".") {
-		m, ok := v.(map[string]any)
-		if !ok {
-			return 0
-		}
-		v = m[k]
-	}
-	switch v := v.(type) {
-	case float64:
-		return v
-	case json.Number:
-		n, _ := v.Float64()
-		return n
-	case string:
-		n, _ := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		return n
-	}
-	return 0
+	n, _ := writeguard.AmountAt(doc, path)
+	return n
 }
 
 func lowerFirst(s string) string {

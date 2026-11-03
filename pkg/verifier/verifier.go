@@ -317,6 +317,18 @@ func (v *Verifier) writeStep(r *Report, path string, w *v1alpha1.WriteStep, prod
 	if w.Simulate && iface.Simulation == "" {
 		r.add(StageInterfaces, SeverityWarning, path+".write.simulate", "%s interface %q cannot simulate writes; the dry-run needs a sandbox", m.Metadata.Name, iface.Kind)
 	}
+	if c := w.CheckAmount; c != nil {
+		switch {
+		case iface.Simulation == "":
+			r.add(StagePolicy, SeverityError, path+".write.checkAmount", "checking the amount needs the target's dry run, and %s interface %q cannot simulate writes", m.Metadata.Name, iface.Kind)
+		case !w.Simulate:
+			r.add(StagePolicy, SeverityError, path+".write.checkAmount", "checking the amount needs the target's dry run: set simulate: true")
+		case strings.TrimSpace(c.Preview) == "":
+			r.add(StagePolicy, SeverityError, path+".write.checkAmount.preview", "name where the dry run shows the amount, such as record.TotalNetAmount")
+		case c.Tolerance < 0 || c.Tolerance >= 1:
+			r.add(StagePolicy, SeverityError, path+".write.checkAmount.tolerance", "the tolerance is a fraction of the amount, from 0 to below 1 (0.01 is 1%%), not %v", c.Tolerance)
+		}
+	}
 	if producing != "" && op.Entity != "" && op.Entity != producing {
 		r.add(StageInterfaces, SeverityError, path+".write.operation", "%s.%s expects %s but the preceding map step produces %s", m.Metadata.Name, op.Name, op.Entity, producing)
 		r.raise(2)
