@@ -25,8 +25,8 @@ jobs:
     env:
       TURGON_TEST_DATABASE_URL: postgres://turgon:turgon@localhost:5432/turgon_test?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Format
@@ -85,8 +85,8 @@ jobs:
       run:
         working-directory: console
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -98,7 +98,7 @@ jobs:
       - run: npm run build
       - name: Vercel demo build lands in console/dist
         run: VERCEL=1 npm run build && test -f dist/index.html
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Build turgon with the console embedded
@@ -108,11 +108,11 @@ jobs:
   chart:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: azure/setup-helm@v4
+      - uses: azure/setup-helm@v5
         with:
           version: v3.19.0
       - name: Install kubeconform and hadolint
@@ -261,17 +261,20 @@ jobs:
     env:
       TURGON_TEST_DATABASE_URL: postgres://turgon:turgon@localhost:5432/turgon_test?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: "21"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
         with:
           gradle-version: "8.14.3"
+          # The MIT-licensed cache: the default one is a proprietary component
+          # under Gradle's terms of use.
+          cache-provider: basic
       - name: The protocol's Go code is up to date
         run: |
           curl -sSfL -o /usr/local/bin/protoc https://repo1.maven.org/maven2/com/google/protobuf/protoc/4.32.1/protoc-4.32.1-linux-x86_64.exe
@@ -320,8 +323,8 @@ jobs:
     env:
       TURGON_TEST_DATABASE_URL: postgres://turgon:turgon@localhost:5432/turgon_test?sslmode=disable
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -335,8 +338,8 @@ jobs:
   appliance:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
       - name: Build the offline bundle
@@ -371,11 +374,11 @@ jobs:
   licenses:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: go install github.com/google/go-licenses/v2@v2.0.1
@@ -390,7 +393,7 @@ jobs:
   plugins:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install wasm-tools
         run: |
           curl -sSfL https://github.com/bytecodealliance/wasm-tools/releases/download/v1.260.0/wasm-tools-1.260.0-x86_64-linux.tar.gz \
