@@ -220,6 +220,11 @@ type Tool struct {
 	Fields []string `json:"fields,omitempty"`
 	// Simulate asks the target for a preview before a write is approved.
 	Simulate bool `json:"simulate,omitempty"`
+	// Amount and CheckAmount are those of the recipe write the tool comes
+	// from (see v1alpha1.WriteStep): an agent's request is weighed and
+	// checked as the recipe's would be.
+	Amount      string                `json:"amount,omitempty"`
+	CheckAmount *v1alpha1.AmountCheck `json:"checkAmount,omitempty"`
 }
 
 // PolicyRef is a policy pack compiled into the spec, with its Rego source,
@@ -424,7 +429,7 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 			}
 			step.Write = wc
 			b.connector(w.Target, m, op.Interface)
-			b.writeTool(b.endpoint(w.Target), op, fmt.Sprintf("%s via %s", humanize(op.Name), w.Target), doc, w.Simulate)
+			b.writeTool(b.endpoint(w.Target), op, fmt.Sprintf("%s via %s", humanize(op.Name), w.Target), doc, w)
 			if doc != nil && w.Output != "" {
 				doc[w.Output] = true
 			}
@@ -578,7 +583,7 @@ func (b *builder) tool(endpoint, op, entity, risk, desc string) {
 // writeTool registers a write tool with the record fields a recipe passes
 // it. When several recipes write through the same operation, the tool
 // takes the union of their fields.
-func (b *builder) writeTool(endpoint string, op v1alpha1.Operation, desc string, doc map[string]bool, simulate bool) {
+func (b *builder) writeTool(endpoint string, op v1alpha1.Operation, desc string, doc map[string]bool, w *v1alpha1.WriteStep) {
 	key := endpoint + "/" + op.Name
 	prev, seen := b.tools[key]
 	b.tool(endpoint, op.Name, op.Entity, op.Risk, desc)
@@ -587,17 +592,26 @@ func (b *builder) writeTool(endpoint string, op v1alpha1.Operation, desc string,
 	for f := range doc {
 		fields[f] = true
 	}
+	simulate, amount, check := w.Simulate, w.Amount, w.CheckAmount
 	if seen {
 		for _, f := range prev.Fields {
 			fields[f] = true
 		}
+		// Several recipes writing through the same tool: an agent's
+		// request is held to the strictest of them.
 		simulate = simulate || prev.Simulate
+		if prev.Amount != "" {
+			amount = prev.Amount
+		}
+		if prev.CheckAmount != nil {
+			check = prev.CheckAmount
+		}
 	}
 	for f := range fields {
 		t.Fields = append(t.Fields, f)
 	}
 	sort.Strings(t.Fields)
-	t.Simulate = simulate
+	t.Simulate, t.Amount, t.CheckAmount = simulate, amount, check
 	b.tools[key] = t
 }
 

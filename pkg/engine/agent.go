@@ -100,6 +100,11 @@ func agentWrite(ctx workflow.Context, in AgentWriteInput, push *pushes) (RunResu
 		rec.Status, rec.Result = d.Status, d.Result
 		return RunResult{Writes: []WriteRecord{rec}}, nil
 	}
+	if prep.AmountMismatch != "" {
+		// The commit, which does not dry-run again, must insist on the
+		// approval the mismatch asked for.
+		req.RequireApproval = true
+	}
 	var approval *policy.Approval
 	if prep.NeedsApproval {
 		pending = &PendingApproval{
