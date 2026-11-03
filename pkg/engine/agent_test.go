@@ -251,3 +251,29 @@ func pushEnv(env *testsuite.TestWorkflowEnvironment, acts *Activities, refuse ..
 	})
 	return &sent
 }
+
+// An agent's write is held to the dry-run amount check of the recipe its
+// tool comes from: an amount the ERP's dry run does not show asks a
+// person, and the commit insists on it.
+func TestAgentWriteAmountMustMatchTheDryRun(t *testing.T) {
+	f := newFixture(t)
+	in := agentOrder("9", policy.RoleOperator)
+	in.Request.CheckAmount = &writeguard.AmountCheck{Preview: "row.net_value"}
+	in.Request.Amount = 999
+	res, err, pending := f.runAgent(in, approve(AgentStep))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "the target's dry run shows 480.00 at row.net_value, the source 999.00"
+	if len(pending) != 1 || !slices.Contains(pending[0].Reasons, want) || !pending[0].Request.RequireApproval {
+		t.Fatalf("pending %+v (preview %s)", pending, func() string {
+			if len(pending) > 0 {
+				return string(pending[0].Preview)
+			}
+			return ""
+		}())
+	}
+	if len(res.Writes) != 1 || res.Writes[0].Status != writeguard.StatusCommitted {
+		t.Fatalf("result %+v", res)
+	}
+}

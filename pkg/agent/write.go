@@ -141,6 +141,13 @@ func (s *Server) submit(ctx context.Context, t compiler.Tool, id Identity, raw j
 		return writeCall{}, errors.New("unreadable record")
 	}
 	amount := engine.AmountOf(args.Record)
+	if t.Amount != "" {
+		amount = engine.AmountAt(args.Record, t.Amount)
+	}
+	var check *writeguard.AmountCheck
+	if t.CheckAmount != nil {
+		check = &writeguard.AmountCheck{Preview: t.CheckAmount.Preview, Tolerance: t.CheckAmount.Tolerance}
+	}
 	// The audit log and the approver see who asked; the reason is the
 	// agent's own words.
 	reason := strings.TrimSpace(args.Reason)
@@ -152,6 +159,7 @@ func (s *Server) submit(ctx context.Context, t compiler.Tool, id Identity, raw j
 		Subject:        policy.Subject{ID: id.Agent, Agent: true, OnBehalfOf: id.OnBehalfOf, Roles: id.Roles},
 		IdempotencyKey: "agent:" + id.Agent + ":" + args.RequestID,
 		Payload:        payload, Entity: t.Entity, Amount: amount, Simulate: t.Simulate, Reason: reason,
+		CheckAmount: check,
 	}
 	w := writeCall{workflowID: writeID(t.Name, id.Agent, args.RequestID), requestID: args.RequestID}
 	w.status, err = s.writes.Submit(ctx, w.workflowID, engine.AgentWriteInput{SpecDigest: s.digest, Request: wreq, ApprovalTimeout: s.timeout, Push: push})

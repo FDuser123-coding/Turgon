@@ -591,6 +591,12 @@ target's dry run shows. It does so with
   shows no amount at that path.
 - **What is recorded:** the audit log gets `writeback.amount-mismatch`.
 - **What `turgon verify` checks:** that the step simulates, on an interface that can.
+- **Agents get the same check.** The agent write tool compiled from the step (`create_sales_order`)
+  carries its `amount` and `checkAmount`, so an agent's request is weighed and checked as the
+  recipe's write would be. When several recipes write through one tool, the strictest check
+  applies. Live, an agent asking for a 420.00 order through `turgon mcp` was told
+  `a person must approve this write ... (high-risk tool, the target's dry run shows 10.00 at
+  record.TotalNetAmount, the source 420.00)`. Once approved, the order became sales order 37156280.
 - **Measured live:** a 420.00 shop order that SAP priced at 10.00 asked for approval with
   `high-risk tool; the target's dry run shows 10.00 at record.TotalNetAmount, the source
   420.00`, as the notification's "Why approval". Once approved, it became sales order 36965750.

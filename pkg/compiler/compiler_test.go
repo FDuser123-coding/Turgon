@@ -242,3 +242,20 @@ func TestParseSpecIsStrict(t *testing.T) {
 		t.Errorf("tampered: %v", err)
 	}
 }
+
+// An agent's write tool is weighed and checked as the recipe write it
+// comes from: the S/4HANA order tool checks SAP's total too.
+func TestWriteToolsCarryTheRecipesAmountCheck(t *testing.T) {
+	cat, _ := catalog.Load("../../examples")
+	rt := compileNamed(t, cat, "shopify-store-orders-to-s4")
+	for _, tl := range rt.Spec.Tools {
+		if tl.Endpoint != "s4-prod" || tl.Operation != "create-sales-order" {
+			continue
+		}
+		if c := tl.CheckAmount; c == nil || c.Preview != "record.TotalNetAmount" || c.Tolerance != 0.01 || !tl.Simulate {
+			t.Fatalf("tool %+v", tl)
+		}
+		return
+	}
+	t.Fatalf("no S/4HANA order tool in %+v", rt.Spec.Tools)
+}
