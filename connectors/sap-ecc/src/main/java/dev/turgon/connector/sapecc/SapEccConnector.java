@@ -20,7 +20,7 @@ import java.util.Set;
  */
 public final class SapEccConnector implements Connector {
     public static final String NAME = "sap-ecc";
-    public static final String VERSION = "0.5.1";
+    public static final String VERSION = "0.5.2";
 
     @Override
     public String name() {

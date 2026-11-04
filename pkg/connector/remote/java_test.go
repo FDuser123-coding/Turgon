@@ -67,7 +67,7 @@ func TestJavaSidecar(t *testing.T) {
 			t.Fatalf("check %+v", c)
 		}
 	}
-	if !strings.Contains(checks[0].Detail, "sap-ecc 0.5.1") || !strings.Contains(checks[1].Detail, "fake ECC") {
+	if !strings.Contains(checks[0].Detail, "sap-ecc 0.5.2") || !strings.Contains(checks[1].Detail, "fake ECC") {
 		t.Fatalf("checks %+v", checks)
 	}
 
@@ -244,7 +244,7 @@ func TestJavaSidecarDiscover(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cat.Connector != "sap-ecc" || cat.Endpoint != "sap-ecc" || cat.Version != "0.5.1" {
+	if cat.Connector != "sap-ecc" || cat.Endpoint != "sap-ecc" || cat.Version != "0.5.2" {
 		t.Fatalf("catalog %s/%s %s", cat.Endpoint, cat.Connector, cat.Version)
 	}
 	hd, ok := cat.Object("BAPISDHD1")

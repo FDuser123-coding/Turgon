@@ -656,7 +656,12 @@ Errors are status codes:
   - **create-sales-order** calls `BAPI_SALESORDER_CREATEFROMDAT2`, with `TESTRUN` for the preview.
     The idempotency key is the purchase order number, so a retried create finds the order with
     `BAPI_SALESORDER_GETLIST` instead of making a second. The create and `BAPI_TRANSACTION_COMMIT`
-    run in one SAP session. The order is confirmed with `BAPI_SALESORDER_GETSTATUS`.
+    run in one SAP session. The order is confirmed with `BAPI_SALESORDER_GETSTATUS`. With
+    `priceCondition` (`PR00` in `ecc-prod`), each line that carries a `price` adds a row to
+    `ORDER_CONDITIONS_IN`: that manual condition, its value, the item and the order's currency.
+    SAP then keeps the source's price. Lines without one are priced by SAP's pricing procedure.
+    The condition must be one users may enter by hand; the fake ECC takes `PR00` and refuses
+    others, as SAP does.
   - **cancel-sales-order** is its compensation. It deletes the order through
     `BAPI_SALESORDER_CHANGE`, which SAP refuses once there is a delivery.
   - **get-customer** calls `BAPI_CUSTOMER_GETDETAIL2`.

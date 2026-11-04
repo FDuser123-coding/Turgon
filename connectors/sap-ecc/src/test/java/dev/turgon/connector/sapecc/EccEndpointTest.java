@@ -262,4 +262,31 @@ class EccEndpointTest {
         // A delivered order's block cannot change.
         assertThrows(ConnectorException.Rejected.class, () -> ecc.commit("update-sales-order", "K8", json("{\"salesOrder\": \"" + doc + "\", \"creditStatus\": \"review\"}")));
     }
+
+    @Test
+    void linePricesAreManualConditions() throws Exception {
+        String priced = ORDER.replace("{\"material\":\"m-7\",\"quantity\":2}", "{\"material\":\"m-7\",\"quantity\":2,\"price\":\"44.00\"}");
+        // Without priceCondition the price is not sent: SAP prices the order.
+        String plain = ecc.commit("create-sales-order", "P0", json(priced)).path("salesOrder").asText();
+        assertFalse(sap.orders().get(plain).items().getFirst().containsKey("COND_VALUE"));
+
+        try (Endpoint withPrices = new SapEccConnector().bind(config(
+                "{\"rfc\":{\"provider\":\"fake\",\"destination\":{\"ashost\":\"ecc1\",\"client\":\"100\"}},\"priceCondition\":\"PR00\"}", "TURGON:pw"))) {
+            assertTrue(withPrices.simulate("create-sales-order", json(priced)).path("testRun").asBoolean());
+            String number = withPrices.commit("create-sales-order", "P1", json(priced)).path("salesOrder").asText();
+            var items = sap.orders().get(number).items();
+            assertEquals("44.00", items.getFirst().get("COND_VALUE"));
+            assertFalse(items.get(1).containsKey("COND_VALUE"), "a line without a price is priced by SAP");
+            assertThrows(ConnectorException.Invalid.class,
+                    () -> withPrices.commit("create-sales-order", "P2", json(priced.replace("\"44.00\"", "\"cheap\""))));
+        }
+        // A condition SAP's pricing procedure does not let users enter is SAP's refusal.
+        try (Endpoint wrong = new SapEccConnector().bind(config(
+                "{\"rfc\":{\"provider\":\"fake\",\"destination\":{\"ashost\":\"ecc1\",\"client\":\"100\"}},\"priceCondition\":\"ZZ99\"}", "TURGON:pw"))) {
+            var refused = assertThrows(ConnectorException.Rejected.class, () -> wrong.simulate("create-sales-order", json(priced)));
+            assertTrue(refused.getMessage().contains("V1 502"), refused.getMessage());
+        }
+        assertThrows(ConnectorException.Invalid.class, () -> new SapEccConnector().bind(config(
+                "{\"rfc\":{\"provider\":\"fake\"},\"priceCondition\":\"pr-00\"}", "u:p")));
+    }
 }

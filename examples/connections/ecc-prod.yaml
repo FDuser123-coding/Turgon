@@ -26,6 +26,9 @@ spec:
       destination: { ashost: ecc.acme.internal, sysnr: "00", client: "100", lang: EN }
     salesArea: { salesOrg: "1000", distributionChannel: "10", division: "00" }
     orderType: TA
+    # Lines that carry a price are sent with it as PR00, a manual condition
+    # SAP keeps; lines without one are priced by SAP.
+    priceCondition: PR00
     idoc:
       server: { gwhost: ecc.acme.internal, gwserv: sapgw00, progid: TURGON_IDOC, connectionCount: 2 }
       events:
