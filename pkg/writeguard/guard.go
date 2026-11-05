@@ -212,6 +212,40 @@ func storeKey(req Request) string {
 	return req.Target + "/" + req.Operation + "/" + req.IdempotencyKey
 }
 
+// compensateKey is the store key of the compensation that undoes req.
+func compensateKey(req Request) string {
+	return req.Target + "/" + req.Compensation + "/" + req.IdempotencyKey + "#compensate"
+}
+
+// maxGenerations bounds how often one write can be undone and written again.
+const maxGenerations = 50
+
+// generation returns req under the key its next attempt writes with. A
+// write its saga undid (its compensation committed) is not a duplicate
+// to answer with the undone document: a retry of the run writes it again
+// as a new generation, with the key "<key>~2", "~3" and so on, which the
+// target sees too, so it creates a new document instead of finding the
+// undone one (its own idempotency: a reference field, requestid,
+// Idempotency-Key). Prepare, Commit and Compensate agree on it, because it
+// depends only on what the store holds.
+func (g *Guard) generation(req Request) (Request, error) {
+	if req.Compensation == "" {
+		return req, nil
+	}
+	r := req
+	for n := 2; n <= maxGenerations; n++ {
+		undo, err := g.cfg.Store.Lookup(compensateKey(r))
+		if err != nil {
+			return req, err
+		}
+		if undo == nil || undo.Status != StatusCommitted {
+			return r, nil
+		}
+		r.IdempotencyKey = req.IdempotencyKey + "~" + strconv.Itoa(n)
+	}
+	return req, fmt.Errorf("%w: %s.%s %s was undone %d times; give the write another idempotency key", ErrInvalid, req.Target, req.Operation, req.IdempotencyKey, maxGenerations-1)
+}
+
 func (g *Guard) actor(req Request) string {
 	if req.Subject.Agent && req.Subject.OnBehalfOf != "" {
 		return req.Subject.ID + " for " + req.Subject.OnBehalfOf
@@ -268,6 +302,9 @@ func (g *Guard) decide(ctx context.Context, actor string, in policy.Input) (poli
 func (g *Guard) Prepare(ctx context.Context, req Request) (Prepared, error) {
 	t, err := g.target(req)
 	if err != nil {
+		return Prepared{}, err
+	}
+	if req, err = g.generation(req); err != nil {
 		return Prepared{}, err
 	}
 	actor := g.actor(req)
@@ -386,6 +423,11 @@ func (g *Guard) Commit(ctx context.Context, req Request, approval *policy.Approv
 func (g *Guard) commitRequest(ctx context.Context, req Request, approval *policy.Approval) (Outcome, error) {
 	t, err := g.target(req)
 	if err != nil {
+		return Outcome{Status: StatusFailed}, err
+	}
+	// The approval binds the request as the run asked for it; the key it is
+	// written under is the attempt's generation.
+	if req, err = g.generation(req); err != nil {
 		return Outcome{Status: StatusFailed}, err
 	}
 	actor := g.actor(req)
@@ -530,12 +572,16 @@ func (g *Guard) compensate(ctx context.Context, req Request, result json.RawMess
 	if req.Compensation == "" {
 		return fmt.Errorf("writeguard: %s.%s has no compensation", req.Target, req.Operation)
 	}
+	req, err := g.generation(req)
+	if err != nil {
+		return err
+	}
 	creq := req
 	creq.Operation = req.Compensation
 	creq.IdempotencyKey = req.IdempotencyKey + "#compensate"
 	creq.Payload = result
 	creq.Reason = "compensating " + req.Operation
-	key := storeKey(creq)
+	key := storeKey(creq) // compensateKey(req), which generation looks up
 	prior, err := g.cfg.Store.Begin(key)
 	if err != nil {
 		return err
