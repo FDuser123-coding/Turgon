@@ -149,6 +149,21 @@ type Operation struct {
 	// NullValue is sent in a JSON body in place of null, for APIs that
 	// clear a field with another value (HubSpot clears a property with "").
 	NullValue *string `json:"nullValue,omitempty"`
+	// Existing finds the record a retried create already made, for APIs
+	// that can neither upsert by an external ID nor take an idempotency
+	// key (Business Central): the create is sent only when it lists none.
+	Existing *Existing `json:"existing,omitempty"`
+}
+
+// Existing is a list request whose path and params may use the payload's
+// fields and {{idempotencyKey}}, such as an OData filter on the field the
+// create stores the key in. A value quoted in the template ('{{field}}')
+// has its quotes doubled, in the params as in the path.
+type Existing struct {
+	Path   string            `json:"path"`
+	Params map[string]string `json:"params,omitempty"`
+	// Items is the dotted path of the list in the response (value for OData).
+	Items string `json:"items"`
 }
 
 // Capture locates the record an update changes.
@@ -266,6 +281,14 @@ func (c Config) validate() error {
 		}
 		if op.Capture != nil && (len(op.Fields) == 0 || !strings.HasPrefix(op.Capture.Path, "/")) {
 			return fmt.Errorf("operation %s: capture needs fields and a path", name)
+		}
+		if e := op.Existing; e != nil {
+			if !strings.HasPrefix(e.Path, "/") || e.Items == "" {
+				return fmt.Errorf("operation %s: existing needs a path and items", name)
+			}
+			if op.Method != http.MethodPost && op.Method != http.MethodPut {
+				return fmt.Errorf("operation %s: existing finds a created record, so the operation must POST or PUT", name)
+			}
 		}
 		if op.Restore && op.Method == http.MethodGet {
 			return fmt.Errorf("operation %s: restore must write", name)
@@ -623,7 +646,44 @@ func decodePayload(payload json.RawMessage) (map[string]any, error) {
 // segment, and returns the values it used. A value quoted in the template
 // ('{{key}}', as in OData key predicates) has its quotes doubled, so it
 // cannot end the literal.
+// existing returns the first record the lookup lists, or nil.
+func (c *Conn) existing(ctx context.Context, e *Existing, vars map[string]any) (map[string]any, error) {
+	path, _, err := render(e.Path, vars)
+	if err != nil {
+		return nil, err
+	}
+	q := url.Values{}
+	for k, tmpl := range e.Params {
+		v, _, err := renderWith(tmpl, vars, func(s string) string { return s })
+		if err != nil {
+			return nil, err
+		}
+		q.Set(k, v)
+	}
+	var resp any
+	if _, err := c.doH(ctx, http.MethodGet, path, q, nil, nil, &resp); err != nil {
+		return nil, classify(err)
+	}
+	list, ok := lookup(resp, e.Items).([]any)
+	if !ok {
+		return nil, fmt.Errorf("rest: the lookup for an existing record answered without a list at %q", e.Items)
+	}
+	if len(list) == 0 {
+		return nil, nil
+	}
+	rec, ok := list[0].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("rest: the lookup for an existing record listed a non-object")
+	}
+	return rec, nil
+}
+
 func render(tmpl string, vars map[string]any) (string, map[string]any, error) {
+	return renderWith(tmpl, vars, url.PathEscape)
+}
+
+// renderWith fills a template's {{field}}s, each escaped with escape.
+func renderWith(tmpl string, vars map[string]any, escape func(string) string) (string, map[string]any, error) {
 	used := map[string]any{}
 	var missing []string
 	var b strings.Builder
@@ -644,7 +704,7 @@ func render(tmpl string, vars map[string]any) (string, map[string]any, error) {
 		if loc[0] > 0 && tmpl[loc[0]-1] == '\'' {
 			s = strings.ReplaceAll(s, "'", "''")
 		}
-		b.WriteString(url.PathEscape(s))
+		b.WriteString(escape(s))
 	}
 	b.WriteString(tmpl[last:])
 	if len(missing) > 0 {
@@ -895,7 +955,7 @@ func (c *Conn) Commit(ctx context.Context, name, key string, payload json.RawMes
 			captured = previous(rec, vals)
 		}
 	}
-	if key != "" && strings.Contains(op.Path, "idempotencyKey") {
+	if key != "" && (strings.Contains(op.Path, "idempotencyKey") || op.Existing != nil) {
 		withKey := make(map[string]any, len(vars)+1)
 		for k, v := range vars {
 			withKey[k] = v
@@ -906,6 +966,16 @@ func (c *Conn) Commit(ctx context.Context, name, key string, payload json.RawMes
 	path, params, err := render(op.Path, vars)
 	if err != nil {
 		return nil, err
+	}
+	if op.Existing != nil {
+		found, err := c.existing(ctx, op.Existing, vars)
+		if err != nil {
+			return nil, err
+		}
+		if found != nil {
+			found["existing"] = true
+			return json.Marshal(found)
+		}
 	}
 	header := headerOf(op.Headers)
 	if op.IdempotencyHeader != "" && key != "" {

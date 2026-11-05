@@ -1,0 +1,67 @@
+# The ERP on Microsoft Dynamics 365 Business Central, through its standard
+# API (v2.0) with an app registration's client credentials (the secret,
+# {"clientId", "clientSecret"}), granted API.ReadWrite.All and entered in
+# Business Central's Microsoft Entra Applications page with permission sets
+# for sales. The company is part of the base URL. A sales order and its
+# lines are created in one POST (deep insert); Business Central has no
+# upsert by an external key, so the idempotency key goes into the order's
+# externalDocumentNumber and a retried create finds the order by it.
+# Deletes need If-Match. Changed orders are polled on lastModifiedDateTime.
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata:
+  name: business-central
+  description: "Dynamics 365 Business Central, through its API v2.0 (Entra client credentials)."
+spec:
+  connector: rest@^1
+  secretRef: openbao://business-central/app-registration
+  entities: [SalesOrder, Customer]
+  # Business Central allows 5 concurrent requests per user (more are
+  # queued) and 6,000 per 5 minutes on a production environment.
+  limits: { maxConcurrentCalls: 4, requestsPerSecond: 10 }
+  events:
+    - { name: SalesOrder.Changed, entity: SalesOrder, interface: polling }
+  operations:
+    - { name: create-sales-order, entity: SalesOrder, direction: write, interface: rest-api, risk: high, compensation: delete-sales-order }
+    - { name: delete-sales-order, entity: SalesOrder, direction: write, interface: rest-api, risk: high }
+    - { name: get-customer, entity: Customer, direction: read, interface: rest-api, risk: read }
+  config:
+    baseURL: https://api.businesscentral.dynamics.com/v2.0/contoso.onmicrosoft.com/production/api/v2.0/companies(c0a1b2c3-d4e5-4f60-8a7b-9c0d1e2f3a4b)
+    auth:
+      type: oauth2
+      tokenURL: https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/token
+      scopes: [https://api.businesscentral.dynamics.com/.default]
+    checkPath: /customers?$top=1
+    events:
+      SalesOrder.Changed:
+        path: /salesOrders
+        params:
+          $filter: "lastModifiedDateTime gt {{position}}"
+          $orderby: lastModifiedDateTime asc
+          $top: "{{limit}}"
+        items: value
+        id: id
+        position: lastModifiedDateTime
+        positionFormat: rfc3339
+    operations:
+      create-sales-order:
+        method: POST
+        path: /salesOrders
+        fields:
+          customerNumber: customerNumber
+          externalDocumentNumber: externalDocumentNumber
+          orderDate: orderDate
+          salesOrderLines: bcLines
+        # A retried create finds the order its first try made.
+        existing:
+          path: /salesOrders
+          params: { $filter: "externalDocumentNumber eq '{{idempotencyKey}}'", $top: "1" }
+          items: value
+      delete-sales-order:
+        method: DELETE
+        path: "/salesOrders({{id}})"
+        headers: { If-Match: "*" }
+      get-customer:
+        method: GET
+        path: "/customers({{id}})"
+        fields: { displayName: name, number: customerNumber, blocked: blocked }

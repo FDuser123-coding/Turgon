@@ -1,0 +1,51 @@
+# The Shopify saga with Business Central as the ERP: each new Shopify order
+# becomes a Business Central sales order (a retried create finds it by its
+# external document number), and its number is noted on the Shopify order.
+# If the note cannot be written, the Business Central order is deleted.
+apiVersion: turgon.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: shopify-store-orders-to-business-central
+  version: 1.0.0
+  description: "A Shopify order becomes a Business Central sales order; its number is added to the Shopify order as a note."
+spec:
+  trigger:
+    source: shopify-store
+    event: Order.Created
+  steps:
+    - map:
+        from: shopify-store.Order
+        to: model.SalesOrder
+        mapping: shopify-rest-order-to-order@1
+    # The master record's ID is the Business Central customer number.
+    - resolve:
+        entity: model.Customer
+        strategy: probabilistic
+        autoMatchAbove: 0.95
+        match:
+          - { field: customerRef, kind: email }
+          - { field: customerRef, kind: domain }
+    - map:
+        from: model.SalesOrder
+        to: model.SalesOrder
+        mapping: sales-order-to-business-central-order@1
+    - write:
+        target: business-central
+        operation: create-sales-order
+        idempotencyKey: "SHOPIFY-{{ source.id }}"
+        simulate: true
+        output: erpOrder
+    - map:
+        from: model.SalesOrder
+        to: model.Order
+        mapping: sales-order-to-shopify-note@1
+    - write:
+        target: shopify-store
+        operation: update-order
+        idempotencyKey: "SHOPIFY-{{ source.id }}"
+        simulate: true
+  policies: [writeback-default]
+  capacity:
+    peakPerSecond: 1
+  slo:
+    p95Latency: 10s

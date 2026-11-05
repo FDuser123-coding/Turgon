@@ -27,6 +27,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/connector/debezium"
 	"github.com/fduser123-coding/turgon/pkg/connector/postgres"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest"
+	"github.com/fduser123-coding/turgon/pkg/connector/rest/bctest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/dataversetest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/hubspottest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/netsuitetest"
@@ -979,6 +980,71 @@ func TestShopifyRejectionDeletesTheNetSuiteOrder(t *testing.T) {
 	}
 	if ns.Orders() != 0 {
 		t.Fatal("the NetSuite order was not deleted after Shopify rejected the note")
+	}
+}
+
+// newBusinessCentralFixture runs the shopify-store-orders-to-business-central
+// recipe against the fake Shopify store and the fake Business Central company.
+func newBusinessCentralFixture(t *testing.T) (*fixture, *shoptest.Shop, *bctest.BC) {
+	t.Helper()
+	shop := shoptest.New("shpat_test")
+	t.Cleanup(shop.Close)
+	bc := bctest.New("turgon-app", "s3cret")
+	t.Cleanup(bc.Close)
+	f := newFixtureFor(t, "shopify-store-orders-to-business-central", connector.StaticSecrets{
+		"openbao://shopify-store/token":               "shpat_test",
+		"openbao://business-central/app-registration": `{"clientId": "turgon-app", "clientSecret": "s3cret"}`,
+	}, func(cfg string) string {
+		cfg = strings.ReplaceAll(cfg, "https://turgon-demo.myshopify.com/admin/api/"+shoptest.Version, shop.URL())
+		cfg = strings.ReplaceAll(cfg, "https://login.microsoftonline.com", bc.URL())
+		return strings.ReplaceAll(cfg, "https://api.businesscentral.dynamics.com/v2.0", bc.URL()+"/v2.0")
+	})
+	if err := f.store.PutXref(context.Background(), "Customer", "shopify-store", "ada@example.com", bctest.Adatum); err != nil {
+		t.Fatal(err)
+	}
+	return f, shop, bc
+}
+
+// A shop order becomes a Business Central order, at the shop's prices where
+// it has them and the item card's where it has none, and its number goes on
+// the Shopify order.
+func TestShopifyOrderBecomesBusinessCentralOrder(t *testing.T) {
+	f, shop, bc := newBusinessCentralFixture(t)
+	id := shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-11-05T09:30:00-04:00",
+		"subtotal_price": "612.80", "currency": "eur", "line_items": []any{
+			map[string]any{"sku": "M-1", "quantity": 1, "price": "420.00"},
+			map[string]any{"sku": "M-2", "quantity": 1}},
+	})
+	_, err, pending := f.run(f.dispatch()[0], approve("04-write"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || !strings.Contains(string(pending[0].Preview), `"lineObjectNumber":"1896-S"`) {
+		t.Fatalf("pending = %+v", pending)
+	}
+	o := bc.OrderByExternal(fmt.Sprintf("SHOPIFY-%d", id))
+	if o == nil || o["totalAmountExcludingTax"] != 612.8 || o["orderDate"] != "2026-11-05" || o["customerNumber"] != bctest.Adatum {
+		t.Fatalf("Business Central order = %v", o)
+	}
+	if got := shop.Order(id)["note"]; got != "ERP order "+o["number"].(string) {
+		t.Fatalf("Shopify note = %v", got)
+	}
+}
+
+func TestShopifyRejectionDeletesTheBusinessCentralOrder(t *testing.T) {
+	f, shop, bc := newBusinessCentralFixture(t)
+	shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-11-05T09:30:00-04:00",
+		"subtotal_price": "192.80", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-2", "quantity": 1}},
+	})
+	shop.FailUpdates = true
+	_, err, _ := f.run(f.dispatch()[0], approve("04-write"))
+	if errType(err) != ErrTypeInvalid {
+		t.Fatalf("err = %v (%s)", err, errType(err))
+	}
+	if bc.Orders() != 0 {
+		t.Fatal("the Business Central order was not deleted after Shopify rejected the note")
 	}
 }
 

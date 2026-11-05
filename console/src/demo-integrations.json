@@ -1,6 +1,20 @@
 {
   "systems": [
     {
+      "name": "business-central",
+      "description": "Dynamics 365 Business Central, through its API v2.0 (Entra client credentials).",
+      "connector": "rest",
+      "product": "HTTP JSON APIs",
+      "role": "target",
+      "events": [],
+      "operations": [
+        "create-sales-order"
+      ],
+      "flows": [
+        "shopify-store-orders-to-business-central"
+      ]
+    },
+    {
       "name": "dynamics-crm",
       "description": "Dynamics 365 Sales, through the Dataverse Web API.",
       "connector": "rest",
@@ -264,6 +278,7 @@
         "update-order"
       ],
       "flows": [
+        "shopify-store-orders-to-business-central",
         "shopify-store-orders-to-erp",
         "shopify-store-orders-to-netsuite",
         "shopify-store-orders-to-s4"
@@ -974,7 +989,7 @@
         },
         {
           "kind": "map",
-          "mapping": "sales-order-to-shopify-note@1.0.0",
+          "mapping": "sales-order-to-shopify-note@1.1.0",
           "from": "model.SalesOrder",
           "to": "model.Order",
           "fields": 2
@@ -1030,6 +1045,71 @@
       "problem": "\"commerce\" is a stack slot, not a connector; verify this recipe within a StackBlueprint that fills the slot"
     },
     {
+      "name": "shopify-store-orders-to-business-central",
+      "version": "1.0.0",
+      "description": "A Shopify order becomes a Business Central sales order; its number is added to the Shopify order as a note.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "shopify-store",
+        "event": "Order.Created",
+        "delivery": "webhook"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "shopify-rest-order-to-order@1.1.0",
+          "from": "shopify-store.Order",
+          "to": "model.SalesOrder",
+          "fields": 7
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "probabilistic"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-business-central-order@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.SalesOrder",
+          "fields": 6
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "business-central",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "delete-sales-order"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-shopify-note@1.1.0",
+          "from": "model.SalesOrder",
+          "to": "model.Order",
+          "fields": 2
+        },
+        {
+          "kind": "write",
+          "entity": "Order",
+          "system": "shopify-store",
+          "operation": "update-order",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "restore-order"
+        }
+      ],
+      "targets": [
+        "business-central",
+        "shopify-store"
+      ],
+      "slo": "p95 10s"
+    },
+    {
       "name": "shopify-store-orders-to-erp",
       "version": "1.0.0",
       "description": "A Shopify order becomes an ERP sales order; the ERP number is added to the Shopify order as a note.",
@@ -1065,7 +1145,7 @@
         },
         {
           "kind": "map",
-          "mapping": "sales-order-to-shopify-note@1.0.0",
+          "mapping": "sales-order-to-shopify-note@1.1.0",
           "from": "model.SalesOrder",
           "to": "model.Order",
           "fields": 2
@@ -1130,7 +1210,7 @@
         },
         {
           "kind": "map",
-          "mapping": "sales-order-to-shopify-note@1.0.0",
+          "mapping": "sales-order-to-shopify-note@1.1.0",
           "from": "model.SalesOrder",
           "to": "model.Order",
           "fields": 2
@@ -1188,7 +1268,7 @@
         },
         {
           "kind": "map",
-          "mapping": "sales-order-to-shopify-note@1.0.0",
+          "mapping": "sales-order-to-shopify-note@1.1.0",
           "from": "model.SalesOrder",
           "to": "model.Order",
           "fields": 2
