@@ -51,9 +51,10 @@ spec:
           CardCode: customerCode
           DocDate: orderDate
           DocDueDate: dueDate
-          NumAtCard: reference
           Comments: comments
           DocumentLines: b1Lines
+        # The idempotency key itself, which the lookup below finds it by.
+        keyField: NumAtCard
         # A retried create finds the order its first try made.
         existing:
           path: /Orders

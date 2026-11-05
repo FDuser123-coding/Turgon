@@ -81,8 +81,9 @@ type Event struct {
 	// PositionFormat is "number" (default), "rfc3339", "unix" (seconds) or
 	// "msjson" (Microsoft's JSON date, "/Date(1730803200000+0000)/", as
 	// Xero answers). {{position}} renders in it; {{positionTime}} is always
-	// RFC 3339 in UTC, for a request that takes a time where the answer
-	// holds another format (Xero's If-Modified-Since).
+	// the UTC time without a zone ("2009-11-12T00:00:00"), for a request that
+	// takes a time where the answer holds another format (Xero's
+	// If-Modified-Since, which reads it as UTC).
 	PositionFormat string `json:"positionFormat,omitempty"`
 	// Order is the API's list order: "asc" (default, oldest first) or
 	// "desc" (newest first, as Stripe lists). A descending list is paged
@@ -156,8 +157,14 @@ type Operation struct {
 	// clear a field with another value (HubSpot clears a property with "").
 	NullValue *string `json:"nullValue,omitempty"`
 	// Constants are fixed API field values sent with the mapped ones, such
-	// as Xero's Status: VOIDED for the request that voids an invoice.
+	// as Xero's Status: VOIDED for the request that voids an invoice. They
+	// are not part of what an update captures, confirms or restores.
 	Constants map[string]any `json:"constants,omitempty"`
+	// KeyField is the API field a create stores the write's idempotency key
+	// in (Business Central's externalDocumentNumber, SAP Business One's
+	// NumAtCard), so the existing lookup finds a retry's record by the key
+	// itself.
+	KeyField string `json:"keyField,omitempty"`
 	// Existing finds the record a retried create already made, for APIs
 	// that can neither upsert by an external ID nor take an idempotency
 	// key (Business Central): the create is sent only when it lists none.
@@ -292,8 +299,21 @@ func (c Config) validate() error {
 			if !apiFieldRE.MatchString(api) {
 				return fmt.Errorf("operation %s: invalid constant field %q", name, api)
 			}
-			if _, mapped := op.Fields[api]; mapped {
-				return fmt.Errorf("operation %s: %s is both mapped and a constant", name, api)
+			for f := range op.Fields {
+				if f == api || strings.HasPrefix(f, api+".") || strings.HasPrefix(api, f+".") {
+					return fmt.Errorf("operation %s: constant %s overlaps the mapped field %s", name, api, f)
+				}
+			}
+		}
+		if k := op.KeyField; k != "" {
+			if !apiFieldRE.MatchString(k) || (op.Method != http.MethodPost && op.Method != http.MethodPut && op.Method != http.MethodPatch) {
+				return fmt.Errorf("operation %s: keyField must be an API field of a POST, PUT or PATCH", name)
+			}
+			if _, mapped := op.Fields[k]; mapped {
+				return fmt.Errorf("operation %s: keyField %s is also mapped", name, k)
+			}
+			if _, fixed := op.Constants[k]; fixed {
+				return fmt.Errorf("operation %s: keyField %s is also a constant", name, k)
 			}
 		}
 		if op.Capture != nil && (len(op.Fields) == 0 || !strings.HasPrefix(op.Capture.Path, "/")) {
@@ -313,8 +333,8 @@ func (c Config) validate() error {
 		switch op.BodyFormat {
 		case "", "json":
 		case "none":
-			if len(op.Fields) > 0 || op.Capture != nil || op.Restore {
-				return fmt.Errorf("operation %s: a request without a body has no fields", name)
+			if len(op.Fields) > 0 || len(op.Constants) > 0 || op.KeyField != "" || op.Capture != nil || op.Restore {
+				return fmt.Errorf("operation %s: a request without a body has no fields, constants or keyField", name)
 			}
 		case "form":
 			if op.NullValue != nil {
@@ -711,15 +731,17 @@ func decodePayload(payload json.RawMessage) (map[string]any, error) {
 // emptyList reports an answer that leaves out an empty list: the list's
 // key is absent but the object holding it is there, as QuickBooks Online
 // answers a query that finds nothing ({"QueryResponse": {}}). A path that
-// does not lead anywhere is still an error.
+// does not lead anywhere, and a list absent from the answer's top level
+// (an error body, a misspelled items path), are still errors.
 func emptyList(resp any, path string) bool {
 	if lookup(resp, path) != nil {
 		return false
 	}
+	// Only a list nested in an object the answer has: at the top level, an
+	// absent list is an error body or a misspelled path, not "nothing".
 	i := strings.LastIndexByte(path, '.')
 	if i < 0 {
-		_, ok := resp.(map[string]any)
-		return ok
+		return false
 	}
 	_, ok := lookup(resp, path[:i]).(map[string]any)
 	return ok
@@ -780,7 +802,9 @@ func renderWith(tmpl string, vars map[string]any, escape func(string) string) (s
 			continue
 		}
 		used[name] = v
-		if loc[0] > 0 && tmpl[loc[0]-1] == '\'' {
+		// Inside a quoted literal ('X-{{key}}' as well as '{{key}}'), a quote
+		// in the value is doubled so it cannot end the literal.
+		if strings.Count(tmpl[:loc[0]], "'")%2 == 1 {
 			s = strings.ReplaceAll(s, "'", "''")
 		}
 		b.WriteString(escape(s))
@@ -820,13 +844,13 @@ func idFrom(u string) string {
 // metadata.erp_payment_id) to their values from the payload. Without
 // Fields, the payload is sent as it is.
 func (op Operation) values(doc map[string]any) (map[string]any, error) {
-	if len(op.Fields) == 0 && len(op.Constants) == 0 {
+	if len(op.Fields) == 0 {
+		if len(op.Constants) > 0 {
+			return map[string]any{}, nil // the payload only fills the path
+		}
 		return doc, nil
 	}
 	b := map[string]any{}
-	for api, v := range op.Constants {
-		b[api] = v
-	}
 	for api, field := range op.Fields {
 		v := lookup(doc, field)
 		if v == nil {
@@ -841,6 +865,21 @@ func (op Operation) values(doc map[string]any) (map[string]any, error) {
 func (op Operation) request(values map[string]any) any {
 	if op.BodyFormat == "none" {
 		return nil
+	}
+	if len(op.Constants) > 0 && !op.Restore {
+		merged := make(map[string]any, len(values)+len(op.Constants))
+		for k, v := range values {
+			merged[k] = v
+		}
+		// A copy: nest writes into the maps it builds the body from, and the
+		// configuration's own constants must stay as configured.
+		raw, _ := json.Marshal(op.Constants)
+		var fixed map[string]any
+		_ = json.Unmarshal(raw, &fixed)
+		for k, v := range fixed {
+			merged[k] = v
+		}
+		values = merged
 	}
 	var body any = values
 	if len(op.Fields) > 0 || len(op.Constants) > 0 || op.Restore {
@@ -1031,7 +1070,18 @@ func (c *Conn) Commit(ctx context.Context, name, key string, payload json.RawMes
 		if vals, err = op.values(doc); err != nil {
 			return nil, err
 		}
-		body = op.request(vals)
+		sent := vals
+		if op.KeyField != "" {
+			if key == "" {
+				return nil, fmt.Errorf("%w: %s stores the idempotency key in %s, and the write has none", writeguard.ErrInvalid, name, op.KeyField)
+			}
+			sent = make(map[string]any, len(vals)+1)
+			for k, v := range vals {
+				sent[k] = v
+			}
+			sent[op.KeyField] = key
+		}
+		body = op.request(sent)
 		if op.Capture != nil {
 			rec, err := c.current(ctx, op, doc)
 			if err != nil {

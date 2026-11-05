@@ -349,9 +349,11 @@ configuration only: each Connection declares its events, reads and writes as HTT
   (`idFrom: Location` or `OData-EntityId`), and the compensating delete is templated from it.
 - **APIs that can neither upsert nor take an idempotency key** (Business Central) look a retried
   create's record up first. `existing` is a list request templated with the payload and
-  `{{idempotencyKey}}` (`$filter: "externalDocumentNumber eq '{{idempotencyKey}}'"`, quotes
-  doubled). When it lists a record, the create is not sent and that record is the result, with
-  `"existing": true`.
+  `{{idempotencyKey}}` (`$filter: "externalDocumentNumber eq '{{idempotencyKey}}'"`; a quote in a
+  value inside a quoted literal is doubled). When it lists a record, the create is not sent and
+  that record is the result, with `"existing": true`. `keyField` names the API field the create
+  stores the key in, so the lookup and the record agree. An answer that lacks the list at its top
+  level is an error, not "no record".
 - **Creates are previewed** as the request they would send, so approvers see the exact body, and a
   payload missing a field fails before anyone approves.
 - Client errors fail the step at once; rate limits and server errors are retried.
