@@ -292,6 +292,29 @@ class EccEndpointTest {
     }
 
     @Test
+    void quantitiesKeepThreeDecimals() throws Exception {
+        assertTrue(ecc.simulate("create-sales-order", json(ORDER.replace("\"1.5\"", "\"1.250\""))).path("testRun").asBoolean());
+        var refused = assertThrows(ConnectorException.Invalid.class,
+                () -> ecc.simulate("create-sales-order", json(ORDER.replace("\"1.5\"", "\"1.2505\""))));
+        assertTrue(refused.getMessage().contains("3 decimals"), refused.getMessage());
+    }
+
+    @Test
+    void priceConditionsAreDiscovered() throws Exception {
+        assertNull(object(ecc.discover(List.of()), "BAPICOND"), "without priceCondition no conditions are filled");
+        try (Endpoint withPrices = new SapEccConnector().bind(config(
+                "{\"rfc\":{\"provider\":\"fake\",\"destination\":{\"ashost\":\"ecc1\",\"client\":\"100\"}},\"priceCondition\":\"PR00\"}", "TURGON:pw"))) {
+            JsonNode cat = withPrices.discover(List.of());
+            assertEquals("structure", object(cat, "BAPICOND").path("kind").asText());
+            boolean fills = false;
+            for (JsonNode u : cat.path("uses")) {
+                fills |= (u.path("object").asText() + "-" + u.path("field").asText()).equals("BAPICOND-COND_VALUE") && u.path("creates").asBoolean();
+            }
+            assertTrue(fills, cat.path("uses").toString());
+        }
+    }
+
+    @Test
     void dryRunPricesTheOrderWhenAsked() throws Exception {
         // By default the dry run is the BAPI's test run alone: no price.
         assertTrue(ecc.simulate("create-sales-order", json(ORDER)).path("netValue").isMissingNode());
@@ -306,6 +329,15 @@ class EccEndpointTest {
                     () -> pricing.simulate("create-sales-order", json(ORDER.replace("\"1000\"", "\"4711\""))));
             assertTrue(refused.getMessage().contains("4711"), refused.getMessage());
             assertTrue(pricing.check().stream().anyMatch(c -> c.name().equals("BAPI_SALESORDER_SIMULATE") && c.ok()));
+            // The order's currency goes into the simulation.
+            var dollars = pricing.simulate("create-sales-order", json(ORDER.replace("\"eur\"", "\"usd\"")));
+            assertEquals("USD", dollars.path("currency").asText());
+            assertEquals("118.55", dollars.path("netValue").asText());
+            // Priced in another currency than the source's: no amount to compare.
+            var francs = pricing.simulate("create-sales-order", json(ORDER.replace("\"eur\"", "\"chf\"")));
+            assertEquals("EUR", francs.path("currency").asText());
+            assertTrue(francs.path("netValue").isMissingNode(), francs.toString());
+            assertTrue(francs.path("pricingNote").asText().contains("CHF"), francs.toString());
         }
         assertFalse(ecc.check().stream().anyMatch(c -> c.name().equals("BAPI_SALESORDER_SIMULATE")));
         assertNull(object(ecc.discover(List.of()), "BAPIITEMEX"), "without simulatePricing the simulation is not used");

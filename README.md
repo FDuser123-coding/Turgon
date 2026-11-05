@@ -898,12 +898,20 @@ Errors are status codes:
     `currency`. `salesforce-won-deals-to-ecc` checks it against the deal's amount
     (`checkAmount: { preview: netValue, tolerance: 0.01 }`), so a deal priced off SAP's price
     list waits for a person. The simulation takes no manual conditions, so it cannot be combined
-    with `priceCondition`, and the connection is refused if both are set. `ORDER_ITEMS_IN`'s
-    `REQ_QTY` is sent with its three implied decimals (`2000` for two units). The field names
+    with `priceCondition`, and the connection is refused if both are set. A connection with
+    `priceCondition` therefore shows no `netValue`, and a write with `checkAmount` always waits
+    for a person.
+  - **Currency and quantities in the dry run:** the order's `currency` goes into the simulation's
+    header. If SAP still prices in another currency (the customer's), the preview shows that
+    `currency` and a `pricingNote` instead of a `netValue`, so the check asks a person rather
+    than compare amounts in two currencies. Items priced in different currencies are refused.
+    `ORDER_ITEMS_IN`'s `REQ_QTY` is sent with its three implied decimals (`2000` for two units),
+    and a quantity with more than three decimals is refused instead of rounded. The field names
     follow SAP's interface documentation; they are tested against the fake ECC, not yet a real
     system. Discovery then also reads the simulation's interface and structures
     (`BAPISDHEAD`, `BAPIITEMIN`, `BAPIPARTNR`, `BAPIITEMEX`) and records the fields
-    create-sales-order fills and reads back, so drift in them is reported with that user.
+    create-sales-order fills and reads back, so drift in them is reported with that user. With
+    `priceCondition`, it reads `BAPICOND` too, for the conditions the create fills.
   - **Measured live:** against a Temporal 1.28 dev server, the fake Salesforce and the demo
     sidecar. A 100.00 deal for one M-1 (100.00 in SAP) waited only as a high-risk write, and once
     approved became order 0000012000. A 7800.00 deal for the same line also gave the reason
