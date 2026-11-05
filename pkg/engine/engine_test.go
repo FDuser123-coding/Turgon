@@ -29,6 +29,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/connector/odoo/odootest"
 	"github.com/fduser123-coding/turgon/pkg/connector/postgres"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest"
+	"github.com/fduser123-coding/turgon/pkg/connector/rest/b1test"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/bctest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/dataversetest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/hubspottest"
@@ -1127,6 +1128,65 @@ func TestShopifyRejectionCancelsTheOdooQuotation(t *testing.T) {
 	}
 	if o := od.OrderByRef(fmt.Sprintf("SHOPIFY-%d", id)); o == nil || o["state"] != "cancel" {
 		t.Fatalf("the Odoo quotation was not cancelled after Shopify rejected the note: %v", o)
+	}
+}
+
+// newBusinessOneFixture runs the shopify-store-orders-to-business-one recipe
+// against the fake Shopify store and the fake Service Layer.
+func newBusinessOneFixture(t *testing.T) (*fixture, *shoptest.Shop, *b1test.B1) {
+	t.Helper()
+	shop := shoptest.New("shpat_test")
+	t.Cleanup(shop.Close)
+	b1 := b1test.New("SBODEMOUS", "turgon", "s3cret")
+	t.Cleanup(b1.Close)
+	f := newFixtureFor(t, "shopify-store-orders-to-business-one", connector.StaticSecrets{
+		"openbao://shopify-store/token":        "shpat_test",
+		"openbao://business-one/service-layer": `{"CompanyDB": "SBODEMOUS", "UserName": "turgon", "Password": "s3cret"}`,
+	}, func(cfg string) string {
+		cfg = strings.ReplaceAll(cfg, "https://turgon-demo.myshopify.com/admin/api/"+shoptest.Version, shop.URL())
+		return strings.ReplaceAll(cfg, "https://b1.acme.internal:50000", b1.URL())
+	})
+	if err := f.store.PutXref(context.Background(), "Customer", "shopify-store", "ada@example.com", b1test.Maxi); err != nil {
+		t.Fatal(err)
+	}
+	return f, shop, b1
+}
+
+// A shop order becomes a Business One sales order at the shop's prices, and
+// its document number goes on the Shopify order.
+func TestShopifyOrderBecomesBusinessOneOrder(t *testing.T) {
+	f, shop, b1 := newBusinessOneFixture(t)
+	id := shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-11-05T09:30:00-04:00",
+		"subtotal_price": "602.00", "currency": "eur", "line_items": []any{
+			map[string]any{"sku": "M-1", "quantity": 2, "price": "210.00"},
+			map[string]any{"sku": "M-2", "quantity": 1}},
+	})
+	if _, err, _ := f.run(f.dispatch()[0], approve("04-write")); err != nil {
+		t.Fatal(err)
+	}
+	o := b1.OrderByRef(fmt.Sprintf("SHOPIFY-%d", id))
+	if o == nil || o["DocTotal"] != 602.0 || o["CardCode"] != b1test.Maxi || o["DocDueDate"] != "2026-11-05" {
+		t.Fatalf("Business One order = %v", o)
+	}
+	if got := shop.Order(id)["note"]; got != fmt.Sprintf("ERP order %v", o["DocNum"]) {
+		t.Fatalf("Shopify note = %v", got)
+	}
+}
+
+func TestShopifyRejectionCancelsTheBusinessOneOrder(t *testing.T) {
+	f, shop, b1 := newBusinessOneFixture(t)
+	id := shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-11-05T09:30:00-04:00",
+		"subtotal_price": "182.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-2", "quantity": 1}},
+	})
+	shop.FailUpdates = true
+	_, err, _ := f.run(f.dispatch()[0], approve("04-write"))
+	if errType(err) != ErrTypeInvalid {
+		t.Fatalf("err = %v (%s)", err, errType(err))
+	}
+	if o := b1.OrderByRef(fmt.Sprintf("SHOPIFY-%d", id)); o == nil || o["Cancelled"] != "tYES" {
+		t.Fatalf("the Business One order was not cancelled after Shopify rejected the note: %v", o)
 	}
 }
 

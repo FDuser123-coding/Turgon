@@ -43,6 +43,14 @@ type Auth struct {
 	// client_secret in the form, for servers that take Basic credentials
 	// as they stand, like SAP's XSUAA with its "!" and "|" client IDs).
 	ClientAuth string `json:"clientAuth,omitempty"`
+	// LoginURL is where a session login is posted (type session): the
+	// secret, a JSON object, is the body, as SAP Business One's Service
+	// Layer takes {"CompanyDB", "UserName", "Password"} at /Login. The
+	// cookies it sets authenticate later requests until the session ends
+	// (SessionTimeout minutes in the answer, else 30) or a 401 says so.
+	LoginURL string `json:"loginURL,omitempty"`
+	// Cookies names the login's cookies to send (default: all it sets).
+	Cookies []string `json:"cookies,omitempty"`
 }
 
 func (a Auth) validate() error {
@@ -56,6 +64,11 @@ func (a Auth) validate() error {
 		if a.Header == "" || strings.EqualFold(a.Header, "Authorization") {
 			return fmt.Errorf("auth: header needs a header name other than Authorization (use bearer)")
 		}
+	case "session":
+		u, err := url.Parse(a.LoginURL)
+		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
+			return fmt.Errorf("auth: session needs an http(s) loginURL")
+		}
 	case "oauth2":
 		u, err := url.Parse(a.TokenURL)
 		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
@@ -65,7 +78,7 @@ func (a Auth) validate() error {
 			return fmt.Errorf("auth: clientAuth must be basic or body, got %q", a.ClientAuth)
 		}
 	default:
-		return fmt.Errorf("auth: type must be bearer, header, basic, oauth2, oauth1 or none, got %q", a.Type)
+		return fmt.Errorf("auth: type must be bearer, header, basic, oauth2, oauth1, session or none, got %q", a.Type)
 	}
 	return nil
 }
@@ -104,6 +117,11 @@ func newAuthenticator(cfg Auth, secret string, client *http.Client) (*authentica
 			return nil, fmt.Errorf(`auth: the oauth2 secret must be {"clientId": "...", "clientSecret": "..."}`)
 		}
 		a.clientID, a.clientSecret = creds.ClientID, creds.ClientSecret
+	case "session":
+		var login map[string]any
+		if err := json.Unmarshal([]byte(a.secret), &login); err != nil || len(login) == 0 {
+			return nil, fmt.Errorf(`auth: the session secret must be the login's JSON body, e.g. {"CompanyDB": "...", "UserName": "...", "Password": "..."}`)
+		}
 	case "oauth1":
 		c := &a.oauth1
 		if err := json.Unmarshal([]byte(a.secret), c); err != nil || c.ConsumerKey == "" || c.ConsumerSecret == "" || c.TokenID == "" || c.TokenSecret == "" {
@@ -113,7 +131,7 @@ func newAuthenticator(cfg Auth, secret string, client *http.Client) (*authentica
 	return a, nil
 }
 
-func (a *authenticator) refreshable() bool { return a.cfg.Type == "oauth2" }
+func (a *authenticator) refreshable() bool { return a.cfg.Type == "oauth2" || a.cfg.Type == "session" }
 
 func (a *authenticator) invalidate() {
 	a.mu.Lock()
@@ -135,6 +153,12 @@ func (a *authenticator) apply(ctx context.Context, req *http.Request) error {
 			return err
 		}
 		req.Header.Set("Authorization", "Bearer "+token)
+	case "session":
+		cookie, err := a.session(ctx)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Cookie", cookie)
 	case "oauth1":
 		now := time.Now
 		if a.now != nil {
@@ -268,6 +292,55 @@ func (a *authenticator) current(ctx context.Context) (string, error) {
 		margin = life / 4
 	}
 	a.token, a.expires = tok.AccessToken, time.Now().Add(life-margin)
+	return a.token, nil
+}
+
+// session logs in when there is no live session, and returns the Cookie
+// header its cookies make.
+func (a *authenticator) session(ctx context.Context) (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.token != "" && time.Now().Before(a.expires) {
+		return a.token, nil
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.LoginURL, strings.NewReader(a.secret))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/json")
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("session login: %w", err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		return "", &APIError{Method: http.MethodPost, Path: a.cfg.LoginURL, Status: resp.StatusCode, Body: strings.TrimSpace(string(data))}
+	}
+	keep := map[string]bool{}
+	for _, n := range a.cfg.Cookies {
+		keep[n] = true
+	}
+	var parts []string
+	for _, c := range resp.Cookies() {
+		if len(keep) == 0 || keep[c.Name] {
+			parts = append(parts, c.Name+"="+c.Value)
+		}
+	}
+	if len(parts) == 0 {
+		return "", fmt.Errorf("session login: %s set no session cookie", a.cfg.LoginURL)
+	}
+	var body struct {
+		SessionTimeout float64 `json:"SessionTimeout"`
+	}
+	_ = json.Unmarshal(data, &body)
+	life := 30 * time.Minute
+	if body.SessionTimeout > 0 {
+		life = time.Duration(body.SessionTimeout * float64(time.Minute))
+	}
+	// Log in again early: the server ends an idle session at its timeout.
+	a.token, a.expires = strings.Join(parts, "; "), time.Now().Add(life*3/4)
 	return a.token, nil
 }
 

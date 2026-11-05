@@ -1,0 +1,69 @@
+# The ERP on SAP Business One (10.0 FP 2405 or later, HANA or SQL Server),
+# through its Service Layer (OData v4, /b1s/v2). It signs in with a session:
+# the secret is the login, {"CompanyDB", "UserName", "Password"} of a user
+# licensed for the Service Layer, and the B1SESSION and ROUTEID cookies it
+# answers with authenticate later requests until the session times out
+# (then the connector signs in again). An order and its lines go in one
+# POST; the Service Layer has no upsert by an external key, so the
+# idempotency key goes into NumAtCard (the customer's reference) and a
+# retried create finds the order by it. A saga's undo cancels the order.
+# New orders are polled on DocEntry.
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata:
+  name: business-one
+  description: "SAP Business One, through the Service Layer (OData v4, session login)."
+spec:
+  connector: rest@^1
+  secretRef: openbao://business-one/service-layer
+  entities: [SalesOrder, Customer]
+  # The Service Layer serves each session's requests one at a time; a
+  # few concurrent calls share the one session.
+  limits: { maxConcurrentCalls: 2, requestsPerSecond: 5 }
+  events:
+    - { name: SalesOrder.Created, entity: SalesOrder, interface: polling }
+  operations:
+    - { name: create-sales-order, entity: SalesOrder, direction: write, interface: rest-api, risk: high, compensation: cancel-sales-order }
+    - { name: cancel-sales-order, entity: SalesOrder, direction: write, interface: rest-api, risk: high }
+    - { name: get-customer, entity: Customer, direction: read, interface: rest-api, risk: read }
+  config:
+    baseURL: https://b1.acme.internal:50000/b1s/v2
+    auth:
+      type: session
+      loginURL: https://b1.acme.internal:50000/b1s/v2/Login
+      cookies: [B1SESSION, ROUTEID]
+    checkPath: /Orders?$top=1
+    events:
+      SalesOrder.Created:
+        path: /Orders
+        params:
+          $filter: "DocEntry gt {{position}}"
+          $orderby: DocEntry asc
+          $top: "{{limit}}"
+        items: value
+        id: DocEntry
+        position: DocEntry
+    operations:
+      create-sales-order:
+        method: POST
+        path: /Orders
+        fields:
+          CardCode: customerCode
+          DocDate: orderDate
+          DocDueDate: dueDate
+          NumAtCard: reference
+          Comments: comments
+          DocumentLines: b1Lines
+        # A retried create finds the order its first try made.
+        existing:
+          path: /Orders
+          params: { $filter: "NumAtCard eq '{{idempotencyKey}}'", $top: "1" }
+          items: value
+      cancel-sales-order:
+        method: POST
+        path: "/Orders({{DocEntry}})/Cancel"
+        bodyFormat: none
+      get-customer:
+        method: GET
+        path: "/BusinessPartners('{{id}}')"
+        fields: { CardName: name, EmailAddress: email, Frozen: frozen }

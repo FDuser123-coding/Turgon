@@ -338,8 +338,10 @@ configuration only: each Connection declares its events, reads and writes as HTT
   not take null). A create is undone by a request templated from its own result
   (`DELETE /invoices/{{id}}`).
 - **Auth**: a bearer token, an API-key header, basic, OAuth 2.0 client credentials (refreshed
-  before expiry and after a 401), or OAuth 1.0a request signing with HMAC-SHA256 (NetSuite's
-  token-based authentication), always from the connection's secret.
+  before expiry and after a 401), OAuth 1.0a request signing with HMAC-SHA256 (NetSuite's
+  token-based authentication), or a session login whose cookies authenticate later requests
+  (SAP Business One's Service Layer; signed in again at the session's timeout and after a 401),
+  always from the connection's secret.
 - **APIs that upsert by an external key** take the write's idempotency key in the path
   (`{{idempotencyKey}}`), quoted safely inside OData key literals. A retried write then finds its
   record. **APIs that answer 204 with no body** give the record's ID in a header
@@ -481,10 +483,11 @@ Measured against a Temporal 1.28 dev server and the fake account:
   a steward linked the contact (`turgon xref set`), `turgon retry` ran it again, and its deal got
   `erp_order_number: "8"`.
 
-### Dynamics 365, NetSuite and Business Central: ERPs through the REST connector
+### Dynamics 365, NetSuite, Business Central and SAP Business One: ERPs through the REST connector
 
-Three more ERPs need no new connector, only configuration of `rest`
-(`examples/connections/dynamics-crm.yaml`, `netsuite-erp.yaml`, `business-central.yaml`):
+Four more ERPs need no new connector, only configuration of `rest`
+(`examples/connections/dynamics-crm.yaml`, `netsuite-erp.yaml`, `business-central.yaml`,
+`business-one.yaml`):
 
 - **Dynamics 365 (Dataverse Web API).**
   - **Auth:** an app registration's client credentials against Entra ID.
@@ -517,25 +520,42 @@ Three more ERPs need no new connector, only configuration of `rest`
     note (`sales-order-to-shopify-note` 1.1 takes an ERP's `number` where the result has one).
   - **Undo:** `DELETE /salesOrders(<id>)` with `If-Match: *`.
   - **Events:** changed orders are polled on `lastModifiedDateTime`.
+- **SAP Business One (Service Layer, OData v4, `/b1s/v2`).**
+  - **Auth:** a session. The secret is the login, `{"CompanyDB", "UserName", "Password"}`,
+    posted to `/Login` (`auth.type: session`). The `B1SESSION` and `ROUTEID` cookies it sets
+    authenticate later requests. When the session times out (`SessionTimeout` minutes without
+    use) or the server answers 401, the connector signs in again.
+  - **Creating orders:** an order and its `DocumentLines` go in one `POST /Orders`. Lines are
+    items by `ItemCode`, through a mapping table kept per deployment. A line's `UnitPrice` is the
+    shop's, and a line without one is priced from the price list.
+  - **Retries:** the idempotency key goes into `NumAtCard` (the customer's reference), and the
+    `existing` lookup finds a retried create's order by it, as with Business Central.
+  - **Result:** the order as the Service Layer answers it. Its `DocNum` goes into the Shopify note.
+  - **Undo:** `POST /Orders(<DocEntry>)/Cancel`, a request without a body (`bodyFormat: none`).
+  - **Events:** new orders are polled on `DocEntry`.
 
 `hubspot-won-deals-to-dynamics` turns won HubSpot deals into Dynamics orders and records the
 order's GUID on the deal. `shopify-store-orders-to-netsuite` is the Shopify saga with NetSuite,
-and `shopify-store-orders-to-business-central` the same saga with Business Central.
+`shopify-store-orders-to-business-central` the same saga with Business Central, and
+`shopify-store-orders-to-business-one` with SAP Business One.
 Without the systems, run the test fakes:
 
 ```sh
 go build -o bin/fakedynamics ./internal/tools/fakedynamics    # http://127.0.0.1:9700, client turgon-app / demo
 go build -o bin/fakenetsuite ./internal/tools/fakenetsuite    # http://127.0.0.1:9900, account 1234567_SB1
 go build -o bin/fakebc ./internal/tools/fakebc                # http://127.0.0.1:9800, client turgon-app / demo
+go build -o bin/fakeb1 ./internal/tools/fakeb1                # http://127.0.0.1:9950, SBODEMOUS, turgon / demo
 sed -i 's|https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/token|http://127.0.0.1:9700/oauth2/v2.0/token|; s|https://contoso.crm4.dynamics.com|http://127.0.0.1:9700|' \
   my-catalog/connections/dynamics-crm.yaml
 sed -i 's|https://1234567-sb1.suitetalk.api.netsuite.com|http://127.0.0.1:9900|' my-catalog/connections/netsuite-erp.yaml
 sed -i 's|https://login.microsoftonline.com|http://127.0.0.1:9800|; s|https://api.businesscentral.dynamics.com/v2.0|http://127.0.0.1:9800/v2.0|' \
   my-catalog/connections/business-central.yaml
+sed -i 's|https://b1.acme.internal:50000|http://127.0.0.1:9950|' my-catalog/connections/business-one.yaml
 export TURGON_SECRET_DYNAMICS_CRM_APP_REGISTRATION='{"clientId":"turgon-app","clientSecret":"demo"}'
+export TURGON_SECRET_BUSINESS_ONE_SERVICE_LAYER='{"CompanyDB":"SBODEMOUS","UserName":"turgon","Password":"demo"}'
 export TURGON_SECRET_BUSINESS_CENTRAL_APP_REGISTRATION='{"clientId":"turgon-app","clientSecret":"demo"}'
 export TURGON_SECRET_NETSUITE_ERP_TBA='{"consumerKey":"ck-demo","consumerSecret":"cs-demo","tokenId":"ti-demo","tokenSecret":"ts-demo"}'
-bin/turgon xref set --entity Customer --system shopify-store --source ada@example.com --master 1001   # Business Central: --master 10000 (its customer number)
+bin/turgon xref set --entity Customer --system shopify-store --source ada@example.com --master 1001   # Business Central: --master 10000; Business One: --master C20000
 bin/turgon xref set --entity Customer --system hubspot-crm --source ada@lovelace-gmbh.example \
   --master 6a1c0e2f-8b3d-4f5a-9c7e-1d2b3a4c5e6f
 ```
@@ -554,6 +574,10 @@ Measured against a Temporal 1.28 dev server and the fakes:
   When Shopify then refused a note (it required `tags`), the saga deleted the next order, 971212,
   with `If-Match: *`. The retry lookup is tested against the fake (a second create returns the
   first order, with one POST); it was not provoked live.
+- **SAP Business One:** the worker signed in to the Service Layer, and a 420.00 Shopify order
+  became sales order 911780, noted on the Shopify order as `ERP order 911780`. When Shopify
+  then refused a note, the saga cancelled the next order, 911781 (`Cancelled: tYES`). Signing in
+  again after a session timed out is tested against the fake.
 
 ### Odoo: quotations through the JSON-2 API
 
