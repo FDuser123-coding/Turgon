@@ -341,7 +341,8 @@ configuration only: each Connection declares its events, reads and writes as HTT
   before expiry and after a 401), OAuth 1.0a request signing with HMAC-SHA256 (NetSuite's
   token-based authentication), or a session login whose cookies authenticate later requests
   (SAP Business One's Service Layer; signed in again at the session's timeout and after a 401),
-  always from the connection's secret.
+  always from the connection's secret; or an OAuth 2.0 refresh token the server rotates
+  (`oauth2-refresh`, QuickBooks Online), which the secret seeds and Turgon's database keeps.
 - **APIs that upsert by an external key** take the write's idempotency key in the path
   (`{{idempotencyKey}}`), quoted safely inside OData key literals. A retried write then finds its
   record. **APIs that answer 204 with no body** give the record's ID in a header
@@ -578,6 +579,74 @@ Measured against a Temporal 1.28 dev server and the fakes:
   became sales order 911780, noted on the Shopify order as `ERP order 911780`. When Shopify
   then refused a note, the saga cancelled the next order, 911781 (`Cancelled: tYES`). Signing in
   again after a session timed out is tested against the fake.
+
+### QuickBooks Online: refresh tokens that rotate
+
+QuickBooks Online needs no new connector either (`examples/connections/quickbooks.yaml`), but its
+credential is new to Turgon. It is an OAuth 2.0 authorization a person gave the app, and Intuit
+rotates its refresh token: every refresh answers a new refresh token, and the old one stops
+working. Xero does the same.
+
+- **The secret only seeds it:** `{"clientId", "clientSecret", "refreshToken"}`, with
+  `auth.type: oauth2-refresh` and Intuit's `tokenURL`.
+- **The current token lives in Turgon's database,** in `turgon_tokens`, sealed with AES-256-GCM
+  under `TURGON_TOKEN_KEYS`. These are the same kind of keys as the payload keys: `id:base64key,...`,
+  32 random bytes each, the first one seals and every one opens. Postgres never sees them, and a
+  sealed value only opens under the key it was stored for. In Helm, `database.tokenKeys`
+  names the Secret.
+- **Workers spend it one at a time:**
+  - The refresh and the storing of the rotated token happen under one row lock, so two workers
+    never spend the same single-use token.
+  - The access token is stored too, so the other workers use it instead of refreshing again.
+  - A 401 drops it.
+- **Authorizing the app again** puts a new refresh token in the secret. Its seed differs from
+  the one the stored token descends from, so it replaces the stored token.
+- **Commands that open connections** (`run`, `check`, `discover`, `mcp` with a Postgres audit
+  log) use the vault when they have the state database and `TURGON_TOKEN_KEYS`. Without both, an
+  `oauth2-refresh` connection refuses to refresh rather than spend the token and lose its
+  successor. A spent or revoked token (`invalid_grant`) says to authorize the app again.
+
+The rest is configuration of `rest`:
+
+- **Creating receipts:** a paid shop order becomes a sales receipt, `POST /salesreceipt`. Each
+  line's `Amount` is its quantity at the shop's price, which QuickBooks checks against
+  `UnitPrice * Qty`. The realm (company ID) is part of the base URL.
+- **Retries:** the write's idempotency key is QuickBooks' own `requestid`, so a retried create is
+  answered with the first one's receipt.
+- **Result:** the receipt. Its `DocNumber` goes into the Shopify note
+  (`sales-order-to-shopify-note` 1.3).
+- **Undo:** `POST /salesreceipt?operation=void`, with the `Id` and `SyncToken` from the create's
+  result.
+- **Events:** changed receipts are queried on `MetaData.LastUpdatedTime`. A query that finds
+  nothing leaves its list out (`{"QueryResponse": {}}`), which `rest` reads as an empty list.
+  A path that leads nowhere is still an error.
+
+`shopify-store-orders-to-quickbooks` is the Shopify saga with it. Without a company, run the test
+fake. It prints the first refresh token, as a person's authorization would give it:
+
+```sh
+go build -o bin/fakeqbo ./internal/tools/fakeqbo
+bin/fakeqbo > qbo.seed &                                  # http://127.0.0.1:9870, client qb-demo
+sed -i 's|https://oauth.platform.intuit.com|http://127.0.0.1:9870|; s|https://quickbooks.api.intuit.com|http://127.0.0.1:9870|' \
+  my-catalog/connections/quickbooks.yaml
+export TURGON_TOKEN_KEYS="t1:$(openssl rand -base64 32)"
+export TURGON_SECRET_QUICKBOOKS_OAUTH="{\"clientId\":\"qb-demo\",\"clientSecret\":\"qb-demo-secret\",\"refreshToken\":\"$(cat qbo.seed)\"}"
+bin/turgon xref set --entity Customer --system shopify-store --source ada@example.com --master 1
+```
+
+Measured against a Temporal 1.28 dev server, Postgres, `fakeshop` and `fakeqbo`:
+- **Without `TURGON_TOKEN_KEYS`,** `turgon check` refused to refresh, naming the missing
+  database and keys.
+- **With them,** `check` refreshed once, and Postgres held only the sealed token (203 bytes under
+  key `t1`, no token in the clear).
+- **Sharing the token:** the worker, a separate process, used the stored access token without
+  refreshing, as did a second worker started later. Intuit counted one refresh in all.
+- **The order:** a 420.00 Shopify order became sales receipt SHOP1793902759001 at 420, noted on
+  the Shopify order as `ERP order SHOP1793902759001`.
+- **The undo:** when Shopify refused the next note, the saga voided its receipt.
+- **A bug in the mapping library:** this run also found the jsonata-go bug described under
+  `pkg/mapping`. The first mapping of `docNumber` with `~>` worked, and the second failed with
+  "substring takes 3 arguments, got 4".
 
 ### Odoo: quotations through the JSON-2 API
 
@@ -2269,7 +2338,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/writeguard` | §8 | Idempotency, policy, validation, simulation-first, approval gates, rate governor, circuit breaker, read-your-writes, metering, sagas with compensation |
 | `pkg/policy` | §9, App. C | Policy decision interface and the built-in write-back default; `opa/` evaluates and tests Rego packs with Open Policy Agent |
 | `pkg/audit` | §9 | Append-only, hash-chained audit log with tamper detection |
-| `pkg/mapping` | §7.4 | JSONata evaluation of mapping sets |
+| `pkg/mapping` | §7.4 | JSONata evaluation of mapping sets. jsonata-go 1.5.4 rewrites a compiled `~>` application in place (the second document got an argument too many) and names built-in functions on one shared object (a data race between concurrent activities): expressions with `~>` are compiled again for each document, and evaluations are serialized |
 | `pkg/engine` | §7.6, §8, AD-04/06 | One generic Temporal workflow that interprets any compiled workflow, and one for agent writes; activities for map, resolve, two-phase governed writes and compensation; durable approval signal; event dispatcher; webhook receiver with a durable inbox, reconciled by polling |
 | `pkg/operator`, `cmd/turgon-operator`, `apis/operator` | §11 | The Kubernetes operator: the Integration CRD and its reconciler |
 | `pkg/appliance`, `deploy/appliance` | §11 | The single-host appliance: `turgon appliance`, systemd units, the offline bundle's installer |

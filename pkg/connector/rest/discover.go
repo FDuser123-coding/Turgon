@@ -159,7 +159,7 @@ func (c *Conn) sample(ctx context.Context, name string, e Event) (meta.Object, [
 		return meta.Object{}, nil, fmt.Errorf("rest: discover %s: %w", name, err)
 	}
 	list, ok := lookup(resp, e.Items).([]any)
-	if !ok {
+	if !ok && !emptyList(resp, e.Items) {
 		return meta.Object{}, nil, fmt.Errorf("rest: discover %s: %s has no item array at %q", name, e.Path, e.Items)
 	}
 	items := mapsOf(list)

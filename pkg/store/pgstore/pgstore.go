@@ -132,7 +132,10 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool) error {
 		if _, err := tx.Exec(ctx, schema); err != nil {
 			return err
 		}
-		_, err := tx.Exec(ctx, auditSchema)
+		if _, err := tx.Exec(ctx, auditSchema); err != nil {
+			return err
+		}
+		_, err := tx.Exec(ctx, tokenSchema)
 		return err
 	})
 }

@@ -331,8 +331,21 @@ func Factory(ctx context.Context, cfg compiler.ConnectorConfig, secrets connecto
 		return nil, fmt.Errorf("rest %s: %w", cfg.Endpoint, err)
 	}
 	conn.endpoint = cfg.Endpoint
+	if ts, ok := connector.Tokens(secrets); ok {
+		conn.UseTokens(ts)
+	}
 	conn.resolveWebhookSecrets(ctx, secrets)
 	return conn, nil
+}
+
+// UseTokens gives an oauth2-refresh connection the store for the refresh
+// tokens its server rotates (Turgon's database), keyed by the endpoint.
+func (c *Conn) UseTokens(store connector.TokenStore) {
+	key := c.endpoint
+	if key == "" {
+		key = c.cfg.BaseURL
+	}
+	c.auth.useTokens(store, "rest/"+key)
 }
 
 // Conn is a connector instance.
@@ -495,7 +508,7 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 			return nil, err
 		}
 		list, ok := lookup(resp, e.Items).([]any)
-		if !ok {
+		if !ok && !emptyList(resp, e.Items) {
 			return nil, fmt.Errorf("rest: %s: response has no item array at %q", e.Path, e.Items)
 		}
 		reached := false
@@ -652,6 +665,23 @@ func decodePayload(payload json.RawMessage) (map[string]any, error) {
 // segment, and returns the values it used. A value quoted in the template
 // ('{{key}}', as in OData key predicates) has its quotes doubled, so it
 // cannot end the literal.
+// emptyList reports an answer that leaves out an empty list: the list's
+// key is absent but the object holding it is there, as QuickBooks Online
+// answers a query that finds nothing ({"QueryResponse": {}}). A path that
+// does not lead anywhere is still an error.
+func emptyList(resp any, path string) bool {
+	if lookup(resp, path) != nil {
+		return false
+	}
+	i := strings.LastIndexByte(path, '.')
+	if i < 0 {
+		_, ok := resp.(map[string]any)
+		return ok
+	}
+	_, ok := lookup(resp, path[:i]).(map[string]any)
+	return ok
+}
+
 // existing returns the first record the lookup lists, or nil.
 func (c *Conn) existing(ctx context.Context, e *Existing, vars map[string]any) (map[string]any, error) {
 	path, _, err := render(e.Path, vars)
@@ -671,7 +701,7 @@ func (c *Conn) existing(ctx context.Context, e *Existing, vars map[string]any) (
 		return nil, classify(err)
 	}
 	list, ok := lookup(resp, e.Items).([]any)
-	if !ok {
+	if !ok && !emptyList(resp, e.Items) {
 		return nil, fmt.Errorf("rest: the lookup for an existing record answered without a list at %q", e.Items)
 	}
 	if len(list) == 0 {

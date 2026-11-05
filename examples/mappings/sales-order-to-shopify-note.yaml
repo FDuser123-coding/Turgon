@@ -3,12 +3,16 @@ apiVersion: turgon.dev/v1alpha1
 kind: Mapping
 metadata:
   name: sales-order-to-shopify-note
-  version: 1.2.0
+  version: 1.3.0
 spec:
   from: model.SalesOrder
   to: model.Order
   fields:
     - { target: orderId, expression: "shopifyId",                         origin: human, confidence: 1.0 }
     # The ERP's document number where its result has one (Business Central's
-    # and Odoo's number, SAP Business One's DocNum), else the ID.
-    - { target: note,    expression: "'ERP order ' & $string($exists(erpOrder.number) ? erpOrder.number : $exists(erpOrder.DocNum) ? erpOrder.DocNum : erpOrder.id)", origin: human, confidence: 1.0 }
+    # and Odoo's number, SAP Business One's DocNum, QuickBooks' DocNumber),
+    # else the ID.
+    - target: note
+      expression: "'ERP order ' & $string([erpOrder.number, erpOrder.DocNum, erpOrder.DocNumber, erpOrder.id][0])"
+      origin: human
+      confidence: 1.0

@@ -9,9 +9,12 @@ import (
 	"sort"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
+
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/secrets"
+	"github.com/fduser123-coding/turgon/pkg/store/pgstore"
 )
 
 // secretBackend is where connection secrets come from. TURGON_SECRETS=env
@@ -30,6 +33,28 @@ type secretBackend interface {
 	Fingerprints(ctx context.Context, refs []string, optional map[string]bool) (fingerprints, error)
 	// Rotates reports whether values can change while Turgon runs.
 	Rotates() bool
+}
+
+// tokenBackend is a secret backend whose connectors also get the token
+// vault, for the refresh tokens their systems rotate (oauth2-refresh).
+type tokenBackend struct {
+	secretBackend
+	connector.TokenStore
+}
+
+// withTokens gives connectors Turgon's token vault when the state database
+// is open and TURGON_TOKEN_KEYS holds the keys that seal it. Without them,
+// an oauth2-refresh connection says what is missing when it is used.
+func withTokens(b secretBackend, pool *pgxpool.Pool) (secretBackend, error) {
+	keys := os.Getenv("TURGON_TOKEN_KEYS")
+	if pool == nil || keys == "" {
+		return b, nil
+	}
+	v, err := pgstore.NewTokenVault(pool, keys)
+	if err != nil {
+		return nil, err
+	}
+	return tokenBackend{b, v}, nil
 }
 
 // fingerprints are SHA-256 hashes of secret values by reference: enough to

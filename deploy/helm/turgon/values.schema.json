@@ -40,6 +40,13 @@
       "properties": {
         "existingSecret": { "type": "string" },
         "existingSecretKey": { "type": "string", "minLength": 1 },
+        "tokenKeys": {
+          "type": "object",
+          "properties": {
+            "existingSecret": { "type": "string" },
+            "key": { "type": "string", "minLength": 1 }
+          }
+        },
         "cloudNativePG": {
           "type": "object",
           "properties": {

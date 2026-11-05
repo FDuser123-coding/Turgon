@@ -1,0 +1,25 @@
+# A paid order as a QuickBooks Online sales receipt. Items are referenced
+# by ID; this company's IDs for the shop's SKUs are kept here (per
+# deployment). A line's Amount is its quantity at the shop's price, which
+# QuickBooks checks against UnitPrice * Qty. The customer is the master
+# record's ID, the QuickBooks customer's.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: sales-order-to-quickbooks-receipt
+  version: 1.0.0
+spec:
+  from: model.SalesOrder
+  to: model.SalesOrder
+  fields:
+    - { target: customerId, expression: "$string(customerId)",            origin: human, confidence: 1.0 }
+    - { target: orderDate,  expression: "orderDate",                      origin: human, confidence: 1.0 }
+    # Shopify's order name (#1001), so bookkeepers find the order.
+    - { target: docNumber,  expression: "$substring('SHOP' & $string(shopifyId), 0, 21)", origin: human, confidence: 0.95 }
+    - { target: note,       expression: "'Shopify order ' & externalId",  origin: human, confidence: 0.95 }
+    - target: qboLines
+      expression: "lines.{ 'DetailType': 'SalesItemLineDetail', 'Amount': $round(quantity * $number(price), 2), 'SalesItemLineDetail': { 'ItemRef': { 'value': $lookup({ 'M-1': '11', 'M-2': '12' }, material) }, 'Qty': quantity, 'UnitPrice': $number(price) } }[]"
+      origin: human
+      confidence: 0.95
+    - { target: netValue,   expression: "netValue",                       origin: human, confidence: 1.0 }
+    - { target: shopifyId,  expression: "shopifyId",                      origin: human, confidence: 1.0 }

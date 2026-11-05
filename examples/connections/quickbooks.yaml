@@ -1,0 +1,66 @@
+# Accounting on QuickBooks Online, through the Accounting API (v3) with an
+# Intuit app a person authorized for the company (OAuth 2.0, scope
+# com.intuit.quickbooks.accounting). The secret is that authorization:
+# {"clientId", "clientSecret", "refreshToken"}. Intuit rotates the refresh
+# token, so the secret only seeds it: Turgon keeps the current one sealed
+# in its database (TURGON_TOKEN_KEYS), where every worker finds it. The
+# realm (company ID) is part of the base URL. A paid shop order becomes a
+# sales receipt; the write's idempotency key is QuickBooks' requestid, so a
+# retried create answers the first one's receipt instead of making a second.
+# A saga's undo voids the receipt. Changed receipts are queried on
+# MetaData.LastUpdatedTime.
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata:
+  name: quickbooks
+  description: "QuickBooks Online, through the Accounting API (OAuth 2.0, rotating refresh token)."
+spec:
+  connector: rest@^1
+  secretRef: openbao://quickbooks/oauth
+  entities: [SalesOrder, Customer]
+  # Intuit allows 500 requests a minute per company and 10 at once.
+  limits: { maxConcurrentCalls: 4, requestsPerSecond: 8 }
+  events:
+    - { name: SalesReceipt.Changed, entity: SalesOrder, interface: polling }
+  operations:
+    - { name: create-sales-receipt, entity: SalesOrder, direction: write, interface: rest-api, risk: high, compensation: void-sales-receipt }
+    - { name: void-sales-receipt, entity: SalesOrder, direction: write, interface: rest-api, risk: high }
+    - { name: get-customer, entity: Customer, direction: read, interface: rest-api, risk: read }
+  config:
+    baseURL: https://quickbooks.api.intuit.com/v3/company/9130357766543210
+    auth:
+      type: oauth2-refresh
+      tokenURL: https://oauth.platform.intuit.com/oauth2/v1/tokens/bearer
+    checkPath: /companyinfo/9130357766543210?minorversion=75
+    events:
+      SalesReceipt.Changed:
+        path: /query
+        params:
+          query: "select * from SalesReceipt where MetaData.LastUpdatedTime > '{{position}}' orderby MetaData.LastUpdatedTime maxresults {{limit}}"
+          minorversion: "75"
+        items: QueryResponse.SalesReceipt
+        id: Id
+        position: MetaData.LastUpdatedTime
+        positionFormat: rfc3339
+    operations:
+      create-sales-receipt:
+        method: POST
+        # requestid makes the create idempotent on Intuit's side.
+        path: "/salesreceipt?requestid={{idempotencyKey}}&minorversion=75"
+        fields:
+          CustomerRef.value: customerId
+          TxnDate: orderDate
+          DocNumber: docNumber
+          PrivateNote: note
+          Line: qboLines
+        result: SalesReceipt
+      # Voiding needs the receipt's SyncToken, which the create's result has.
+      void-sales-receipt:
+        method: POST
+        path: "/salesreceipt?operation=void&minorversion=75"
+        fields: { Id: Id, SyncToken: SyncToken }
+        result: SalesReceipt
+      get-customer:
+        method: GET
+        path: "/customer/{{id}}?minorversion=75"
+        fields: { Customer.DisplayName: name, Customer.PrimaryEmailAddr.Address: email, Customer.Active: active }

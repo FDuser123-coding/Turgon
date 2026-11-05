@@ -34,6 +34,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/dataversetest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/hubspottest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/netsuitetest"
+	"github.com/fduser123-coding/turgon/pkg/connector/rest/qbotest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/shoptest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/stripetest"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce"
@@ -138,7 +139,8 @@ func newFixtureReg(t *testing.T, recipe string, extra connector.StaticSecrets, w
 	}
 	rt, err := New(ctx, spec, Options{
 		Registry: registry,
-		Secrets:  secrets,
+		// Connections whose systems rotate refresh tokens keep them here.
+		Secrets:  connector.WithTokens(secrets, &connector.MemoryTokens{}),
 		Store:    store,
 		Resolver: store,
 		Audit:    audit.New(&syncWriter{w: &buf}),
@@ -1187,6 +1189,71 @@ func TestShopifyRejectionCancelsTheBusinessOneOrder(t *testing.T) {
 	}
 	if o := b1.OrderByRef(fmt.Sprintf("SHOPIFY-%d", id)); o == nil || o["Cancelled"] != "tYES" {
 		t.Fatalf("the Business One order was not cancelled after Shopify rejected the note: %v", o)
+	}
+}
+
+// newQuickBooksFixture runs the shopify-store-orders-to-quickbooks recipe
+// against the fake Shopify store and the fake QuickBooks Online company,
+// whose refresh token rotates on every use.
+func newQuickBooksFixture(t *testing.T) (*fixture, *shoptest.Shop, *qbotest.QBO) {
+	t.Helper()
+	shop := shoptest.New("shpat_test")
+	t.Cleanup(shop.Close)
+	q, seed := qbotest.New("qb-app", "s3cret")
+	t.Cleanup(q.Close)
+	f := newFixtureFor(t, "shopify-store-orders-to-quickbooks", connector.StaticSecrets{
+		"openbao://shopify-store/token": "shpat_test",
+		"openbao://quickbooks/oauth":    `{"clientId": "qb-app", "clientSecret": "s3cret", "refreshToken": "` + seed + `"}`,
+	}, func(cfg string) string {
+		cfg = strings.ReplaceAll(cfg, "https://turgon-demo.myshopify.com/admin/api/"+shoptest.Version, shop.URL())
+		cfg = strings.ReplaceAll(cfg, "https://oauth.platform.intuit.com", q.URL())
+		return strings.ReplaceAll(cfg, "https://quickbooks.api.intuit.com", q.URL())
+	})
+	if err := f.store.PutXref(context.Background(), "Customer", "shopify-store", "ada@example.com", qbotest.Amy); err != nil {
+		t.Fatal(err)
+	}
+	return f, shop, q
+}
+
+// A paid shop order becomes a QuickBooks sales receipt, and its document
+// number goes on the Shopify order; the access token is refreshed once,
+// with the rotated refresh token kept for the next.
+func TestShopifyOrderBecomesQuickBooksReceipt(t *testing.T) {
+	f, shop, q := newQuickBooksFixture(t)
+	id := shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-11-05T09:30:00-04:00",
+		"subtotal_price": "655.00", "currency": "usd", "line_items": []any{
+			map[string]any{"sku": "M-1", "quantity": 2, "price": "210.00"},
+			map[string]any{"sku": "M-2", "quantity": 1, "price": "235.00"}},
+	})
+	if _, err, _ := f.run(f.dispatch()[0], approve("04-write")); err != nil {
+		t.Fatal(err)
+	}
+	r := q.ReceiptByDocNumber(fmt.Sprintf("SHOP%d", id))
+	if r == nil || r["TotalAmt"] != 655.0 || r["CustomerRef"].(map[string]any)["value"] != qbotest.Amy {
+		t.Fatalf("QuickBooks receipt = %v", r)
+	}
+	if got := shop.Order(id)["note"]; got != "ERP order "+r["DocNumber"].(string) {
+		t.Fatalf("Shopify note = %v", got)
+	}
+	if q.Refreshes != 1 || q.Spent != 0 {
+		t.Fatalf("refreshes %d, spent %d", q.Refreshes, q.Spent)
+	}
+}
+
+func TestShopifyRejectionVoidsTheQuickBooksReceipt(t *testing.T) {
+	f, shop, q := newQuickBooksFixture(t)
+	id := shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-11-05T09:30:00-04:00",
+		"subtotal_price": "235.00", "currency": "usd", "line_items": []any{map[string]any{"sku": "M-2", "quantity": 1, "price": "235.00"}},
+	})
+	shop.FailUpdates = true
+	_, err, _ := f.run(f.dispatch()[0], approve("04-write"))
+	if errType(err) != ErrTypeInvalid {
+		t.Fatalf("err = %v (%s)", err, errType(err))
+	}
+	if r := q.ReceiptByDocNumber(fmt.Sprintf("SHOP%d", id)); r == nil || r["TotalAmt"] != 0.0 || r["PrivateNote"] != "Voided" {
+		t.Fatalf("the QuickBooks receipt was not voided after Shopify rejected the note: %v", r)
 	}
 }
 

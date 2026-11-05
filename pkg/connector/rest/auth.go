@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash"
 	"io"
@@ -18,6 +19,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fduser123-coding/turgon/pkg/connector"
 )
 
 // Auth says how requests are authenticated. The credential itself is the
@@ -28,6 +31,11 @@ import (
 //	basic   "user:password"
 //	oauth2  {"clientId": "...", "clientSecret": "..."}; the client
 //	        credentials grant against TokenURL, refreshed before expiry
+//	oauth2-refresh  {"clientId", "clientSecret", "refreshToken"}; the
+//	        refresh token grant against TokenURL, for APIs a person
+//	        authorized (QuickBooks Online, Xero). The server rotates the
+//	        refresh token, so the current one is kept in a
+//	        connector.TokenStore (Turgon's database); the secret seeds it
 //	oauth1  {"consumerKey", "consumerSecret", "tokenId", "tokenSecret"};
 //	        OAuth 1.0a request signing with HMAC-SHA256, as NetSuite's
 //	        token-based authentication takes it, with Realm (the account ID)
@@ -69,16 +77,16 @@ func (a Auth) validate() error {
 		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
 			return fmt.Errorf("auth: session needs an http(s) loginURL")
 		}
-	case "oauth2":
+	case "oauth2", "oauth2-refresh":
 		u, err := url.Parse(a.TokenURL)
 		if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-			return fmt.Errorf("auth: oauth2 needs an http(s) tokenURL")
+			return fmt.Errorf("auth: %s needs an http(s) tokenURL", a.Type)
 		}
 		if a.ClientAuth != "" && a.ClientAuth != "basic" && a.ClientAuth != "body" {
 			return fmt.Errorf("auth: clientAuth must be basic or body, got %q", a.ClientAuth)
 		}
 	default:
-		return fmt.Errorf("auth: type must be bearer, header, basic, oauth2, oauth1, session or none, got %q", a.Type)
+		return fmt.Errorf("auth: type must be bearer, header, basic, oauth2, oauth2-refresh, oauth1, session or none, got %q", a.Type)
 	}
 	return nil
 }
@@ -95,6 +103,13 @@ type authenticator struct {
 	mu      sync.Mutex
 	token   string
 	expires time.Time
+
+	// oauth2-refresh: the seed refresh token from the secret, and where the
+	// rotated ones are kept (connector.TokenStore), under tokenKey.
+	refreshToken string
+	tokens       connector.TokenStore
+	tokenKey     string
+	rejected     string // an access token the API refused, not to be reused
 }
 
 func newAuthenticator(cfg Auth, secret string, client *http.Client) (*authenticator, error) {
@@ -117,6 +132,16 @@ func newAuthenticator(cfg Auth, secret string, client *http.Client) (*authentica
 			return nil, fmt.Errorf(`auth: the oauth2 secret must be {"clientId": "...", "clientSecret": "..."}`)
 		}
 		a.clientID, a.clientSecret = creds.ClientID, creds.ClientSecret
+	case "oauth2-refresh":
+		var creds struct {
+			ClientID     string `json:"clientId"`
+			ClientSecret string `json:"clientSecret"`
+			RefreshToken string `json:"refreshToken"`
+		}
+		if err := json.Unmarshal([]byte(a.secret), &creds); err != nil || creds.ClientID == "" || creds.ClientSecret == "" || creds.RefreshToken == "" {
+			return nil, fmt.Errorf(`auth: the oauth2-refresh secret must be {"clientId": "...", "clientSecret": "...", "refreshToken": "..."}`)
+		}
+		a.clientID, a.clientSecret, a.refreshToken = creds.ClientID, creds.ClientSecret, creds.RefreshToken
 	case "session":
 		var login map[string]any
 		if err := json.Unmarshal([]byte(a.secret), &login); err != nil || len(login) == 0 {
@@ -131,11 +156,13 @@ func newAuthenticator(cfg Auth, secret string, client *http.Client) (*authentica
 	return a, nil
 }
 
-func (a *authenticator) refreshable() bool { return a.cfg.Type == "oauth2" || a.cfg.Type == "session" }
+func (a *authenticator) refreshable() bool {
+	return a.cfg.Type == "oauth2" || a.cfg.Type == "oauth2-refresh" || a.cfg.Type == "session"
+}
 
 func (a *authenticator) invalidate() {
 	a.mu.Lock()
-	a.token = ""
+	a.rejected, a.token = a.token, ""
 	a.mu.Unlock()
 }
 
@@ -149,6 +176,12 @@ func (a *authenticator) apply(ctx context.Context, req *http.Request) error {
 		req.Header.Set("Authorization", "Basic "+base64.StdEncoding.EncodeToString([]byte(a.secret)))
 	case "oauth2":
 		token, err := a.current(ctx)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+	case "oauth2-refresh":
+		token, err := a.refreshed(ctx)
 		if err != nil {
 			return err
 		}
@@ -295,6 +328,118 @@ func (a *authenticator) current(ctx context.Context) (string, error) {
 	return a.token, nil
 }
 
+// tokenState is what the token store keeps for an oauth2-refresh
+// connection: the refresh token in force, the access token it last gave
+// (so workers share it instead of each spending the refresh token), and a
+// hash of the seed it descends from.
+type tokenState struct {
+	Seed         string    `json:"seed"`
+	RefreshToken string    `json:"refreshToken"`
+	AccessToken  string    `json:"accessToken,omitempty"`
+	Expires      time.Time `json:"expires,omitempty"`
+}
+
+// ErrNoTokenStore is returned by an oauth2-refresh connection without a
+// token store: spending the refresh token would lose the one the server
+// rotates it to.
+var ErrNoTokenStore = errors.New("oauth2-refresh keeps the refresh tokens the server rotates in Turgon's database: " +
+	"give the command --database-url (TURGON_DATABASE_URL) and set TURGON_TOKEN_KEYS")
+
+// refreshed returns an access token, refreshing it with the refresh token
+// in force. The refresh and the rotated token's storing happen under the
+// store's lock, so two workers never spend the same single-use token. A
+// seed in the secret that differs from the one the stored token descends
+// from (the app was authorized again) replaces it.
+func (a *authenticator) refreshed(ctx context.Context) (string, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.token != "" && time.Now().Before(a.expires) {
+		return a.token, nil
+	}
+	if a.tokens == nil {
+		return "", ErrNoTokenStore
+	}
+	sum := sha256.Sum256([]byte(a.refreshToken))
+	seed := hex.EncodeToString(sum[:8])
+	err := a.tokens.UpdateToken(ctx, a.tokenKey, func(cur []byte) ([]byte, error) {
+		var st tokenState
+		if cur != nil {
+			if err := json.Unmarshal(cur, &st); err != nil {
+				return nil, fmt.Errorf("oauth2-refresh: the stored token is not readable: %w", err)
+			}
+		}
+		if st.Seed != seed || st.RefreshToken == "" {
+			st = tokenState{Seed: seed, RefreshToken: a.refreshToken}
+		}
+		if st.AccessToken != "" && st.AccessToken != a.rejected && time.Now().Before(st.Expires) {
+			a.token, a.expires = st.AccessToken, st.Expires // another worker refreshed it
+			return nil, nil
+		}
+		access, refresh, life, err := a.refreshGrant(ctx, st.RefreshToken)
+		if err != nil {
+			return nil, err
+		}
+		margin := time.Minute
+		if life < 4*margin {
+			margin = life / 4
+		}
+		st.AccessToken, st.Expires = access, time.Now().Add(life-margin)
+		if refresh != "" {
+			st.RefreshToken = refresh
+		}
+		a.token, a.expires = st.AccessToken, st.Expires
+		return json.Marshal(st)
+	})
+	if err != nil {
+		return "", err
+	}
+	return a.token, nil
+}
+
+// refreshGrant spends a refresh token (RFC 6749 §6).
+func (a *authenticator) refreshGrant(ctx context.Context, refresh string) (access, next string, life time.Duration, err error) {
+	form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {refresh}}
+	if a.cfg.ClientAuth == "body" {
+		form.Set("client_id", a.clientID)
+		form.Set("client_secret", a.clientSecret)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.cfg.TokenURL, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", "", 0, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	if a.cfg.ClientAuth != "body" {
+		req.SetBasicAuth(url.QueryEscape(a.clientID), url.QueryEscape(a.clientSecret))
+	}
+	resp, err := a.http.Do(req)
+	if err != nil {
+		return "", "", 0, fmt.Errorf("oauth2 refresh: %w", err)
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode != http.StatusOK {
+		e := &APIError{Method: http.MethodPost, Path: a.cfg.TokenURL, Status: resp.StatusCode, Body: strings.TrimSpace(string(data))}
+		if strings.Contains(e.Body, "invalid_grant") {
+			return "", "", 0, fmt.Errorf("%w (the refresh token was revoked, expired or already spent: authorize the app again and put its new refresh token in the secret)", e)
+		}
+		return "", "", 0, e
+	}
+	var tok struct {
+		AccessToken  string `json:"access_token"`
+		RefreshToken string `json:"refresh_token"`
+		ExpiresIn    int    `json:"expires_in"`
+	}
+	if err := json.Unmarshal(data, &tok); err != nil || tok.AccessToken == "" {
+		return "", "", 0, fmt.Errorf("oauth2 refresh: no access_token in the response")
+	}
+	life = time.Duration(tok.ExpiresIn) * time.Second
+	if life <= 0 {
+		life = time.Hour
+	}
+	return tok.AccessToken, tok.RefreshToken, life, nil
+}
+
 // session logs in when there is no live session, and returns the Cookie
 // header its cookies make.
 func (a *authenticator) session(ctx context.Context) (string, error) {
@@ -370,3 +515,16 @@ func (x *Authenticator) Refreshable() bool { return x.a.refreshable() }
 
 // Invalidate drops a cached token.
 func (x *Authenticator) Invalidate() { x.a.invalidate() }
+
+// UseTokens gives an oauth2-refresh authenticator the store for the
+// tokens the server rotates, under key (the endpoint).
+func (x *Authenticator) UseTokens(store connector.TokenStore, key string) { x.a.useTokens(store, key) }
+
+// useTokens keys the stored token by the endpoint, the token URL and the
+// client: another app authorized for the same endpoint starts afresh.
+func (a *authenticator) useTokens(store connector.TokenStore, key string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	sum := sha256.Sum256([]byte(a.cfg.TokenURL + "\x00" + a.clientID))
+	a.tokens, a.tokenKey = store, key+"@"+hex.EncodeToString(sum[:8])
+}

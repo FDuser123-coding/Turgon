@@ -56,6 +56,9 @@ func checkCmd() *cobra.Command {
 				}
 			}
 
+			// The state database stays open for the connectors' checks: an
+			// oauth2-refresh connection keeps its rotated token there.
+			var statePool *pgxpool.Pool
 			if dbURL != "" {
 				pool, err := pgxpool.New(ctx, dbURL)
 				if err == nil {
@@ -68,9 +71,10 @@ func checkCmd() *cobra.Command {
 					report("turgon", connector.Fail("state database", err.Error(), connector.NetworkFix(err, "the state database")))
 				} else {
 					report("turgon", connector.Pass("state database", "reachable, schema up to date"))
+					statePool = pool
 				}
 				if pool != nil {
-					pool.Close()
+					defer pool.Close()
 				}
 			}
 			if !skipTemporal {
@@ -89,6 +93,11 @@ func checkCmd() *cobra.Command {
 			secretsFrom, err := openSecrets()
 			if err != nil {
 				report("turgon", connector.Fail("secrets", err.Error(), "Set TURGON_SECRETS to env or openbao, and the TURGON_OPENBAO_* settings for OpenBao."))
+				fmt.Fprintf(out, "%d check(s) failed\n", failed)
+				return errSilent
+			}
+			if secretsFrom, err = withTokens(secretsFrom, statePool); err != nil {
+				report("turgon", connector.Fail("token keys", err.Error(), "Set TURGON_TOKEN_KEYS to id:base64key (openssl rand -base64 32), the keys that seal rotated refresh tokens."))
 				fmt.Fprintf(out, "%d check(s) failed\n", failed)
 				return errSilent
 			}

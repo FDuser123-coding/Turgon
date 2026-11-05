@@ -70,9 +70,10 @@ func discoverCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 5*time.Minute)
 			defer cancel()
 			var store *pgstore.Store
+			var pool *pgxpool.Pool
 			if dbURL != "" {
-				pool, err := pgxpool.New(ctx, dbURL)
-				if err != nil {
+				var err error
+				if pool, err = pgxpool.New(ctx, dbURL); err != nil {
 					return err
 				}
 				defer pool.Close()
@@ -83,6 +84,9 @@ func discoverCmd() *cobra.Command {
 			}
 			secretsFrom, err := openSecrets()
 			if err != nil {
+				return err
+			}
+			if secretsFrom, err = withTokens(secretsFrom, pool); err != nil {
 				return err
 			}
 			registry, err := connectorRegistry()
