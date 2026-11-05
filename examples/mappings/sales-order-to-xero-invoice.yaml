@@ -1,0 +1,24 @@
+# A paid order as an authorised Xero sales invoice (ACCREC). Lines are
+# items by code (the shop's SKU is the item code here) at the shop's
+# price; without one Xero uses the item's sales price. The customer is the
+# master record's ID, the Xero contact's.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: sales-order-to-xero-invoice
+  version: 1.0.0
+spec:
+  from: model.SalesOrder
+  to: model.SalesOrder
+  fields:
+    - { target: contactId, expression: "customerId",                     origin: human, confidence: 1.0 }
+    - { target: orderDate, expression: "orderDate",                      origin: human, confidence: 1.0 }
+    # Paid in the shop: due the day it was placed.
+    - { target: dueDate,   expression: "orderDate",                      origin: human, confidence: 0.95 }
+    - { target: reference, expression: "'Shopify ' & externalId",        origin: human, confidence: 1.0 }
+    - target: xeroLines
+      expression: "lines.{ 'ItemCode': material, 'Quantity': quantity, 'UnitAmount': $number(price) }[]"
+      origin: human
+      confidence: 0.95
+    - { target: netValue,  expression: "netValue",                       origin: human, confidence: 1.0 }
+    - { target: shopifyId, expression: "shopifyId",                      origin: human, confidence: 1.0 }

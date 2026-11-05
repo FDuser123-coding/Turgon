@@ -78,7 +78,11 @@ type Event struct {
 	ID string `json:"id,omitempty"`
 	// Position is the item field ordering items (default: the ID field).
 	Position string `json:"position,omitempty"`
-	// PositionFormat is "number" (default), "rfc3339" or "unix" (seconds).
+	// PositionFormat is "number" (default), "rfc3339", "unix" (seconds) or
+	// "msjson" (Microsoft's JSON date, "/Date(1730803200000+0000)/", as
+	// Xero answers). {{position}} renders in it; {{positionTime}} is always
+	// RFC 3339 in UTC, for a request that takes a time where the answer
+	// holds another format (Xero's If-Modified-Since).
 	PositionFormat string `json:"positionFormat,omitempty"`
 	// Order is the API's list order: "asc" (default, oldest first) or
 	// "desc" (newest first, as Stripe lists). A descending list is paged
@@ -151,6 +155,9 @@ type Operation struct {
 	// NullValue is sent in a JSON body in place of null, for APIs that
 	// clear a field with another value (HubSpot clears a property with "").
 	NullValue *string `json:"nullValue,omitempty"`
+	// Constants are fixed API field values sent with the mapped ones, such
+	// as Xero's Status: VOIDED for the request that voids an invoice.
+	Constants map[string]any `json:"constants,omitempty"`
 	// Existing finds the record a retried create already made, for APIs
 	// that can neither upsert by an external ID nor take an idempotency
 	// key (Business Central): the create is sent only when it lists none.
@@ -230,9 +237,9 @@ func (c Config) validate() error {
 			return fmt.Errorf("event %s: method must be GET or POST", name)
 		}
 		switch e.PositionFormat {
-		case "", "number", "rfc3339", "unix":
+		case "", "number", "rfc3339", "unix", "msjson":
 		default:
-			return fmt.Errorf("event %s: positionFormat must be number, rfc3339 or unix", name)
+			return fmt.Errorf("event %s: positionFormat must be number, rfc3339, unix or msjson", name)
 		}
 		switch e.Order {
 		case "", "asc":
@@ -279,6 +286,14 @@ func (c Config) validate() error {
 		for api, field := range op.Fields {
 			if !apiFieldRE.MatchString(api) || !fieldRE.MatchString(field) {
 				return fmt.Errorf("operation %s: invalid field mapping %q: %q", name, api, field)
+			}
+		}
+		for api := range op.Constants {
+			if !apiFieldRE.MatchString(api) {
+				return fmt.Errorf("operation %s: invalid constant field %q", name, api)
+			}
+			if _, mapped := op.Fields[api]; mapped {
+				return fmt.Errorf("operation %s: %s is both mapped and a constant", name, api)
 			}
 		}
 		if op.Capture != nil && (len(op.Fields) == 0 || !strings.HasPrefix(op.Capture.Path, "/")) {
@@ -504,7 +519,7 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 	truncated := false
 	for page := 1; ; page++ {
 		var resp any
-		if err := c.do(ctx, method, e.Path, q, headerOf(e.Headers), body, &resp); err != nil {
+		if err := c.do(ctx, method, e.Path, q, e.headers(after, limit), body, &resp); err != nil {
 			return nil, err
 		}
 		list, ok := lookup(resp, e.Items).([]any)
@@ -567,6 +582,22 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 }
 
 // listRequest is the first list request for items after a position.
+// headers returns the event's request headers, with {{position}},
+// {{positionTime}} and {{limit}} filled in (Xero's If-Modified-Since).
+func (e Event) headers(after int64, limit int) http.Header {
+	if len(e.Headers) == 0 {
+		return nil
+	}
+	tmp := e
+	tmp.Params = e.Headers
+	_, q, _ := tmp.listRequest(after, limit)
+	h := http.Header{}
+	for k := range e.Headers {
+		h.Set(k, q.Get(k))
+	}
+	return h
+}
+
 func (e Event) listRequest(after int64, limit int) (string, url.Values, any) {
 	fill := func(v string) string {
 		return varRE.ReplaceAllStringFunc(v, func(m string) string {
@@ -575,6 +606,8 @@ func (e Event) listRequest(after int64, limit int) (string, url.Values, any) {
 				return formatPosition(after, e.PositionFormat)
 			case "positionMillis":
 				return strconv.FormatInt(after, 10)
+			case "positionTime":
+				return time.UnixMilli(after).UTC().Format("2006-01-02T15:04:05")
 			case "limit":
 				return strconv.Itoa(limit)
 			}
@@ -621,6 +654,8 @@ func fillBody(v any, fill func(string) string, limit int) any {
 
 func formatPosition(pos int64, format string) string {
 	switch format {
+	case "msjson":
+		return "/Date(" + strconv.FormatInt(pos, 10) + "+0000)/"
 	case "rfc3339":
 		return time.UnixMilli(pos).UTC().Format("2006-01-02T15:04:05.000Z07:00")
 	case "unix":
@@ -630,9 +665,17 @@ func formatPosition(pos int64, format string) string {
 }
 
 // parsePosition returns a number, or a time in Unix milliseconds.
+var msjsonRE = regexp.MustCompile(`^/Date\((-?\d+)([+-]\d{4})?\)/$`)
+
 func parsePosition(v any, format string) (int64, error) {
 	s := scalar(v)
 	switch format {
+	case "msjson":
+		m := msjsonRE.FindStringSubmatch(s)
+		if m == nil {
+			return 0, fmt.Errorf("%q is not a /Date(milliseconds)/ value", s)
+		}
+		return strconv.ParseInt(m[1], 10, 64) // milliseconds since the epoch, UTC; the offset is for display
 	case "rfc3339":
 		t, err := time.Parse(time.RFC3339Nano, s)
 		return t.UnixMilli(), err
@@ -777,10 +820,13 @@ func idFrom(u string) string {
 // metadata.erp_payment_id) to their values from the payload. Without
 // Fields, the payload is sent as it is.
 func (op Operation) values(doc map[string]any) (map[string]any, error) {
-	if len(op.Fields) == 0 {
+	if len(op.Fields) == 0 && len(op.Constants) == 0 {
 		return doc, nil
 	}
 	b := map[string]any{}
+	for api, v := range op.Constants {
+		b[api] = v
+	}
 	for api, field := range op.Fields {
 		v := lookup(doc, field)
 		if v == nil {
@@ -797,7 +843,7 @@ func (op Operation) request(values map[string]any) any {
 		return nil
 	}
 	var body any = values
-	if len(op.Fields) > 0 || op.Restore {
+	if len(op.Fields) > 0 || len(op.Constants) > 0 || op.Restore {
 		body = nest(values)
 	}
 	if op.Wrap != "" {
@@ -1108,11 +1154,20 @@ func lookup(v any, path string) any {
 		return v
 	}
 	for _, part := range strings.Split(path, ".") {
-		m, ok := v.(map[string]any)
-		if !ok {
+		switch x := v.(type) {
+		case map[string]any:
+			v = x[part]
+		case []any:
+			// A number indexes a list: Invoices.0 is the first invoice of
+			// an API that always answers a list (Xero).
+			i, err := strconv.Atoi(part)
+			if err != nil || i < 0 || i >= len(x) {
+				return nil
+			}
+			v = x[i]
+		default:
 			return nil
 		}
-		v = m[part]
 	}
 	return v
 }

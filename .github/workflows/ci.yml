@@ -82,6 +82,7 @@ jobs:
           go run ./cmd/turgon compile -c examples shopify-store-orders-to-odoo -o /dev/null
           go run ./cmd/turgon compile -c examples shopify-store-orders-to-business-one -o /dev/null
           go run ./cmd/turgon compile -c examples shopify-store-orders-to-quickbooks -o /dev/null
+          go run ./cmd/turgon compile -c examples shopify-store-orders-to-xero -o /dev/null
 
   console:
     runs-on: ubuntu-latest
