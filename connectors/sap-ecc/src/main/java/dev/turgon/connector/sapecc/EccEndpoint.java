@@ -48,6 +48,7 @@ final class EccEndpoint extends CamelEndpoint {
     static final List<String> FUNCTIONS = List.of("BAPI_SALESORDER_CREATEFROMDAT2", "BAPI_SALESORDER_GETLIST",
             "BAPI_SALESORDER_GETSTATUS", "BAPI_SALESORDER_CHANGE", "BAPI_TRANSACTION_COMMIT", "BAPI_TRANSACTION_ROLLBACK",
             "BAPI_CUSTOMER_GETDETAIL2", "BAPISDORDER_GETDETAILEDLIST");
+    static final String SIMULATE = "BAPI_SALESORDER_SIMULATE";
     private static final ObjectMapper JSON = new ObjectMapper();
 
     private final EccConfig cfg;
@@ -77,6 +78,16 @@ final class EccEndpoint extends CamelEndpoint {
         return pointers.poll(event, after, limit, this::read);
     }
 
+    /** The function modules this configuration calls. */
+    List<String> functions() {
+        if (!cfg.simulatePricing()) {
+            return FUNCTIONS;
+        }
+        List<String> all = new ArrayList<>(FUNCTIONS);
+        all.add(SIMULATE);
+        return all;
+    }
+
     /** The structure fields each operation fills or reads, for the metadata graph. */
     static final Map<String, Map<String, List<String>>> USED = Map.of(
             "BAPISDHD1", Map.of("operation create-sales-order", List.of("DOC_TYPE", "SALES_ORG", "DISTR_CHAN", "DIVISION",
@@ -98,7 +109,7 @@ final class EccEndpoint extends CamelEndpoint {
     public JsonNode discover(List<String> objects) throws Exception {
         ObjectNode cat = JSON.createObjectNode();
         ArrayNode objs = cat.putArray("objects"), uses = cat.putArray("uses");
-        java.util.Set<String> functions = new java.util.TreeSet<>(FUNCTIONS), structures = new java.util.TreeSet<>(USED.keySet()),
+        java.util.Set<String> functions = new java.util.TreeSet<>(functions()), structures = new java.util.TreeSet<>(USED.keySet()),
                 idocTypes = new java.util.TreeSet<>();
         cfg.idocEvents().values().forEach(e -> idocTypes.addAll(e.idocTypes()));
         for (String o : objects) {
@@ -265,7 +276,7 @@ final class EccEndpoint extends CamelEndpoint {
                             + "and that the sidecar reaches the gateway port (33<sysnr>)."));
             return out;
         }
-        for (String f : FUNCTIONS) {
+        for (String f : functions()) {
             try {
                 if (rfc.exists(f)) {
                     out.add(CheckResult.pass(f, "available"));
@@ -473,7 +484,61 @@ final class EccEndpoint extends CamelEndpoint {
             out.put("salesArea", cfg.salesOrg() + "/" + cfg.distributionChannel() + "/" + cfg.division());
             out.put("items", ((List<?>) p.get("ORDER_ITEMS_IN")).size());
             out.set("messages", Bapi.messages(r));
+            if (cfg.simulatePricing()) {
+                price(p, out);
+            }
             ex.getMessage().setBody(out);
+        }
+
+        /**
+         * Prices the order as SAP would (BAPI_SALESORDER_SIMULATE), so a
+         * write's checkAmount can compare SAP's net value with the source's:
+         * netValue is the sum of the items' NET_VALUE1, in currency.
+         */
+        void price(Map<String, Object> p, ObjectNode out) throws Exception {
+            @SuppressWarnings("unchecked")
+            Map<String, String> h = (Map<String, String>) p.get("ORDER_HEADER_IN");
+            Map<String, String> head = new LinkedHashMap<>();
+            for (String k : List.of("DOC_TYPE", "SALES_ORG", "DISTR_CHAN", "DIVISION", "REQ_DATE_H")) {
+                if (h.containsKey(k)) {
+                    head.put(k, h.get(k));
+                }
+            }
+            @SuppressWarnings("unchecked")
+            List<Map<String, String>> items = (List<Map<String, String>>) p.get("ORDER_ITEMS_IN");
+            List<Map<String, String>> in = new ArrayList<>();
+            for (Map<String, String> it : items) {
+                // BAPIITEMIN's REQ_QTY has three implied decimals: 1000 is one unit.
+                String qty = new BigDecimal(it.get("TARGET_QTY")).movePointRight(3).setScale(0, java.math.RoundingMode.HALF_UP).toPlainString();
+                in.add(Map.of("ITM_NUMBER", it.get("ITM_NUMBER"), "MATERIAL", it.get("MATERIAL"), "REQ_QTY", qty));
+            }
+            Map<String, Object> q = new LinkedHashMap<>();
+            q.put("ORDER_HEADER_IN", head);
+            q.put("ORDER_PARTNERS", p.get("ORDER_PARTNERS"));
+            q.put("ORDER_ITEMS_IN", in);
+            q.put("ORDER_SCHEDULE_IN", p.get("ORDER_SCHEDULES_IN"));
+            Map<String, Object> r = rfc.call(SIMULATE, q);
+            Bapi.failOnError(r, "the pricing simulation");
+            BigDecimal net = BigDecimal.ZERO;
+            String currency = "";
+            List<Map<String, String>> priced = Rfc.table(r, "ORDER_ITEMS_OUT");
+            if (priced.isEmpty()) {
+                throw new ConnectorException.Rejected("SAP priced no items in the simulation");
+            }
+            for (Map<String, String> it : priced) {
+                try {
+                    net = net.add(new BigDecimal(it.getOrDefault("NET_VALUE1", "").trim()));
+                } catch (NumberFormatException e) {
+                    throw new ConnectorException.Rejected("SAP gave item " + it.get("ITM_NUMBER") + " no net value in the simulation");
+                }
+                if (currency.isEmpty()) {
+                    currency = it.getOrDefault("CURRENCY", "").trim();
+                }
+            }
+            out.put("netValue", net.toPlainString());
+            if (!currency.isEmpty()) {
+                out.put("currency", currency);
+            }
         }
 
         void create(Exchange ex) throws Exception {

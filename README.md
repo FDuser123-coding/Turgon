@@ -597,7 +597,8 @@ which the S/4HANA connection now has.
 **The ERP's price against the shop's.** A write step can compare its amount with the one the
 target's dry run shows. It does so with
 `checkAmount: { preview: record.TotalNetAmount, tolerance: 0.01 }`, as
-`shopify-store-orders-to-s4` now does.
+`shopify-store-orders-to-s4` now does (and `salesforce-won-deals-to-ecc`, with
+`preview: netValue` from ECC's pricing simulation).
 - **When they differ by more than the tolerance** (a fraction of the amount; half a cent always
   agrees), the write waits for a person even if policy alone would let it through. The reason
   names both amounts, and the commit insists on the approval. The same holds when the dry run
@@ -657,11 +658,24 @@ Errors are status codes:
     The idempotency key is the purchase order number, so a retried create finds the order with
     `BAPI_SALESORDER_GETLIST` instead of making a second. The create and `BAPI_TRANSACTION_COMMIT`
     run in one SAP session. The order is confirmed with `BAPI_SALESORDER_GETSTATUS`. With
-    `priceCondition` (`PR00` in `ecc-prod`), each line that carries a `price` adds a row to
+    `priceCondition: PR00`, each line that carries a `price` adds a row to
     `ORDER_CONDITIONS_IN`: that manual condition, its value, the item and the order's currency.
     SAP then keeps the source's price. Lines without one are priced by SAP's pricing procedure.
     The condition must be one users may enter by hand; the fake ECC takes `PR00` and refuses
     others, as SAP does.
+  - **Pricing in the dry run:** with `simulatePricing: true` (as in `ecc-prod`), the preview also
+    calls `BAPI_SALESORDER_SIMULATE` and shows SAP's `netValue` (the items' `NET_VALUE1`) and
+    `currency`. `salesforce-won-deals-to-ecc` checks it against the deal's amount
+    (`checkAmount: { preview: netValue, tolerance: 0.01 }`), so a deal priced off SAP's price
+    list waits for a person. The simulation takes no manual conditions, so it cannot be combined
+    with `priceCondition`, and the connection is refused if both are set. `ORDER_ITEMS_IN`'s
+    `REQ_QTY` is sent with its three implied decimals (`2000` for two units). The field names
+    follow SAP's interface documentation; they are tested against the fake ECC, not yet a real
+    system.
+  - **Measured live:** against a Temporal 1.28 dev server, the fake Salesforce and the demo
+    sidecar. A 100.00 deal for one M-1 (100.00 in SAP) waited only as a high-risk write, and once
+    approved became order 0000012000. A 7800.00 deal for the same line also gave the reason
+    `the target's dry run shows 100.00 at netValue, the source 7800.00`.
   - **cancel-sales-order** is its compensation. It deletes the order through
     `BAPI_SALESORDER_CHANGE`, which SAP refuses once there is a delivery.
   - **get-customer** calls `BAPI_CUSTOMER_GETDETAIL2`.

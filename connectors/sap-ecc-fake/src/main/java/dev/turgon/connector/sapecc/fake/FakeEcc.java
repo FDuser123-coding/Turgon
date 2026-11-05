@@ -33,7 +33,7 @@ public final class FakeEcc {
     static final Set<String> FUNCTIONS = Set.of("RFC_PING", "BAPI_SALESORDER_CREATEFROMDAT2", "BAPI_SALESORDER_GETLIST",
             "BAPI_SALESORDER_GETSTATUS", "BAPI_SALESORDER_CHANGE", "BAPI_TRANSACTION_COMMIT", "BAPI_TRANSACTION_ROLLBACK",
             "BAPI_CUSTOMER_GETDETAIL2", "IDOCTYPE_READ_COMPLETE", "RFC_GET_FUNCTION_INTERFACE", "DDIF_FIELDINFO_GET", "RFC_READ_TABLE",
-            "BAPISDORDER_GETDETAILEDLIST");
+            "BAPISDORDER_GETDETAILEDLIST", "BAPI_SALESORDER_SIMULATE");
 
     /** BDCP2's fields and their lengths as RFC_READ_TABLE gives them. */
     static final Map<String, Integer> BDCP2 = new LinkedHashMap<>();
@@ -64,6 +64,10 @@ public final class FakeEcc {
                     new String[] {"T", "RETURN", "BAPIRET2", "X"}, new String[] {"T", "ORDER_ITEMS_IN", "BAPISDITM", "X"},
                     new String[] {"T", "ORDER_PARTNERS", "BAPIPARNR", ""}, new String[] {"T", "ORDER_SCHEDULES_IN", "BAPISCHDL", "X"},
                     new String[] {"T", "ORDER_CONDITIONS_IN", "BAPICOND", "X"}),
+            "BAPI_SALESORDER_SIMULATE", List.<String[]>of(new String[] {"I", "ORDER_HEADER_IN", "BAPISDHEAD", ""},
+                    new String[] {"E", "RETURN", "BAPIRETURN", ""}, new String[] {"T", "ORDER_ITEMS_IN", "BAPIITEMIN", ""},
+                    new String[] {"T", "ORDER_PARTNERS", "BAPIPARTNR", ""}, new String[] {"T", "ORDER_SCHEDULE_IN", "BAPISCHDL", "X"},
+                    new String[] {"T", "ORDER_ITEMS_OUT", "BAPIITEMEX", "X"}),
             "BAPI_SALESORDER_GETLIST", List.<String[]>of(new String[] {"I", "CUSTOMER_NUMBER", "BAPI1007-CUSTOMER", ""},
                     new String[] {"I", "SALES_ORGANIZATION", "VBAK-VKORG", ""}, new String[] {"I", "PURCHASE_ORDER_NUMBER", "VBKD-BSTKD", "X"},
                     new String[] {"E", "RETURN", "BAPIRETURN", ""}, new String[] {"T", "SALES_ORDERS", "BAPIORDERS", ""}),
@@ -512,6 +516,7 @@ public final class FakeEcc {
                 out.put("RETURN", Map.of());
             }
             case "BAPI_SALESORDER_CREATEFROMDAT2" -> create(p, luw, out);
+            case "BAPI_SALESORDER_SIMULATE" -> simulate(p, out);
             case "BAPI_SALESORDER_GETLIST" -> {
                 allow(function, p, "CUSTOMER_NUMBER", "SALES_ORGANIZATION", "PURCHASE_ORDER_NUMBER", "MATERIAL", "DOCUMENT_DATE");
                 String po = get(p, "PURCHASE_ORDER_NUMBER", "");
@@ -643,6 +648,38 @@ public final class FakeEcc {
             default -> throw new IllegalStateException("function module " + function + " is not in the repository");
         }
         return out;
+    }
+
+    /** Prices an order without saving it: one row per item, with SAP's net value (NET_VALUE1). */
+    private void simulate(Map<String, Object> p, Map<String, Object> out) {
+        allow("BAPI_SALESORDER_SIMULATE", p, "ORDER_HEADER_IN", "ORDER_PARTNERS", "ORDER_ITEMS_IN", "ORDER_SCHEDULE_IN");
+        Map<String, String> h = get(p, "ORDER_HEADER_IN", Map.of());
+        List<Map<String, String>> partners = get(p, "ORDER_PARTNERS", List.of());
+        List<Map<String, String>> items = get(p, "ORDER_ITEMS_IN", List.of());
+        String soldTo = partners.stream().filter(x -> "AG".equals(x.get("PARTN_ROLE"))).map(x -> x.get("PARTN_NUMB")).findFirst().orElse("");
+        List<Map<String, String>> rows = new ArrayList<>();
+        out.put("ORDER_ITEMS_OUT", rows);
+        if (!"1000".equals(h.get("SALES_ORG")) || !"10".equals(h.get("DISTR_CHAN")) || !"00".equals(h.get("DIVISION"))) {
+            out.put("RETURN", Map.of("TYPE", "E", "CODE", "V1312", "MESSAGE", "Sales area is not defined"));
+            return;
+        }
+        if (!customers.containsKey(soldTo)) {
+            out.put("RETURN", Map.of("TYPE", "E", "CODE", "V1390", "MESSAGE", "Sold-to party " + soldTo + " not maintained for sales area"));
+            return;
+        }
+        for (Map<String, String> it : items) {
+            BigDecimal price = PRICES.get(it.get("MATERIAL"));
+            if (price == null) {
+                out.put("RETURN", Map.of("TYPE", "E", "CODE", "V1392", "MESSAGE", "Material " + it.get("MATERIAL") + " does not exist"));
+                rows.clear();
+                return;
+            }
+            // REQ_QTY has three implied decimals: 2000 is two units.
+            BigDecimal qty = new BigDecimal(it.getOrDefault("REQ_QTY", "0")).movePointLeft(3);
+            rows.add(Map.of("ITM_NUMBER", it.get("ITM_NUMBER"), "MATERIAL", it.get("MATERIAL"),
+                    "NET_VALUE1", price.multiply(qty).setScale(2, java.math.RoundingMode.HALF_UP).toPlainString(), "CURRENCY", "EUR"));
+        }
+        out.put("RETURN", Map.of());
     }
 
     private void create(Map<String, Object> p, List<Runnable> luw, Map<String, Object> out) {

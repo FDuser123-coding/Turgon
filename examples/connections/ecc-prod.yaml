@@ -26,9 +26,12 @@ spec:
       destination: { ashost: ecc.acme.internal, sysnr: "00", client: "100", lang: EN }
     salesArea: { salesOrg: "1000", distributionChannel: "10", division: "00" }
     orderType: TA
-    # Lines that carry a price are sent with it as PR00, a manual condition
-    # SAP keeps; lines without one are priced by SAP.
-    priceCondition: PR00
+    # The dry run also prices the order with SAP's own conditions
+    # (BAPI_SALESORDER_SIMULATE), so a recipe's checkAmount can compare
+    # the deal's amount with SAP's net value. A source that sends its own
+    # prices would set priceCondition: PR00 instead (SAP then keeps them,
+    # and the simulation, which takes no manual conditions, cannot be used).
+    simulatePricing: true
     idoc:
       server: { gwhost: ecc.acme.internal, gwserv: sapgw00, progid: TURGON_IDOC, connectionCount: 2 }
       events:
