@@ -1,0 +1,39 @@
+# Odoo (19 and later) through its external JSON-2 API: POST
+# /json/2/<model>/<method>, an API key as a bearer token. Like rest and
+# sap-odata, the entities, events and operations come from each Connection
+# (pkg/connector/odoo).
+apiVersion: turgon.dev/v1alpha1
+kind: ConnectorManifest
+metadata:
+  name: odoo
+  version: 1.0.0
+spec:
+  system: "Odoo 19+, external JSON-2 API"
+  runtime: native
+  auth:
+    # An API key of a user with the rights the flows need (Preferences >
+    # Account Security). Keys expire; 90 days by default.
+    methods: [api-key]
+    secretRef: openbao://odoo/api-key
+  discovery:
+    - kind: fields-get
+  interfaces:
+    read:
+      - kind: json-2
+    write:
+      # Creates are dry-run with onchange, as the web client computes a
+      # form before saving: priced and totalled, not stored.
+      - kind: json-2
+        simulation: onchange
+    events:
+      # search_read on write_date, oldest first.
+      - kind: json-2-poll
+    prohibited:
+      - kind: direct-database
+        reason: "writing Odoo's PostgreSQL bypasses the ORM: constraints, computed fields, access rights and the chatter"
+      - kind: xml-rpc
+        reason: "deprecated since Odoo 19 and due to be removed; the connector uses JSON-2"
+  limits:
+    # Conservative defaults; Odoo.sh and Odoo Online throttle heavy API use.
+    maxConcurrentCalls: 4
+    requestsPerSecond: 5

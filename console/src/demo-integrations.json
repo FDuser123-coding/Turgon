@@ -129,6 +129,20 @@
       ]
     },
     {
+      "name": "odoo-erp",
+      "description": "Odoo 19 Sales, through the external JSON-2 API.",
+      "connector": "odoo",
+      "product": "Odoo 19+, external JSON-2 API",
+      "role": "target",
+      "events": [],
+      "operations": [
+        "create-sales-order"
+      ],
+      "flows": [
+        "shopify-store-orders-to-odoo"
+      ]
+    },
+    {
       "name": "powerbi-sales",
       "description": "The Power BI sales dataset: one row per order, for the sales report.",
       "connector": "powerbi-export",
@@ -281,6 +295,7 @@
         "shopify-store-orders-to-business-central",
         "shopify-store-orders-to-erp",
         "shopify-store-orders-to-netsuite",
+        "shopify-store-orders-to-odoo",
         "shopify-store-orders-to-s4"
       ]
     },
@@ -1228,6 +1243,71 @@
       ],
       "targets": [
         "netsuite-erp",
+        "shopify-store"
+      ],
+      "slo": "p95 10s"
+    },
+    {
+      "name": "shopify-store-orders-to-odoo",
+      "version": "1.0.0",
+      "description": "A Shopify order becomes an Odoo quotation, checked against Odoo's own pricing; its number is added to the Shopify order as a note.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "shopify-store",
+        "event": "Order.Created",
+        "delivery": "webhook"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "shopify-rest-order-to-order@1.1.0",
+          "from": "shopify-store.Order",
+          "to": "model.SalesOrder",
+          "fields": 7
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "probabilistic"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-odoo-order@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.SalesOrder",
+          "fields": 6
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "odoo-erp",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "onchange",
+          "compensation": "cancel-sales-order"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-shopify-note@1.1.0",
+          "from": "model.SalesOrder",
+          "to": "model.Order",
+          "fields": 2
+        },
+        {
+          "kind": "write",
+          "entity": "Order",
+          "system": "shopify-store",
+          "operation": "update-order",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "restore-order"
+        }
+      ],
+      "targets": [
+        "odoo-erp",
         "shopify-store"
       ],
       "slo": "p95 10s"

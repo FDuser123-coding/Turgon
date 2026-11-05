@@ -25,6 +25,8 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/connector/debezium"
+	"github.com/fduser123-coding/turgon/pkg/connector/odoo"
+	"github.com/fduser123-coding/turgon/pkg/connector/odoo/odootest"
 	"github.com/fduser123-coding/turgon/pkg/connector/postgres"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/bctest"
@@ -129,7 +131,7 @@ func newFixtureReg(t *testing.T, recipe string, extra connector.StaticSecrets, w
 		secrets[k] = v
 	}
 	registry := connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory, rest.Name: rest.Factory, sap.Name: sap.Factory,
-		debezium.Name: debezium.Factory}
+		debezium.Name: debezium.Factory, odoo.Name: odoo.Factory}
 	for name, f := range reg {
 		registry[name] = f
 	}
@@ -1045,6 +1047,86 @@ func TestShopifyRejectionDeletesTheBusinessCentralOrder(t *testing.T) {
 	}
 	if bc.Orders() != 0 {
 		t.Fatal("the Business Central order was not deleted after Shopify rejected the note")
+	}
+}
+
+// newOdooFixture runs the shopify-store-orders-to-odoo recipe against the
+// fake Shopify store and the fake Odoo database.
+func newOdooFixture(t *testing.T) (*fixture, *shoptest.Shop, *odootest.Odoo) {
+	t.Helper()
+	shop := shoptest.New("shpat_test")
+	t.Cleanup(shop.Close)
+	od := odootest.New("odoo-key")
+	t.Cleanup(od.Close)
+	f := newFixtureFor(t, "shopify-store-orders-to-odoo", connector.StaticSecrets{
+		"openbao://shopify-store/token": "shpat_test",
+		"openbao://odoo-erp/api-key":    "odoo-key",
+	}, func(cfg string) string {
+		cfg = strings.ReplaceAll(cfg, "https://turgon-demo.myshopify.com/admin/api/"+shoptest.Version, shop.URL())
+		return strings.ReplaceAll(cfg, "https://acme.odoo.com", od.URL())
+	})
+	if err := f.store.PutXref(context.Background(), "Customer", "shopify-store", "ada@example.com", "7"); err != nil {
+		t.Fatal(err)
+	}
+	return f, shop, od
+}
+
+// A shop order becomes an Odoo quotation at the shop's prices, and its
+// number goes on the Shopify order. Odoo's dry run agrees with the shop's
+// total, so the write waits only as a high-risk one.
+func TestShopifyOrderBecomesOdooQuotation(t *testing.T) {
+	f, shop, od := newOdooFixture(t)
+	id := shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-11-05T09:30:00-04:00",
+		"subtotal_price": "420.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-1", "quantity": 2, "price": "210.00"}},
+	})
+	_, err, pending := f.run(f.dispatch()[0], approve("04-write"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || !strings.Contains(string(pending[0].Preview), `"amount_untaxed":420`) || pending[0].Request.RequireApproval {
+		t.Fatalf("pending = %+v", pending)
+	}
+	o := od.OrderByRef(fmt.Sprintf("SHOPIFY-%d", id))
+	if o == nil || o["amount_untaxed"] != 420.0 || o["partner_id"] != 7.0 || o["origin"] != fmt.Sprintf("Shopify SHOPIFY-%d", id) {
+		t.Fatalf("Odoo quotation = %v", o)
+	}
+	if got := shop.Order(id)["note"]; got != "ERP order "+o["name"].(string) {
+		t.Fatalf("Shopify note = %v", got)
+	}
+}
+
+// A line the shop sold without a price is priced by Odoo's list in the dry
+// run; the totals differ, so a person is asked, with both amounts.
+func TestOdooPricingDifferentFromTheShopAsksAPerson(t *testing.T) {
+	f, shop, _ := newOdooFixture(t)
+	shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-11-05T09:30:00-04:00",
+		"subtotal_price": "200.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-2", "quantity": 1}},
+	})
+	_, err, pending := f.run(f.dispatch()[0], approve("04-write"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "the target's dry run shows 235.00 at record.amount_untaxed, the source 200.00"
+	if len(pending) != 1 || !slices.Contains(pending[0].Reasons, want) || !pending[0].Request.RequireApproval {
+		t.Fatalf("pending = %+v", pending)
+	}
+}
+
+func TestShopifyRejectionCancelsTheOdooQuotation(t *testing.T) {
+	f, shop, od := newOdooFixture(t)
+	id := shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-11-05T09:30:00-04:00",
+		"subtotal_price": "100.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-1", "quantity": 1, "price": "100.00"}},
+	})
+	shop.FailUpdates = true
+	_, err, _ := f.run(f.dispatch()[0], approve("04-write"))
+	if errType(err) != ErrTypeInvalid {
+		t.Fatalf("err = %v (%s)", err, errType(err))
+	}
+	if o := od.OrderByRef(fmt.Sprintf("SHOPIFY-%d", id)); o == nil || o["state"] != "cancel" {
+		t.Fatalf("the Odoo quotation was not cancelled after Shopify rejected the note: %v", o)
 	}
 }
 
