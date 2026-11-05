@@ -1,0 +1,51 @@
+# The ERP on Odoo (19+), through the external JSON-2 API with an API key of
+# an integration user (Sales / User: All Documents). Quotations are created
+# with their lines in one create; the idempotency key goes into
+# client_order_ref (the Customer Reference), and a retried create finds the
+# quotation by it. A create is dry-run with onchange, so Odoo prices it
+# (pricelists, lines without a price) and the preview shows its untaxed
+# total. A saga's undo cancels the quotation, which stays visible as
+# cancelled. Changed orders are polled on write_date.
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata:
+  name: odoo-erp
+  description: "Odoo 19 Sales, through the external JSON-2 API."
+spec:
+  connector: odoo@^1
+  secretRef: openbao://odoo-erp/api-key
+  entities: [SalesOrder, Customer]
+  limits: { maxConcurrentCalls: 2, requestsPerSecond: 5 }
+  events:
+    - { name: SalesOrder.Changed, entity: SalesOrder, interface: json-2-poll }
+  operations:
+    - { name: create-sales-order, entity: SalesOrder, direction: write, interface: json-2, risk: high, compensation: cancel-sales-order }
+    - { name: cancel-sales-order, entity: SalesOrder, direction: write, interface: json-2, risk: high }
+    - { name: get-customer, entity: Customer, direction: read, interface: json-2, risk: read }
+  config:
+    baseURL: https://acme.odoo.com
+    events:
+      SalesOrder.Changed:
+        model: sale.order
+        fields: [name, client_order_ref, partner_id, amount_untaxed, state]
+    operations:
+      create-sales-order:
+        action: create
+        model: sale.order
+        fields: { partner_id: customerId, date_order: orderDate, origin: origin }
+        reference: client_order_ref
+        lines:
+          field: order_line
+          from: odooLines
+          # A line without a price is priced by Odoo's pricelist.
+          fields: { product_id: product, product_uom_qty: quantity, price_unit: price }
+          preview: [price_subtotal]
+        preview: [amount_untaxed, amount_total]
+      cancel-sales-order:
+        action: cancel
+        model: sale.order
+        method: action_cancel
+      get-customer:
+        action: get
+        model: res.partner
+        fields: { name: name, email: email, ref: customerNumber, active: active }

@@ -1,0 +1,22 @@
+# A sales order in Odoo's shape. Products are referenced by ID; this
+# database's IDs for the shop's SKUs are kept here (per deployment). The
+# customer is the master record's ID, the Odoo partner's.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: sales-order-to-odoo-order
+  version: 1.0.0
+spec:
+  from: model.SalesOrder
+  to: model.SalesOrder
+  fields:
+    - { target: customerId, expression: "customerId",               origin: human, confidence: 1.0 }
+    - { target: orderDate,  expression: "orderDate",                origin: human, confidence: 1.0 }
+    - { target: origin,     expression: "'Shopify ' & externalId",  origin: human, confidence: 0.95 }
+    - target: odooLines
+      # A line's price is the shop's; without one Odoo's pricelist prices it.
+      expression: "lines.{ 'product': $lookup({ 'M-1': 11, 'M-2': 12 }, material), 'quantity': quantity, 'price': price }[]"
+      origin: human
+      confidence: 0.95
+    - { target: netValue,   expression: "netValue",                 origin: human, confidence: 1.0 }
+    - { target: shopifyId,  expression: "shopifyId",                origin: human, confidence: 1.0 }

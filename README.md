@@ -555,6 +555,61 @@ Measured against a Temporal 1.28 dev server and the fakes:
   with `If-Match: *`. The retry lookup is tested against the fake (a second create returns the
   first order, with one POST); it was not provoked live.
 
+### Odoo: quotations through the JSON-2 API
+
+The `odoo` connector (`examples/connectors/odoo.yaml`) reaches Odoo 19 and later only through its
+external JSON-2 API (`POST /json/2/<model>/<method>`, the method's arguments by name). It
+authenticates with an API key as a bearer token, and sends `X-Odoo-Database` when the
+connection names a database. Writes go through Odoo's ORM, so its constraints, computed fields,
+access rights and chatter apply. The manifest prohibits Odoo's database and the deprecated
+XML-RPC. As with `rest` and `sap-odata`, each Connection (`examples/connections/odoo-erp.yaml`)
+declares what it uses:
+
+- **Creating quotations:** one `create` with the order and its lines as one2many commands
+  (`[0, 0, {...}]`).
+  - **Field types:** values are converted by the types `fields_get` declares, so a mapping may
+    hand over IDs and amounts as strings.
+  - **Prices:** a line without a price is priced by Odoo's pricelist.
+  - **Retries:** the idempotency key goes into `client_order_ref` (the Customer Reference), and
+    a retried create finds the quotation by it instead of making a second.
+- **Dry run:** `onchange`, as Odoo's web client computes a form before saving. Odoo prices the
+  lines and totals the quotation, and stores nothing. The preview has `amount_untaxed` and each
+  line's `price_subtotal`, so `checkAmount: { preview: record.amount_untaxed }` compares Odoo's
+  pricing with the source's. `shopify-store-orders-to-odoo` does this.
+- **Result:** the quotation's ID and number (`S00042`), which goes into the Shopify note.
+- **Undo:** `action_cancel`, so the quotation stays visible as cancelled, or `unlink`. Either is
+  confirmed by reading the quotation back.
+- **Events:** changed records are read with `search_read` on `write_date`. Odoo stamps it to the
+  second, so a poll never ends inside a second.
+- **Reads:** `get-customer` reads a partner. A many2one field reads as its ID.
+- **Check** signs in (`res.users/context_get`), reads every model's fields with `fields_get`,
+  and counts its records, so a misspelled field, a missing app or a user without rights fails
+  before the first order.
+- **Discovery** reads `fields_get` for every model the connection uses. Its users are the
+  operations and events, and a create's lines count as whole records. A field a module or
+  Studio makes required is then reported as breaking the create.
+
+Without a database, run the test fake:
+
+```sh
+go build -o bin/fakeodoo ./internal/tools/fakeodoo     # http://127.0.0.1:9850, API key odoo-demo
+sed -i 's|https://acme.odoo.com|http://127.0.0.1:9850|' my-catalog/connections/odoo-erp.yaml
+export TURGON_SECRET_ODOO_ERP_API_KEY=odoo-demo
+bin/turgon xref set --entity Customer --system shopify-store --source ada@example.com --master 7
+```
+
+Measured against a Temporal 1.28 dev server, `fakeshop` and `fakeodoo`:
+- **The order:** a 420.00 Shopify order was priced by Odoo's dry run at 420 (`amount_untaxed`),
+  so it waited only as a high-risk write. Once approved, it became quotation S07040, and the
+  Shopify order's note was set to `ERP order S07040`.
+- **The undo:** when Shopify then refused a note (it required `tags`), the saga cancelled the next
+  quotation, S07041, which reads back as `cancel`.
+- **Drift:** after `require sale.order note` on the fake, the next `turgon discover` reported
+  `BREAKING became-required sale.order.note; used by operation create-sales-order (writes)`.
+
+The JSON-2 calls follow Odoo 19's documentation and are tested against the fake, not yet against
+a real database. `onchange` is the method the web client uses, called with the order's values.
+
 ### SAP S/4HANA: sales orders through SAP's released APIs
 
 The `sap-odata` connector reaches SAP S/4HANA (Cloud, and on-premise 1909 or later) only through
@@ -2196,6 +2251,7 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 | `pkg/appliance`, `deploy/appliance` | §11 | The single-host appliance: `turgon appliance`, systemd units, the offline bundle's installer |
 | `pkg/connector` | §7.1 | Runtime connector interfaces, registry, secret resolution; `postgres/` is the native Postgres connector (outbox and change capture events, rollback dry-runs, idempotent writes); `salesforce/` reads by SOQL and the Bulk API 2.0, and subscribes over the Pub/Sub API (`pubsub/`: the gRPC wire protocol); `debezium/` consumes Debezium change events from Kafka |
 | `pkg/secrets` | §9 | Secret references resolved from OpenBao or HashiCorp Vault (KV v2), signing in with Kubernetes service accounts, AppRoles or tokens; or from AWS Secrets Manager, Azure Key Vault and Google Secret Manager with the platform's workload identity |
+| `pkg/connector/odoo` | §7.1 | Odoo 19+ through the JSON-2 API: creates with one2many lines, found again by a reference field on retry, dry-run with `onchange`, cancelled or unlinked as a saga's undo; `search_read` polling on `write_date`; values converted by `fields_get` types; check and discovery from `fields_get`; `odootest/` fakes the API |
 | `pkg/connector/rest` | §7.1 | Generic HTTP JSON API connector configured per connection: cursor-polled list or search events (ascending, or newest-first paged back to the cursor), also received as signed webhooks (Stripe, Shopify, generic HMAC), reads, templated JSON or form-encoded writes, captured updates with preview, confirmation and restore; bearer, API-key header, basic and OAuth 2.0 client-credentials auth; `shoptest/`, `stripetest/` and `hubspottest/` fake the Shopify Admin, Stripe and HubSpot CRM APIs |
 | `pkg/connector/remote`, `proto/` | §7.1 | The connector protocol (gRPC) and its Go client: connectors running in a sidecar, configured per endpoint with resolved secrets, reconfigured after a sidecar restart |
 | `connectors/` | §7.1 | Camel/Java connectors: `sdk` (the protocol's server, Camel routes per operation), `sap-ecc` (BAPIs over RFC through SAP JCo), `sap-ecc-fake` (an in-memory ECC), `powerbi-export` (Power BI push datasets as an Entra service principal), `powerbi-fake` (a fake Entra and Power BI), `shopify` (the GraphQL Admin API), `shopify-fake` (a fake store), `stripe` (invoices and paid-invoice events), `stripe-fake` (a fake account) |
@@ -2280,4 +2336,5 @@ IDocs as SAP pushes them and polls change pointers through `RFC_READ_TABLE`. Pow
 dataset API, not yet against a real tenant; it creates push datasets and missing tables, and with
 `updateTables` sets an existing table's columns, without knowing what Power BI does to the rows already there. Shopify is tested against a fake GraphQL Admin API, not yet against a real store, and its
 webhooks only with deliveries signed in the tests. The `stripe` connector is tested against a
-fake Stripe, not yet against a real account; its webhooks likewise.
+fake Stripe, not yet against a real account; its webhooks likewise. The `odoo` connector is tested
+against a fake JSON-2 API, not yet against a real Odoo database.

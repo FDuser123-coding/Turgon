@@ -35,6 +35,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/connector/debezium"
+	"github.com/fduser123-coding/turgon/pkg/connector/odoo"
 	"github.com/fduser123-coding/turgon/pkg/connector/postgres"
 	"github.com/fduser123-coding/turgon/pkg/connector/remote"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest"
@@ -136,7 +137,7 @@ var sidecars = remote.NewPool()
 // sap-ecc=unix:///var/run/turgon/connectors/sap-ecc.sock).
 func connectorRegistry() (connector.Registry, error) {
 	reg := connector.Registry{postgres.Name: postgres.Factory, salesforce.Name: salesforce.Factory, rest.Name: rest.Factory, sap.Name: sap.Factory,
-		debezium.Name: debezium.Factory}
+		debezium.Name: debezium.Factory, odoo.Name: odoo.Factory}
 	addrs, err := remote.ParseAddresses(os.Getenv("TURGON_CONNECTORS"), os.Getenv("TURGON_CONNECTOR_TOKEN"))
 	if err != nil {
 		return nil, fmt.Errorf("TURGON_CONNECTORS: %w", err)
