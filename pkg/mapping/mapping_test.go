@@ -3,6 +3,7 @@ package mapping
 import (
 	"encoding/json"
 	"reflect"
+	"sync"
 	"testing"
 )
 
@@ -43,4 +44,26 @@ func TestCompileReportsBadExpressions(t *testing.T) {
 	if Check("Id & '-x'") != nil {
 		t.Fatal("valid expression rejected")
 	}
+}
+
+// jsonata-go rewrites a compiled ~> application in place, so a mapping
+// that pipes into a function failed from its second document on; it is
+// compiled again for each, so every document maps alike, also concurrently.
+func TestFunctionApplicationMapsEveryDocument(t *testing.T) {
+	m, err := Compile(map[string]string{"doc": "'SHOP' & $string(id) ~> $substring(0, 6)"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			out, err := m.Apply(map[string]any{"id": 1000 + i})
+			if err != nil || out["doc"] != "SHOP10" {
+				t.Errorf("document %d: %v, %v", i, out, err)
+			}
+		}(i)
+	}
+	wg.Wait()
 }
