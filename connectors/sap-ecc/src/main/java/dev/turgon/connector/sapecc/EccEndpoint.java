@@ -98,6 +98,13 @@ final class EccEndpoint extends CamelEndpoint {
             "BAPISDH1X", Map.of("operation cancel-sales-order", List.of("UPDATEFLAG")),
             "BAPICUSTOMER_04", Map.of("operation get-customer", List.of("NAME", "STREET", "POSTL_COD1", "CITY", "COUNTRY")));
 
+    /** With simulatePricing: what the pricing simulation fills, and the item values it reads back. */
+    static final Map<String, List<String>> PRICING_FILLS = Map.of(
+            "BAPISDHEAD", List.of("DOC_TYPE", "SALES_ORG", "DISTR_CHAN", "DIVISION", "REQ_DATE_H"),
+            "BAPIITEMIN", List.of("ITM_NUMBER", "MATERIAL", "REQ_QTY"),
+            "BAPIPARTNR", List.of("PARTN_ROLE", "PARTN_NUMB"));
+    static final Map<String, List<String>> PRICING_READS = Map.of("BAPIITEMEX", List.of("NET_VALUE1", "CURRENCY"));
+
     /**
      * What the system holds: the interfaces of the BAPIs the connector
      * calls (RFC_GET_FUNCTION_INTERFACE), the fields of the structures it
@@ -112,6 +119,10 @@ final class EccEndpoint extends CamelEndpoint {
         java.util.Set<String> functions = new java.util.TreeSet<>(functions()), structures = new java.util.TreeSet<>(USED.keySet()),
                 idocTypes = new java.util.TreeSet<>();
         cfg.idocEvents().values().forEach(e -> idocTypes.addAll(e.idocTypes()));
+        if (cfg.simulatePricing()) {
+            structures.addAll(PRICING_FILLS.keySet());
+            structures.addAll(PRICING_READS.keySet());
+        }
         for (String o : objects) {
             if (o.startsWith("FUNCTION:")) {
                 functions.add(o.substring(9));
@@ -160,6 +171,14 @@ final class EccEndpoint extends CamelEndpoint {
                             .put("creates", by.getKey().equals("operation create-sales-order"));
                 }
             }
+        }
+        if (cfg.simulatePricing()) {
+            // The create's dry run prices the order: a field SAP makes required
+            // breaks it, and checkAmount reads the net value back.
+            PRICING_FILLS.forEach((st, fs) -> fs.forEach(f -> uses.addObject().put("object", st).put("field", f)
+                    .put("by", "operation create-sales-order").put("creates", true)));
+            PRICING_READS.forEach((st, fs) -> fs.forEach(f -> uses.addObject().put("object", st).put("field", f)
+                    .put("by", "operation create-sales-order").put("creates", false)));
         }
         for (String type : idocTypes) {
             Map<String, Object> r = rfc.call("IDOCTYPE_READ_COMPLETE", Map.of("PI_IDOCTYP", type, "PI_CIMTYP", ""));

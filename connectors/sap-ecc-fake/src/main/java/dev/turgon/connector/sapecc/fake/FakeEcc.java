@@ -261,6 +261,14 @@ public final class FakeEcc {
         structures.put("BAPISCHDL", structure("ITM_NUMBER", "NUMC", 6, "Item number", "REQ_QTY", "QUAN", 13, "Order quantity"));
         structures.put("BAPICOND", structure("ITM_NUMBER", "NUMC", 6, "Item number", "COND_TYPE", "CHAR", 4, "Condition type",
                 "COND_VALUE", "DEC", 28, "Condition rate", "CURRENCY", "CUKY", 5, "Currency"));
+        structures.put("BAPISDHEAD", structure("DOC_TYPE", "CHAR", 4, "Sales Document Type", "SALES_ORG", "CHAR", 4, "Sales Organization",
+                "DISTR_CHAN", "CHAR", 2, "Distribution Channel", "DIVISION", "CHAR", 2, "Division",
+                "REQ_DATE_H", "DATS", 8, "Requested delivery date"));
+        structures.put("BAPIITEMIN", structure("ITM_NUMBER", "NUMC", 6, "Item number", "MATERIAL", "CHAR", 18, "Material",
+                "REQ_QTY", "NUMC", 15, "Order quantity (three implied decimals)"));
+        structures.put("BAPIPARTNR", structure("PARTN_ROLE", "CHAR", 2, "Partner function", "PARTN_NUMB", "CHAR", 10, "Customer number"));
+        structures.put("BAPIITEMEX", structure("ITM_NUMBER", "NUMC", 6, "Item number", "NET_VALUE1", "CURR", 23, "Net value",
+                "CURRENCY", "CUKY", 5, "Currency"));
         structures.put("BAPISDH1X", structure("UPDATEFLAG", "CHAR", 1, "Update indicator"));
         structures.put("BAPICUSTOMER_04", structure("NAME", "CHAR", 35, "Name", "STREET", "CHAR", 35, "Street",
                 "POSTL_COD1", "CHAR", 10, "Postal code", "CITY", "CHAR", 35, "City", "COUNTRY", "CHAR", 3, "Country"));

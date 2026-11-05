@@ -671,7 +671,9 @@ Errors are status codes:
     with `priceCondition`, and the connection is refused if both are set. `ORDER_ITEMS_IN`'s
     `REQ_QTY` is sent with its three implied decimals (`2000` for two units). The field names
     follow SAP's interface documentation; they are tested against the fake ECC, not yet a real
-    system.
+    system. Discovery then also reads the simulation's interface and structures
+    (`BAPISDHEAD`, `BAPIITEMIN`, `BAPIPARTNR`, `BAPIITEMEX`) and records the fields
+    create-sales-order fills and reads back, so drift in them is reported with that user.
   - **Measured live:** against a Temporal 1.28 dev server, the fake Salesforce and the demo
     sidecar. A 100.00 deal for one M-1 (100.00 in SAP) waited only as a high-risk write, and once
     approved became order 0000012000. A 7800.00 deal for the same line also gave the reason
