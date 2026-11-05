@@ -164,23 +164,47 @@ func TestOdooPollReadCheckAndDiscover(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// A full page ending inside a second reads on, so the second is never
-	// split across polls: the strict cursor would skip its other records.
-	c.PageSize = 2
+	// The cursor is (write_date, id): a poll may end inside a second, and
+	// the next one reads the rest of it.
 	evs, err := c.Poll(ctx, "SalesOrder.Changed", 0, 2)
-	if err != nil || len(evs) != 3 {
+	if err != nil || len(evs) != 2 {
 		t.Fatalf("first poll = %d events, %v", len(evs), err)
 	}
 	var first map[string]any
 	_ = json.Unmarshal(evs[0].Payload, &first)
-	if first["client_order_ref"] != "SHOPIFY-1" || evs[0].Position != evs[1].Position || evs[2].Position <= evs[1].Position {
-		t.Fatalf("oldest first: %s, %d %d %d", evs[0].Payload, evs[0].Position, evs[1].Position, evs[2].Position)
+	if first["client_order_ref"] != "SHOPIFY-1" || evs[1].Position <= evs[0].Position {
+		t.Fatalf("oldest first: %s, %d %d", evs[0].Payload, evs[0].Position, evs[1].Position)
 	}
-	if later, err := c.Poll(ctx, "SalesOrder.Changed", evs[1].Position, 2); err != nil || len(later) != 1 || !strings.Contains(string(later[0].Payload), "SHOPIFY-3") {
-		t.Fatalf("after the first second: %+v, %v", later, err)
+	// An order written in the second the cursor stopped in, after the poll,
+	// is not skipped.
+	mu.Lock()
+	clock = clock.Add(-time.Minute)
+	mu.Unlock()
+	if _, err := c.Commit(ctx, "create-sales-order", "SHOPIFY-4", json.RawMessage(order)); err != nil {
+		t.Fatal(err)
 	}
-	if none, err := c.Poll(ctx, "SalesOrder.Changed", evs[2].Position, 2); err != nil || len(none) != 0 {
+	later, err := c.Poll(ctx, "SalesOrder.Changed", evs[1].Position, 10)
+	if err != nil || len(later) != 2 || !strings.Contains(string(later[0].Payload), "SHOPIFY-4") || !strings.Contains(string(later[1].Payload), "SHOPIFY-3") {
+		t.Fatalf("after the first two: %d events, %v", len(later), err)
+	}
+	if none, err := c.Poll(ctx, "SalesOrder.Changed", later[1].Position, 10); err != nil || len(none) != 0 {
 		t.Fatalf("after the last: %+v, %v", none, err)
+	}
+	// A record younger than the settle time (60 s) waits: Odoo stamps
+	// write_date when its transaction starts, not when it commits.
+	c.SetClock(func() time.Time { mu.Lock(); defer mu.Unlock(); return clock.Add(30 * time.Second) })
+	mu.Lock()
+	clock = clock.Add(2 * time.Minute)
+	mu.Unlock()
+	if _, err := c.Commit(ctx, "create-sales-order", "SHOPIFY-5", json.RawMessage(order)); err != nil {
+		t.Fatal(err)
+	}
+	if fresh, err := c.Poll(ctx, "SalesOrder.Changed", later[1].Position, 10); err != nil || len(fresh) != 0 {
+		t.Fatalf("an unsettled record: %d events, %v", len(fresh), err)
+	}
+	c.SetClock(func() time.Time { mu.Lock(); defer mu.Unlock(); return clock.Add(61 * time.Second) })
+	if settled, err := c.Poll(ctx, "SalesOrder.Changed", later[1].Position, 10); err != nil || len(settled) != 1 {
+		t.Fatalf("a settled record: %d events, %v", len(settled), err)
 	}
 	got, err := c.Read(ctx, "get-customer", "8")
 	if err != nil || !strings.Contains(string(got), `"name":"Hopper Industries"`) || !strings.Contains(string(got), `"customerNumber":"C-200"`) {
@@ -269,6 +293,68 @@ func TestOdooRefusesBadKeysAndConfig(t *testing.T) {
 		bad(&cfg)
 		if _, err := odoo.New(cfg, "k", http.DefaultClient); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+// A quotation confirmed in the meantime is cancelled too: Odoo 16+ would
+// answer action_cancel with its wizard, unless the warning is disabled.
+func TestOdooCancelsAConfirmedOrderAndKeepsDefaults(t *testing.T) {
+	fake, c := newOdoo(t)
+	ctx := context.Background()
+	// No orderDate in the payload: Odoo's default applies, rather than false.
+	noDate := strings.ReplaceAll(order, `"orderDate": "2026-11-05", `, "")
+	res, err := c.Commit(ctx, "create-sales-order", "SHOPIFY-1", json.RawMessage(noDate))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created odoo.CreateResult
+	_ = json.Unmarshal(res, &created)
+	if d, _ := fake.Order(created.ID)["date_order"].(string); d == "" {
+		t.Fatalf("date_order = %v", fake.Order(created.ID)["date_order"])
+	}
+	fake.SetState(created.ID, "sale")
+	if _, err := c.Commit(ctx, "cancel-sales-order", "k", res); err != nil {
+		t.Fatal(err)
+	}
+	if got := fake.Order(created.ID)["state"]; got != "cancel" {
+		t.Fatalf("state = %v", got)
+	}
+}
+
+func TestOdooReferenceMustHoldTheKey(t *testing.T) {
+	fake := odootest.New("key-123")
+	t.Cleanup(fake.Close)
+	cfg := exampleConfig(t, fake.URL())
+	op := cfg.Operations["create-sales-order"]
+	op.Reference = "partner_id"
+	cfg.Operations["create-sales-order"] = op
+	c, err := odoo.New(cfg, "key-123", http.DefaultClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.Commit(context.Background(), "create-sales-order", "SHOPIFY-1", json.RawMessage(order)); !errors.Is(err, writeguard.ErrInvalid) ||
+		!strings.Contains(err.Error(), "must be a char field") {
+		t.Fatalf("a many2one reference: %v", err)
+	}
+}
+
+func TestOdooDomainArity(t *testing.T) {
+	fake := odootest.New("key-123")
+	t.Cleanup(fake.Close)
+	for domain, ok := range map[string]bool{
+		`[["state", "=", "sale"], ["amount_total", ">", 0]]`:    true,
+		`["|", ["state", "=", "sale"], ["state", "=", "done"]]`: true,
+		`["!", ["state", "=", "cancel"]]`:                       true,
+		`["|", ["state", "=", "sale"]]`:                         false,
+		`["&"]`:                                                 false,
+	} {
+		cfg := exampleConfig(t, fake.URL())
+		e := cfg.Events["SalesOrder.Changed"]
+		_ = json.Unmarshal([]byte(domain), &e.Domain)
+		cfg.Events["SalesOrder.Changed"] = e
+		if _, err := odoo.New(cfg, "k", http.DefaultClient); (err == nil) != ok {
+			t.Errorf("%s: accepted %v", domain, err == nil)
 		}
 	}
 }

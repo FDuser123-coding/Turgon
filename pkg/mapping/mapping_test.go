@@ -2,7 +2,9 @@ package mapping
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -46,9 +48,10 @@ func TestCompileReportsBadExpressions(t *testing.T) {
 	}
 }
 
-// jsonata-go rewrites a compiled ~> application in place, so a mapping
-// that pipes into a function failed from its second document on; it is
-// compiled again for each, so every document maps alike, also concurrently.
+// Upstream jsonata-go rewrote a compiled ~> application in place, so a
+// mapping that pipes into a function failed from its second document on.
+// The patched copy (third_party/jsonata-go) maps every document alike,
+// also concurrently.
 func TestFunctionApplicationMapsEveryDocument(t *testing.T) {
 	m, err := Compile(map[string]string{"doc": "'SHOP' & $string(id) ~> $substring(0, 6)"})
 	if err != nil {
@@ -61,6 +64,39 @@ func TestFunctionApplicationMapsEveryDocument(t *testing.T) {
 			defer wg.Done()
 			out, err := m.Apply(map[string]any{"id": 1000 + i})
 			if err != nil || out["doc"] != "SHOP10" {
+				t.Errorf("document %d: %v, %v", i, out, err)
+			}
+		}(i)
+	}
+	wg.Wait()
+}
+
+// ~> inside a path or $map runs once per element: with upstream jsonata-go
+// the second element already got an argument too many. Built-in functions
+// that take their context (here $string() on each line's sku) give every
+// concurrent evaluation its own.
+func TestFunctionApplicationPerElementAndConcurrently(t *testing.T) {
+	m, err := Compile(map[string]string{
+		"skus":  "lines.(sku ~> $uppercase())",
+		"short": "$map(lines, function($l) { $l.sku ~> $substring(0, 3) })",
+		"ctx":   "lines.sku.$string()",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 50; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			a, b := fmt.Sprintf("abc-%d", i), fmt.Sprintf("xyz-%d", i)
+			out, err := m.Apply(map[string]any{"lines": []any{map[string]any{"sku": a}, map[string]any{"sku": b}, map[string]any{"sku": "def"}}})
+			want := map[string]any{
+				"skus":  []any{strings.ToUpper(a), strings.ToUpper(b), "DEF"},
+				"short": []any{"abc", "xyz", "def"},
+				"ctx":   []any{a, b, "def"},
+			}
+			if err != nil || !reflect.DeepEqual(out, want) {
 				t.Errorf("document %d: %v, %v", i, out, err)
 			}
 		}(i)

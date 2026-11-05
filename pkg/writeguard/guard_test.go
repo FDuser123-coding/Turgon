@@ -24,6 +24,7 @@ type fakeSAP struct {
 	commits   int
 	failOps   map[string]error
 	simulated int
+	keys      []string // the idempotency keys commits carried
 }
 
 func newFakeSAP() *fakeSAP {
@@ -47,6 +48,7 @@ func (s *fakeSAP) Commit(_ context.Context, op, key string, payload json.RawMess
 		return nil, err
 	}
 	s.commits++
+	s.keys = append(s.keys, key)
 	switch op {
 	case "create-sales-order", "create-delivery":
 		doc := fmt.Sprint(s.next)
@@ -243,6 +245,56 @@ func TestSagaCompensatesOnFailure(t *testing.T) {
 	acts := strings.Join(h.actions(t), ",")
 	if !strings.Contains(acts, "writeback.failed") || !strings.HasSuffix(acts, "writeback.committed,saga.compensated") {
 		t.Fatalf("audit trail = %s", acts)
+	}
+}
+
+// A run whose saga undid its write and that is retried writes again, as a
+// new generation of the key, instead of being answered with the undone
+// document as a duplicate; the target sees the new key, so its own
+// idempotency does not find the undone one either.
+func TestRetryAfterCompensationWritesANewGeneration(t *testing.T) {
+	h := newHarness(t)
+	h.sap.failOps["create-delivery"] = errors.New("BAPI returned E: plant blocked")
+	ctx := context.Background()
+	delivery := agentOrder("opp-9")
+	delivery.Operation, delivery.Compensation, delivery.Risk = "create-delivery", "cancel-delivery", v1alpha1.RiskLow
+	var docs []string
+	for attempt := 1; attempt <= 3; attempt++ {
+		saga := h.guard.NewSaga("opp-9")
+		order, err := saga.Write(ctx, agentOrder("opp-9"))
+		if err != nil {
+			t.Fatalf("attempt %d: %v", attempt, err)
+		}
+		if order.Status != StatusCommitted {
+			t.Fatalf("attempt %d answered %s, not a new write", attempt, order.Status)
+		}
+		var r struct{ Document string }
+		_ = json.Unmarshal(order.Result, &r)
+		docs = append(docs, r.Document)
+		if _, err := saga.Write(ctx, delivery); err == nil {
+			t.Fatal("expected the delivery step to fail")
+		}
+		if h.sap.docs[r.Document] != "cancelled" {
+			t.Fatalf("attempt %d: order %s not compensated", attempt, r.Document)
+		}
+	}
+	if docs[0] == docs[1] || docs[1] == docs[2] {
+		t.Fatalf("documents %v: a retry reused an undone one", docs)
+	}
+	got := strings.Join(h.sap.keys, ",")
+	for _, want := range []string{"opp-9,", "opp-9#compensate", "opp-9~2,", "opp-9~2#compensate", "opp-9~3,", "opp-9~3#compensate"} {
+		if !strings.Contains(got+",", want) {
+			t.Fatalf("keys %s lack %s", got, want)
+		}
+	}
+	// Without a compensation, a committed write is still a duplicate.
+	again, err := h.guard.Execute(ctx, agentOrder("opp-9"))
+	if err != nil || again.Status != StatusCommitted {
+		t.Fatalf("a fourth attempt after three undos: %s, %v", again.Status, err)
+	}
+	dup, err := h.guard.Execute(ctx, agentOrder("opp-9"))
+	if err != nil || dup.Status != StatusDuplicate {
+		t.Fatalf("a repeat of a write that stands: %s, %v", dup.Status, err)
 	}
 }
 

@@ -91,6 +91,23 @@ func (a Auth) validate() error {
 	return nil
 }
 
+// SameOrigin checks that a session's cookies go only where they were set:
+// the API at base must have the login URL's scheme and host (and port).
+func (a Auth) SameOrigin(base *url.URL) error {
+	if a.Type != "session" {
+		return nil
+	}
+	login, err := url.Parse(a.LoginURL)
+	if err != nil {
+		return fmt.Errorf("auth: session needs an http(s) loginURL")
+	}
+	if !strings.EqualFold(login.Scheme, base.Scheme) || !strings.EqualFold(login.Host, base.Host) {
+		return fmt.Errorf("auth: the session's loginURL (%s://%s) and the API (%s://%s) must share scheme and host: the login's cookies are sent to the API",
+			login.Scheme, login.Host, base.Scheme, base.Host)
+	}
+	return nil
+}
+
 type authenticator struct {
 	cfg    Auth
 	secret string
@@ -109,11 +126,26 @@ type authenticator struct {
 	refreshToken string
 	tokens       connector.TokenStore
 	tokenKey     string
-	rejected     string // an access token the API refused, not to be reused
+	legacyKey    string    // where releases before the seed was in the key kept it
+	rejected     string    // an access token the API refused, not to be reused
+	pending      *rotation // a rotation the store has not taken yet
 }
 
+// rotation is a refresh whose new tokens could not be stored: the server
+// has spent the old refresh token, so the new one is kept in memory and
+// stored on the next call.
+type rotation struct {
+	spent string
+	state tokenState
+}
+
+// grantTimeout bounds a token request and the storing of what it returns.
+// They run apart from the caller's context: a refresh token the server has
+// rotated is lost unless its successor is stored, whatever the caller does.
+const grantTimeout = 30 * time.Second
+
 func newAuthenticator(cfg Auth, secret string, client *http.Client) (*authenticator, error) {
-	a := &authenticator{cfg: cfg, secret: strings.TrimSpace(secret), http: client}
+	a := &authenticator{cfg: cfg, secret: strings.TrimSpace(secret), http: noRedirects(client)}
 	switch cfg.Type {
 	case "bearer", "header":
 		if a.secret == "" {
@@ -160,10 +192,37 @@ func (a *authenticator) refreshable() bool {
 	return a.cfg.Type == "oauth2" || a.cfg.Type == "oauth2-refresh" || a.cfg.Type == "session"
 }
 
-func (a *authenticator) invalidate() {
+// noRedirects copies client for token and login requests, which carry
+// credentials in their body: a 307 or 308 would post them again to
+// wherever it points.
+func noRedirects(client *http.Client) *http.Client {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	c := *client
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	return &c
+}
+
+// invalidate drops the token req was sent with, after the API refused it.
+// A request that carried an older token (another one refreshed it since)
+// leaves the current one alone. A nil req drops whatever is current.
+func (a *authenticator) invalidate(req *http.Request) {
 	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.token == "" {
+		return
+	}
+	if req != nil {
+		sent := req.Header.Get("Cookie")
+		if a.cfg.Type != "session" {
+			sent = strings.TrimPrefix(req.Header.Get("Authorization"), "Bearer ")
+		}
+		if sent != a.token {
+			return
+		}
+	}
 	a.rejected, a.token = a.token, ""
-	a.mu.Unlock()
 }
 
 func (a *authenticator) apply(ctx context.Context, req *http.Request) error {
@@ -347,9 +406,10 @@ var ErrNoTokenStore = errors.New("oauth2-refresh keeps the refresh tokens the se
 
 // refreshed returns an access token, refreshing it with the refresh token
 // in force. The refresh and the rotated token's storing happen under the
-// store's lock, so two workers never spend the same single-use token. A
-// seed in the secret that differs from the one the stored token descends
-// from (the app was authorized again) replaces it.
+// store's lock, so two workers never spend the same single-use token. The
+// stored token is keyed by its seed (the refresh token in the secret): an
+// app authorized again starts from its new seed, and two connections of
+// one endpoint never share a token.
 func (a *authenticator) refreshed(ctx context.Context) (string, error) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -359,40 +419,78 @@ func (a *authenticator) refreshed(ctx context.Context) (string, error) {
 	if a.tokens == nil {
 		return "", ErrNoTokenStore
 	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), grantTimeout)
+	defer cancel()
 	sum := sha256.Sum256([]byte(a.refreshToken))
 	seed := hex.EncodeToString(sum[:8])
+	var legacy *tokenState
+	if a.legacyKey != "" {
+		err := a.tokens.UpdateToken(ctx, a.legacyKey, func(cur []byte) ([]byte, error) {
+			var st tokenState
+			if cur != nil && json.Unmarshal(cur, &st) == nil && st.Seed == seed && st.RefreshToken != "" {
+				legacy = &st
+			}
+			return nil, nil
+		})
+		if err != nil {
+			return "", err
+		}
+	}
+	var token string
+	var expires time.Time
 	err := a.tokens.UpdateToken(ctx, a.tokenKey, func(cur []byte) ([]byte, error) {
 		var st tokenState
-		if cur != nil {
+		changed := false
+		switch {
+		case cur != nil:
 			if err := json.Unmarshal(cur, &st); err != nil {
 				return nil, fmt.Errorf("oauth2-refresh: the stored token is not readable: %w", err)
 			}
+		case legacy != nil:
+			st, changed = *legacy, true
 		}
 		if st.Seed != seed || st.RefreshToken == "" {
-			st = tokenState{Seed: seed, RefreshToken: a.refreshToken}
+			st, changed = tokenState{Seed: seed, RefreshToken: a.refreshToken}, true
 		}
-		if st.AccessToken != "" && st.AccessToken != a.rejected && time.Now().Before(st.Expires) {
-			a.token, a.expires = st.AccessToken, st.Expires // another worker refreshed it
-			return nil, nil
+		if p := a.pending; p != nil {
+			if st.RefreshToken == p.spent {
+				st, changed = p.state, true // the rotation the store missed
+			} else {
+				a.pending = nil // the store moved on without it
+			}
 		}
-		access, refresh, life, err := a.refreshGrant(ctx, st.RefreshToken)
-		if err != nil {
-			return nil, err
+		if st.AccessToken == "" || st.AccessToken == a.rejected || !time.Now().Before(st.Expires) {
+			access, refresh, life, err := a.refreshGrant(ctx, st.RefreshToken)
+			if err != nil {
+				return nil, err
+			}
+			margin := time.Minute
+			if life < 4*margin {
+				margin = life / 4
+			}
+			spent := st.RefreshToken
+			st.AccessToken, st.Expires = access, time.Now().Add(life-margin)
+			if refresh != "" {
+				st.RefreshToken = refresh
+			}
+			// Until the store commits, the new tokens live here. A pending
+			// rotation this one follows is superseded: its token is spent.
+			if a.pending != nil {
+				spent = a.pending.spent
+			}
+			a.pending, changed = &rotation{spent: spent, state: st}, true
 		}
-		margin := time.Minute
-		if life < 4*margin {
-			margin = life / 4
+		token, expires = st.AccessToken, st.Expires
+		if !changed {
+			return nil, nil // another worker refreshed it
 		}
-		st.AccessToken, st.Expires = access, time.Now().Add(life-margin)
-		if refresh != "" {
-			st.RefreshToken = refresh
-		}
-		a.token, a.expires = st.AccessToken, st.Expires
 		return json.Marshal(st)
 	})
 	if err != nil {
 		return "", err
 	}
+	a.pending, a.legacyKey = nil, ""
+	a.token, a.expires = token, expires
 	return a.token, nil
 }
 
@@ -513,18 +611,23 @@ func (x *Authenticator) Apply(ctx context.Context, req *http.Request) error {
 // Refreshable reports whether a rejected credential is worth fetching again.
 func (x *Authenticator) Refreshable() bool { return x.a.refreshable() }
 
-// Invalidate drops a cached token.
-func (x *Authenticator) Invalidate() { x.a.invalidate() }
+// Invalidate drops the token req carried, after the API refused it; a
+// token refreshed since is kept.
+func (x *Authenticator) Invalidate(req *http.Request) { x.a.invalidate(req) }
 
 // UseTokens gives an oauth2-refresh authenticator the store for the
 // tokens the server rotates, under key (the endpoint).
 func (x *Authenticator) UseTokens(store connector.TokenStore, key string) { x.a.useTokens(store, key) }
 
-// useTokens keys the stored token by the endpoint, the token URL and the
-// client: another app authorized for the same endpoint starts afresh.
+// useTokens keys the stored token by the endpoint, the token URL, the
+// client and the seed: another app, or another authorization, starts from
+// its own seed, and going back to an earlier seed finds where it led.
 func (a *authenticator) useTokens(store connector.TokenStore, key string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	sum := sha256.Sum256([]byte(a.cfg.TokenURL + "\x00" + a.clientID))
-	a.tokens, a.tokenKey = store, key+"@"+hex.EncodeToString(sum[:8])
+	legacy := sha256.Sum256([]byte(a.cfg.TokenURL + "\x00" + a.clientID))
+	sum := sha256.Sum256([]byte(a.cfg.TokenURL + "\x00" + a.clientID + "\x00" + a.refreshToken))
+	a.tokens = store
+	a.legacyKey = key + "@" + hex.EncodeToString(legacy[:8])
+	a.tokenKey = key + "@" + hex.EncodeToString(sum[:12])
 }

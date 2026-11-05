@@ -183,6 +183,9 @@ func (c Config) validate() error {
 	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
 		return fmt.Errorf("baseURL must be an http(s) URL")
 	}
+	if err := c.Auth.SameOrigin(u); err != nil {
+		return err
+	}
 	if c.Client != "" && !regexp.MustCompile(`^\d{3}$`).MatchString(c.Client) {
 		return fmt.Errorf("client must be three digits, got %q", c.Client)
 	}
@@ -478,7 +481,7 @@ func (c *Conn) do(ctx context.Context, method, target string, body any, header h
 		r := response{status: resp.StatusCode, header: resp.Header, body: data}
 		if resp.StatusCode == http.StatusUnauthorized && c.auth.Refreshable() && !retriedAuth {
 			retriedAuth = true
-			c.auth.Invalidate()
+			c.auth.Invalidate(req)
 			continue
 		}
 		if resp.StatusCode == http.StatusForbidden && modifying && strings.EqualFold(resp.Header.Get("X-CSRF-Token"), "Required") && !retriedCSRF {

@@ -263,7 +263,7 @@ public final class FakeEcc {
                 "COND_VALUE", "DEC", 28, "Condition rate", "CURRENCY", "CUKY", 5, "Currency"));
         structures.put("BAPISDHEAD", structure("DOC_TYPE", "CHAR", 4, "Sales Document Type", "SALES_ORG", "CHAR", 4, "Sales Organization",
                 "DISTR_CHAN", "CHAR", 2, "Distribution Channel", "DIVISION", "CHAR", 2, "Division",
-                "REQ_DATE_H", "DATS", 8, "Requested delivery date"));
+                "REQ_DATE_H", "DATS", 8, "Requested delivery date", "CURRENCY", "CUKY", 5, "SD document currency"));
         structures.put("BAPIITEMIN", structure("ITM_NUMBER", "NUMC", 6, "Item number", "MATERIAL", "CHAR", 18, "Material",
                 "REQ_QTY", "NUMC", 15, "Order quantity (three implied decimals)"));
         structures.put("BAPIPARTNR", structure("PARTN_ROLE", "CHAR", 2, "Partner function", "PARTN_NUMB", "CHAR", 10, "Customer number"));
@@ -675,6 +675,12 @@ public final class FakeEcc {
             out.put("RETURN", Map.of("TYPE", "E", "CODE", "V1390", "MESSAGE", "Sold-to party " + soldTo + " not maintained for sales area"));
             return;
         }
+        // The order's currency, if SAP prices in it (EUR and USD here, at the
+        // same rates); otherwise the customer's, EUR.
+        String currency = h.getOrDefault("CURRENCY", "");
+        if (!currency.equals("EUR") && !currency.equals("USD")) {
+            currency = "EUR";
+        }
         for (Map<String, String> it : items) {
             BigDecimal price = PRICES.get(it.get("MATERIAL"));
             if (price == null) {
@@ -685,7 +691,7 @@ public final class FakeEcc {
             // REQ_QTY has three implied decimals: 2000 is two units.
             BigDecimal qty = new BigDecimal(it.getOrDefault("REQ_QTY", "0")).movePointLeft(3);
             rows.add(Map.of("ITM_NUMBER", it.get("ITM_NUMBER"), "MATERIAL", it.get("MATERIAL"),
-                    "NET_VALUE1", price.multiply(qty).setScale(2, java.math.RoundingMode.HALF_UP).toPlainString(), "CURRENCY", "EUR"));
+                    "NET_VALUE1", price.multiply(qty).setScale(2, java.math.RoundingMode.HALF_UP).toPlainString(), "CURRENCY", currency));
         }
         out.put("RETURN", Map.of());
     }

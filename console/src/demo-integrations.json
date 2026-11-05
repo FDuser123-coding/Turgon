@@ -1130,10 +1130,10 @@
         },
         {
           "kind": "map",
-          "mapping": "sales-order-to-business-central-order@1.0.0",
+          "mapping": "sales-order-to-business-central-order@1.1.0",
           "from": "model.SalesOrder",
           "to": "model.SalesOrder",
-          "fields": 6
+          "fields": 5
         },
         {
           "kind": "write",
@@ -1195,10 +1195,10 @@
         },
         {
           "kind": "map",
-          "mapping": "sales-order-to-business-one-order@1.0.0",
+          "mapping": "sales-order-to-business-one-order@1.1.0",
           "from": "model.SalesOrder",
           "to": "model.SalesOrder",
-          "fields": 8
+          "fields": 7
         },
         {
           "kind": "write",

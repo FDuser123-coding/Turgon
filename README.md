@@ -349,9 +349,11 @@ configuration only: each Connection declares its events, reads and writes as HTT
   (`idFrom: Location` or `OData-EntityId`), and the compensating delete is templated from it.
 - **APIs that can neither upsert nor take an idempotency key** (Business Central) look a retried
   create's record up first. `existing` is a list request templated with the payload and
-  `{{idempotencyKey}}` (`$filter: "externalDocumentNumber eq '{{idempotencyKey}}'"`, quotes
-  doubled). When it lists a record, the create is not sent and that record is the result, with
-  `"existing": true`.
+  `{{idempotencyKey}}` (`$filter: "externalDocumentNumber eq '{{idempotencyKey}}'"`; a quote in a
+  value inside a quoted literal is doubled). When it lists a record, the create is not sent and
+  that record is the result, with `"existing": true`. `keyField` names the API field the create
+  stores the key in, so the lookup and the record agree. An answer that lacks the list at its top
+  level is an error, not "no record".
 - **Creates are previewed** as the request they would send, so approvers see the exact body, and a
   payload missing a field fails before anyone approves.
 - Client errors fail the step at once; rate limits and server errors are retried.
@@ -598,9 +600,16 @@ working. Xero does the same.
   - The refresh and the storing of the rotated token happen under one row lock, so two workers
     never spend the same single-use token.
   - The access token is stored too, so the other workers use it instead of refreshing again.
-  - A 401 drops it.
-- **Authorizing the app again** puts a new refresh token in the secret. Its seed differs from
-  the one the stored token descends from, so it replaces the stored token.
+  - A 401 drops it, unless another request has refreshed it since.
+  - The refresh and the storing run to the end even when the caller gives up. If the store
+    still fails, the worker keeps the rotated token in memory and stores it on its next call,
+    rather than lose it and spend the old one.
+- **Each authorization has its own row,** keyed by the endpoint, the app and the seed.
+  Authorizing the app again puts a new refresh token in the secret, which starts a new row.
+  Two connections of one endpoint (one app, two companies) never share a token. Going back to
+  an earlier seed finds the token it rotated to.
+- **Token and login requests don't follow redirects,** since their bodies carry credentials. A
+  `session` login must share the API's scheme and host, because its cookies go to the API.
 - **Commands that open connections** (`run`, `check`, `discover`, `mcp` with a Postgres audit
   log) use the vault when they have the state database and `TURGON_TOKEN_KEYS`. Without both, an
   `oauth2-refresh` connection refuses to refresh rather than spend the token and lose its
@@ -703,9 +712,18 @@ declares what it uses:
   pricing with the source's. `shopify-store-orders-to-odoo` does this.
 - **Result:** the quotation's ID and number (`S00042`), which goes into the Shopify note.
 - **Undo:** `action_cancel`, so the quotation stays visible as cancelled, or `unlink`. Either is
-  confirmed by reading the quotation back.
-- **Events:** changed records are read with `search_read` on `write_date`. Odoo stamps it to the
-  second, so a poll never ends inside a second.
+  confirmed by reading the quotation back. `action_cancel` is sent with the context
+  `disable_cancel_warning`, so a quotation sent or confirmed in the meantime is cancelled rather
+  than answered with Odoo's confirmation wizard. Any other answer that is an action fails the undo,
+  naming it. A record deleted in the meantime counts as gone.
+- **The reference field** must be a char field that holds the whole key. Odoo would cut a longer
+  key, and the retry's lookup would then miss it. A mapped field missing from the payload is not
+  sent, so Odoo's default applies.
+- **Events:** changed records are read with `search_read` in `(write_date, id)` order. The cursor
+  is both, so a poll may end inside a second and the next one reads the rest of it, however many
+  records share it. A record younger than `settleSeconds` (60 by default) waits for a later
+  poll: Odoo stamps `write_date` when its transaction starts, so a long transaction commits
+  records stamped before others already read.
 - **Reads:** `get-customer` reads a partner. A many2one field reads as its ID.
 - **Check** signs in (`res.users/context_get`), reads every model's fields with `fields_get`,
   and counts its records, so a misspelled field, a missing app or a user without rights fails
@@ -880,12 +898,20 @@ Errors are status codes:
     `currency`. `salesforce-won-deals-to-ecc` checks it against the deal's amount
     (`checkAmount: { preview: netValue, tolerance: 0.01 }`), so a deal priced off SAP's price
     list waits for a person. The simulation takes no manual conditions, so it cannot be combined
-    with `priceCondition`, and the connection is refused if both are set. `ORDER_ITEMS_IN`'s
-    `REQ_QTY` is sent with its three implied decimals (`2000` for two units). The field names
+    with `priceCondition`, and the connection is refused if both are set. A connection with
+    `priceCondition` therefore shows no `netValue`, and a write with `checkAmount` always waits
+    for a person.
+  - **Currency and quantities in the dry run:** the order's `currency` goes into the simulation's
+    header. If SAP still prices in another currency (the customer's), the preview shows that
+    `currency` and a `pricingNote` instead of a `netValue`, so the check asks a person rather
+    than compare amounts in two currencies. Items priced in different currencies are refused.
+    `ORDER_ITEMS_IN`'s `REQ_QTY` is sent with its three implied decimals (`2000` for two units),
+    and a quantity with more than three decimals is refused instead of rounded. The field names
     follow SAP's interface documentation; they are tested against the fake ECC, not yet a real
     system. Discovery then also reads the simulation's interface and structures
     (`BAPISDHEAD`, `BAPIITEMIN`, `BAPIPARTNR`, `BAPIITEMEX`) and records the fields
-    create-sales-order fills and reads back, so drift in them is reported with that user.
+    create-sales-order fills and reads back, so drift in them is reported with that user. With
+    `priceCondition`, it reads `BAPICOND` too, for the conditions the create fills.
   - **Measured live:** against a Temporal 1.28 dev server, the fake Salesforce and the demo
     sidecar. A 100.00 deal for one M-1 (100.00 in SAP) waited only as a high-risk write, and once
     approved became order 0000012000. A 7800.00 deal for the same line also gave the reason

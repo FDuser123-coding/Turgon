@@ -100,10 +100,12 @@ final class EccEndpoint extends CamelEndpoint {
 
     /** With simulatePricing: what the pricing simulation fills, and the item values it reads back. */
     static final Map<String, List<String>> PRICING_FILLS = Map.of(
-            "BAPISDHEAD", List.of("DOC_TYPE", "SALES_ORG", "DISTR_CHAN", "DIVISION", "REQ_DATE_H"),
+            "BAPISDHEAD", List.of("DOC_TYPE", "SALES_ORG", "DISTR_CHAN", "DIVISION", "REQ_DATE_H", "CURRENCY"),
             "BAPIITEMIN", List.of("ITM_NUMBER", "MATERIAL", "REQ_QTY"),
             "BAPIPARTNR", List.of("PARTN_ROLE", "PARTN_NUMB"));
     static final Map<String, List<String>> PRICING_READS = Map.of("BAPIITEMEX", List.of("NET_VALUE1", "CURRENCY"));
+    /** With priceCondition: the manual price conditions the create fills. */
+    static final Map<String, List<String>> CONDITION_FILLS = Map.of("BAPICOND", List.of("ITM_NUMBER", "COND_TYPE", "COND_VALUE", "CURRENCY"));
 
     /**
      * What the system holds: the interfaces of the BAPIs the connector
@@ -122,6 +124,9 @@ final class EccEndpoint extends CamelEndpoint {
         if (cfg.simulatePricing()) {
             structures.addAll(PRICING_FILLS.keySet());
             structures.addAll(PRICING_READS.keySet());
+        }
+        if (!cfg.priceCondition().isEmpty()) {
+            structures.addAll(CONDITION_FILLS.keySet());
         }
         for (String o : objects) {
             if (o.startsWith("FUNCTION:")) {
@@ -179,6 +184,11 @@ final class EccEndpoint extends CamelEndpoint {
                     .put("by", "operation create-sales-order").put("creates", true)));
             PRICING_READS.forEach((st, fs) -> fs.forEach(f -> uses.addObject().put("object", st).put("field", f)
                     .put("by", "operation create-sales-order").put("creates", false)));
+        }
+        if (!cfg.priceCondition().isEmpty()) {
+            // The source's prices go in as manual conditions (ORDER_CONDITIONS_IN).
+            CONDITION_FILLS.forEach((st, fs) -> fs.forEach(f -> uses.addObject().put("object", st).put("field", f)
+                    .put("by", "operation create-sales-order").put("creates", true)));
         }
         for (String type : idocTypes) {
             Map<String, Object> r = rfc.call("IDOCTYPE_READ_COMPLETE", Map.of("PI_IDOCTYP", type, "PI_CIMTYP", ""));
@@ -440,6 +450,12 @@ final class EccEndpoint extends CamelEndpoint {
                 if (qty.signum() <= 0) {
                     throw new ConnectorException.Invalid("lines[" + (n - 1) + "].quantity must be positive");
                 }
+                // SAP's quantities have three decimals; more would be rounded
+                // away (or, in the pricing simulation, priced differently).
+                qty = qty.stripTrailingZeros();
+                if (qty.scale() > 3) {
+                    throw new ConnectorException.Invalid("lines[" + (n - 1) + "].quantity has more than 3 decimals, which SAP cannot hold");
+                }
                 items.add(Map.of("ITM_NUMBER", item, "MATERIAL", material.toUpperCase(), "TARGET_QTY", qty.toPlainString()));
                 schedules.add(Map.of("ITM_NUMBER", item, "REQ_QTY", qty.toPlainString()));
                 // The source's price, as a manual condition SAP keeps instead
@@ -518,7 +534,7 @@ final class EccEndpoint extends CamelEndpoint {
             @SuppressWarnings("unchecked")
             Map<String, String> h = (Map<String, String>) p.get("ORDER_HEADER_IN");
             Map<String, String> head = new LinkedHashMap<>();
-            for (String k : List.of("DOC_TYPE", "SALES_ORG", "DISTR_CHAN", "DIVISION", "REQ_DATE_H")) {
+            for (String k : List.of("DOC_TYPE", "SALES_ORG", "DISTR_CHAN", "DIVISION", "REQ_DATE_H", "CURRENCY")) {
                 if (h.containsKey(k)) {
                     head.put(k, h.get(k));
                 }
@@ -550,14 +566,24 @@ final class EccEndpoint extends CamelEndpoint {
                 } catch (NumberFormatException e) {
                     throw new ConnectorException.Rejected("SAP gave item " + it.get("ITM_NUMBER") + " no net value in the simulation");
                 }
+                String c = it.getOrDefault("CURRENCY", "").trim();
                 if (currency.isEmpty()) {
-                    currency = it.getOrDefault("CURRENCY", "").trim();
+                    currency = c;
+                } else if (!c.isEmpty() && !c.equals(currency)) {
+                    throw new ConnectorException.Rejected("SAP priced the items in different currencies (" + currency + ", " + c + "): their net values cannot be added up");
                 }
             }
-            out.put("netValue", net.toPlainString());
             if (!currency.isEmpty()) {
                 out.put("currency", currency);
             }
+            // A net value in another currency than the source's is no check of
+            // its amount: leave it out, so checkAmount asks a person.
+            String wanted = h.getOrDefault("CURRENCY", "");
+            if (!wanted.isEmpty() && !currency.isEmpty() && !wanted.equalsIgnoreCase(currency)) {
+                out.put("pricingNote", "SAP priced the order in " + currency + ", the source in " + wanted + ": no netValue to compare");
+                return;
+            }
+            out.put("netValue", net.toPlainString());
         }
 
         void create(Exchange ex) throws Exception {

@@ -49,9 +49,10 @@ spec:
         path: /salesOrders
         fields:
           customerNumber: customerNumber
-          externalDocumentNumber: externalDocumentNumber
           orderDate: orderDate
           salesOrderLines: bcLines
+        # The idempotency key itself, which the lookup below finds it by.
+        keyField: externalDocumentNumber
         # A retried create finds the order its first try made.
         existing:
           path: /salesOrders

@@ -67,6 +67,10 @@ type Event struct {
 	Domain []any `json:"domain,omitempty"`
 	// Fields are the fields read (id and write_date always are).
 	Fields []string `json:"fields,omitempty"`
+	// SettleSeconds is how long a record waits before it is read (default
+	// 60): Odoo stamps write_date with its transaction's start, so a long
+	// transaction commits records stamped before others already read.
+	SettleSeconds *int `json:"settleSeconds,omitempty"`
 }
 
 // Operation binds a manifest operation to a model.
@@ -203,26 +207,50 @@ func (c Config) validate() error {
 }
 
 // checkDomain accepts a list of [field, operator, value] terms and the
-// prefix operators "&", "|" and "!".
+// prefix operators "&" and "|" (two operands) and "!" (one), each with its
+// operands; consecutive expressions are ANDed, as Odoo reads them.
 func checkDomain(d []any) error {
-	for _, t := range d {
-		switch x := t.(type) {
+	var expr func(i int) (int, error)
+	expr = func(i int) (int, error) {
+		if i >= len(d) {
+			return 0, fmt.Errorf("domain: an operator lacks an operand")
+		}
+		switch x := d[i].(type) {
 		case string:
-			if x != "&" && x != "|" && x != "!" {
-				return fmt.Errorf("domain: %q is not an operator", x)
+			n := 2
+			switch x {
+			case "!":
+				n = 1
+			case "&", "|":
+			default:
+				return 0, fmt.Errorf("domain: %q is not an operator", x)
 			}
+			j := i + 1
+			for k := 0; k < n; k++ {
+				var err error
+				if j, err = expr(j); err != nil {
+					return 0, err
+				}
+			}
+			return j, nil
 		case []any:
 			if len(x) != 3 {
-				return fmt.Errorf("domain: a term is [field, operator, value]")
+				return 0, fmt.Errorf("domain: a term is [field, operator, value]")
 			}
 			if f, ok := x[0].(string); !ok || !pathRE.MatchString(f) {
-				return fmt.Errorf("domain: invalid field %v", x[0])
+				return 0, fmt.Errorf("domain: invalid field %v", x[0])
 			}
 			if _, ok := x[1].(string); !ok {
-				return fmt.Errorf("domain: invalid operator %v", x[1])
+				return 0, fmt.Errorf("domain: invalid operator %v", x[1])
 			}
-		default:
-			return fmt.Errorf("domain: a term is [field, operator, value]")
+			return i + 1, nil
+		}
+		return 0, fmt.Errorf("domain: a term is [field, operator, value]")
+	}
+	for i := 0; i < len(d); {
+		var err error
+		if i, err = expr(i); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -252,10 +280,10 @@ type Conn struct {
 	cfg  Config
 	key  string
 	http *http.Client
-	// PageSize is the limit of each page read. Default 100.
+	// PageSize is the limit of each poll. Default 100.
 	PageSize int
-	// MaxPages bounds one poll. Default 20.
-	MaxPages int
+	// now is the clock settling is measured with (tests set it).
+	now func() time.Time
 
 	mu     sync.Mutex
 	fields map[string]map[string]FieldInfo // fields_get, by model
@@ -290,10 +318,13 @@ func New(cfg Config, secret string, client *http.Client) (*Conn, error) {
 	if key == "" {
 		return nil, fmt.Errorf("the secret must be an Odoo API key")
 	}
-	return &Conn{cfg: cfg, key: key, http: client, PageSize: 100, MaxPages: 20, fields: map[string]map[string]FieldInfo{}}, nil
+	return &Conn{cfg: cfg, key: key, http: client, PageSize: 100, now: time.Now, fields: map[string]map[string]FieldInfo{}}, nil
 }
 
 func (c *Conn) Close() {}
+
+// SetClock sets the clock events' settling is measured with (tests).
+func (c *Conn) SetClock(now func() time.Time) { c.now = now }
 
 // APIError is an error response from Odoo.
 type APIError struct {
@@ -400,10 +431,26 @@ func (c *Conn) fieldsOf(ctx context.Context, model string) (map[string]FieldInfo
 	return f, nil
 }
 
-// Poll returns records changed after the position (Unix milliseconds), in
-// change order. Odoo stamps write_date to the second, so a poll never ends
-// inside a group of records sharing one: the strict "greater than" cursor
-// cannot skip any.
+// A position is a record's place in change order: its write_date (whole
+// seconds, as Odoo stamps it) and its ID, as (seconds << 31) | id. The
+// cursor is both, so records written in one second are read in ID order and
+// none is skipped, however many share it. Positions of earlier versions
+// were Unix milliseconds of a second already read; they still work.
+const idBits = 31
+
+func position(t time.Time, id int64) int64 { return t.Unix()<<idBits | id }
+
+func cursor(after int64) (time.Time, int64) {
+	if after < 1<<40 { // milliseconds: that second was read in full
+		return time.UnixMilli(after).UTC().Truncate(time.Second), 1<<idBits - 1
+	}
+	return time.Unix(after>>idBits, 0).UTC(), after & (1<<idBits - 1)
+}
+
+// Poll returns records changed after the position, in change order: after
+// its write_date, or in its second with a higher ID. Records younger than
+// the event's settle time are left for a later poll, because Odoo stamps
+// write_date when the transaction starts, not when it commits.
 func (c *Conn) Poll(ctx context.Context, name string, after int64, limit int) ([]connector.Event, error) {
 	e, ok := c.cfg.Events[name]
 	if !ok {
@@ -412,47 +459,35 @@ func (c *Conn) Poll(ctx context.Context, name string, after int64, limit int) ([
 	if limit <= 0 || limit > c.PageSize {
 		limit = c.PageSize
 	}
-	// Positions are whole seconds, as write_date is.
-	since := time.UnixMilli(after).UTC().Truncate(time.Second)
-	domain := append([]any{}, e.Domain...)
-	if len(domain) > 0 {
-		domain = append([]any{"&"}, domain...)
+	settle := 60
+	if e.SettleSeconds != nil {
+		settle = *e.SettleSeconds
 	}
-	domain = append(domain, []any{"write_date", ">", since.Format("2006-01-02 15:04:05")})
+	since, lastID := cursor(after)
+	stamp := since.Format("2006-01-02 15:04:05")
+	// Consecutive expressions are ANDed: the event's domain, the cursor and
+	// the settle limit.
+	domain := append([]any{}, e.Domain...)
+	domain = append(domain, "|", []any{"write_date", ">", stamp}, "&", []any{"write_date", "=", stamp}, []any{"id", ">", lastID},
+		[]any{"write_date", "<=", c.now().UTC().Add(-time.Duration(settle) * time.Second).Format("2006-01-02 15:04:05")})
 	fields := append([]string{"id", "write_date"}, e.Fields...)
-	var events []connector.Event
-	for page := 0; page < c.MaxPages; page++ {
-		var recs []map[string]any
-		if err := c.call(ctx, e.Model, "search_read", map[string]any{
-			"domain": domain, "fields": fields, "order": "write_date asc, id asc", "limit": limit, "offset": page * limit,
-		}, &recs); err != nil {
+	var recs []map[string]any
+	if err := c.call(ctx, e.Model, "search_read", map[string]any{
+		"domain": domain, "fields": fields, "order": "write_date asc, id asc", "limit": limit,
+	}, &recs); err != nil {
+		return nil, err
+	}
+	events := make([]connector.Event, 0, len(recs))
+	for _, rec := range recs {
+		ev, err := toEvent(name, e, rec)
+		if err != nil {
 			return nil, err
 		}
-		for _, rec := range recs {
-			ev, err := toEvent(name, e, rec)
-			if err != nil {
-				return nil, err
-			}
-			if ev.Position > after {
-				events = append(events, ev)
-			}
-		}
-		if len(recs) < limit {
-			return events, nil
-		}
-		if cut := boundary(events); cut > 0 {
-			return events[:cut], nil
+		if ev.Position > after {
+			events = append(events, ev)
 		}
 	}
-	return nil, fmt.Errorf("odoo: more than %d records of %s share one write_date", c.MaxPages*limit, e.Model)
-}
-
-func boundary(events []connector.Event) int {
-	cut := len(events)
-	for cut > 0 && events[cut-1].Position == events[len(events)-1].Position {
-		cut--
-	}
-	return cut
+	return events, nil
 }
 
 func toEvent(name string, e Event, rec map[string]any) (connector.Event, error) {
@@ -466,7 +501,11 @@ func toEvent(name string, e Event, rec map[string]any) (connector.Event, error) 
 	if err != nil {
 		return connector.Event{}, err
 	}
-	return connector.Event{ID: id, Position: t.UnixMilli(), Name: name, Payload: payload}, nil
+	n := id64(rec["id"])
+	if n <= 0 || n >= 1<<idBits {
+		return connector.Event{}, fmt.Errorf("odoo: %s record ID %s is outside the positions' range", e.Model, id)
+	}
+	return connector.Event{ID: id, Position: position(t, n), Name: name, Payload: payload}, nil
 }
 
 func (c *Conn) operation(name, action string) (Operation, error) {
@@ -571,7 +610,11 @@ func values(model string, fields map[string]FieldInfo, doc map[string]any, mappi
 		if !ok {
 			return nil, fmt.Errorf("%w: %s has no field %s", writeguard.ErrInvalid, model, f)
 		}
-		v, err := convert(model, f, lookup(doc, p), info)
+		raw := lookup(doc, p)
+		if raw == nil {
+			continue // not in the payload: Odoo's default applies
+		}
+		v, err := convert(model, f, raw, info)
 		if err != nil {
 			return nil, err
 		}
@@ -628,12 +671,8 @@ func (c *Conn) record(ctx context.Context, op Operation, payload json.RawMessage
 			if err != nil {
 				return nil, fmt.Errorf("%s[%d]: %w", l.From, i, err)
 			}
-			// A line without a price is priced by Odoo (its pricelist).
-			for f, v := range lv {
-				if v == false && lineFields[f].Type != "boolean" {
-					delete(lv, f)
-				}
-			}
+			// A line without a price is priced by Odoo (its pricelist): a
+			// field missing from the payload is not sent.
 			cmds = append(cmds, []any{0, 0, lv})
 		}
 		vals[l.Field] = cmds
@@ -767,6 +806,19 @@ func (c *Conn) create(ctx context.Context, op Operation, key string, payload jso
 		if key == "" {
 			return nil, fmt.Errorf("%w: the write has no idempotency key for %s", writeguard.ErrInvalid, op.Reference)
 		}
+		// The key must fit the reference field whole: Odoo would cut a
+		// longer one, and a retry's lookup of the whole key would then miss.
+		fields, err := c.fieldsOf(ctx, op.Model)
+		if err != nil {
+			return nil, err
+		}
+		ref := fields[op.Reference]
+		if ref.Type != "char" {
+			return nil, fmt.Errorf("%w: %s.%s must be a char field to hold the idempotency key, not %q", writeguard.ErrInvalid, op.Model, op.Reference, ref.Type)
+		}
+		if ref.Size > 0 && len([]rune(key)) > ref.Size {
+			return nil, fmt.Errorf("%w: the idempotency key %q is longer than %s.%s holds (%d)", writeguard.ErrInvalid, key, op.Model, op.Reference, ref.Size)
+		}
 		vals[op.Reference], res.Reference = key, key
 		found, err := c.existing(ctx, op, key)
 		if err != nil {
@@ -816,8 +868,24 @@ func (c *Conn) cancel(ctx context.Context, op Operation, payload json.RawMessage
 		out["alreadyGone"] = true
 		return json.Marshal(out)
 	}
-	if err := c.call(ctx, op.Model, method, map[string]any{"ids": []int64{prior.ID}}, nil); err != nil {
+	args := map[string]any{"ids": []int64{prior.ID}}
+	if method == "action_cancel" {
+		// Since Odoo 16, cancelling an order that was sent or confirmed opens
+		// a confirmation wizard instead, unless the warning is disabled.
+		args["context"] = map[string]any{"disable_cancel_warning": true}
+	}
+	var answer any
+	err := c.call(ctx, op.Model, method, args, &answer)
+	var api *APIError
+	if errors.As(err, &api) && api.Status == http.StatusNotFound {
+		out["alreadyGone"] = true // deleted between the search and the call
+		return json.Marshal(out)
+	}
+	if err != nil {
 		return nil, err
+	}
+	if action, ok := answer.(map[string]any); ok {
+		return nil, fmt.Errorf("%w: Odoo answered %s of %s %d with an action (%v) instead of cancelling it; cancel it in Odoo", writeguard.ErrInvalid, method, op.Model, prior.ID, action["res_model"])
 	}
 	out["done"] = true
 	return json.Marshal(out)
@@ -897,10 +965,14 @@ func (c *Conn) Read(ctx context.Context, name, id string) (json.RawMessage, erro
 	if len(recs) == 0 {
 		return nil, writeguard.ErrNotFound
 	}
+	types, err := c.fieldsOf(ctx, op.Model)
+	if err != nil {
+		return nil, err
+	}
 	out := map[string]any{}
 	for f, as := range op.Fields {
 		v := recs[0][f]
-		if pair, ok := v.([]any); ok && len(pair) == 2 { // many2one: [id, name]
+		if pair, ok := v.([]any); ok && len(pair) == 2 && types[f].Type == "many2one" { // [id, name]
 			v = pair[0]
 		}
 		out[as] = v

@@ -15,6 +15,7 @@ RUN npm test && npm run build
 FROM golang:1.26-bookworm AS build
 WORKDIR /src
 COPY go.mod go.sum ./
+COPY third_party/ third_party/
 RUN go mod download
 COPY . .
 COPY --from=console /src/pkg/console/dist/ pkg/console/dist/
