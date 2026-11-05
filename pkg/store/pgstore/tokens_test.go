@@ -109,3 +109,14 @@ func TestTokenVaultSerializesWorkers(t *testing.T) {
 		t.Fatalf("concurrent updates = %q, want 8 in turn", got)
 	}
 }
+
+// A key pasted without its id is not echoed back in the error.
+func TestTokenKeyErrorsHideTheKey(t *testing.T) {
+	raw := "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+	for _, keys := range []string{raw, keyA + "," + raw, "bad id!:" + raw} {
+		_, err := NewTokenVault(nil, keys)
+		if err == nil || strings.Contains(err.Error(), raw) || strings.Contains(err.Error(), "MDEy") {
+			t.Errorf("keys %q: %v", keys, err)
+		}
+	}
+}

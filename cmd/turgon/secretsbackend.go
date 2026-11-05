@@ -224,6 +224,9 @@ func optionalSecretRefs(spec *compiler.RuntimeSpec) map[string]bool {
 // checkSecrets signs in to the secret manager and reads each reference
 // (OpenBao only; environment variables are checked per connector).
 func checkSecrets(ctx context.Context, b secretBackend, refs []string) []connector.CheckResult {
+	if t, ok := b.(tokenBackend); ok {
+		b = t.secretBackend
+	}
 	switch b := b.(type) {
 	case openBaoBackend:
 		return b.Check(ctx, refs)

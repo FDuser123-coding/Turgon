@@ -221,6 +221,9 @@ func (c Config) validate() error {
 	if err := c.Auth.validate(); err != nil {
 		return err
 	}
+	if err := c.Auth.SameOrigin(u); err != nil {
+		return err
+	}
 	if c.OpenAPI != "" {
 		o, err := url.Parse(c.OpenAPI)
 		if err != nil || (o.Scheme != "https" && o.Scheme != "http") || o.Host == "" {
@@ -484,7 +487,7 @@ func (c *Conn) doH(ctx context.Context, method, path string, query url.Values, h
 		data, _ := io.ReadAll(io.LimitReader(resp.Body, 32<<20))
 		resp.Body.Close()
 		if resp.StatusCode == http.StatusUnauthorized && attempt == 0 && c.auth.refreshable() {
-			c.auth.invalidate()
+			c.auth.invalidate(req)
 			continue
 		}
 		if resp.StatusCode >= 300 {

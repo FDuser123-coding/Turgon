@@ -600,9 +600,16 @@ working. Xero does the same.
   - The refresh and the storing of the rotated token happen under one row lock, so two workers
     never spend the same single-use token.
   - The access token is stored too, so the other workers use it instead of refreshing again.
-  - A 401 drops it.
-- **Authorizing the app again** puts a new refresh token in the secret. Its seed differs from
-  the one the stored token descends from, so it replaces the stored token.
+  - A 401 drops it, unless another request has refreshed it since.
+  - The refresh and the storing run to the end even when the caller gives up. If the store
+    still fails, the worker keeps the rotated token in memory and stores it on its next call,
+    rather than lose it and spend the old one.
+- **Each authorization has its own row,** keyed by the endpoint, the app and the seed.
+  Authorizing the app again puts a new refresh token in the secret, which starts a new row.
+  Two connections of one endpoint (one app, two companies) never share a token. Going back to
+  an earlier seed finds the token it rotated to.
+- **Token and login requests don't follow redirects,** since their bodies carry credentials. A
+  `session` login must share the API's scheme and host, because its cookies go to the API.
 - **Commands that open connections** (`run`, `check`, `discover`, `mcp` with a Postgres audit
   log) use the vault when they have the state database and `TURGON_TOKEN_KEYS`. Without both, an
   `oauth2-refresh` connection refuses to refresh rather than spend the token and lose its

@@ -253,7 +253,7 @@ func (m *meshClient) call(ctx context.Context, path string, header http.Header) 
 			return nil, nil, fmt.Errorf("event mesh: %w", err)
 		}
 		if resp.StatusCode == http.StatusUnauthorized && !retried {
-			m.auth.Invalidate()
+			m.auth.Invalidate(req)
 			continue
 		}
 		if resp.StatusCode >= 300 {

@@ -49,10 +49,11 @@ func NewTokenVault(pool *pgxpool.Pool, keys string) (*TokenVault, error) {
 		return nil, errors.New("token keys: none set; TURGON_TOKEN_KEYS=id:base64key seals rotated tokens (openssl rand -base64 32)")
 	}
 	v := &TokenVault{pool: pool, keys: map[string]cipher.AEAD{}}
-	for _, part := range strings.Split(keys, ",") {
+	for i, part := range strings.Split(keys, ",") {
 		id, b64, ok := strings.Cut(strings.TrimSpace(part), ":")
 		if !ok || !tokenKeyIDRE.MatchString(id) {
-			return nil, fmt.Errorf("token keys: want id:base64key, got %q", strings.SplitN(part, ":", 2)[0])
+			// Name the entry by its place: without a colon it may be the key.
+			return nil, fmt.Errorf("token keys: entry %d is not id:base64key (the id is 1-64 letters, digits, '.', '_' or '-')", i+1)
 		}
 		key, err := base64.StdEncoding.DecodeString(b64)
 		if err != nil || len(key) != 32 {
