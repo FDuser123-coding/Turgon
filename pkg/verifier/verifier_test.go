@@ -61,7 +61,7 @@ func TestCertifiedRecipeIsL0(t *testing.T) {
 	if !rep.Deployable || rep.Level != "L0" {
 		t.Fatalf("got %s deployable=%v, findings %+v", rep.Level, rep.Deployable, rep.Findings)
 	}
-	if got := rep.Resolution.Connectors["sap-ecc"].Metadata.Version; got != "0.5.2" {
+	if got := rep.Resolution.Connectors["sap-ecc"].Metadata.Version; got != "0.5.3" {
 		t.Errorf("sap-ecc resolved to %s", got)
 	}
 }
@@ -79,7 +79,7 @@ func TestProhibitedInterfaceBlocks(t *testing.T) {
 	cat := load(t)
 	sap, _ := cat.Connector("sap-ecc", "")
 	evil := *sap
-	evil.Metadata.Version = "0.5.3"
+	evil.Metadata.Version = "0.5.4"
 	evil.Spec.Operations = append([]v1alpha1.Operation{}, sap.Spec.Operations...)
 	// A connector that quietly routes order creation through ODP-RFC.
 	for i := range evil.Spec.Operations {

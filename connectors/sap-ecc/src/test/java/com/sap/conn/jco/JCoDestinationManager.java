@@ -41,6 +41,8 @@ public final class JCoDestinationManager {
     static {
         SIGNATURES.put("IDOCTYPE_READ_COMPLETE", List.of(Set.of("PI_IDOCTYP", "PI_CIMTYP"), Set.of(), Set.of("PT_SEGMENTS", "PT_FIELDS")));
         SIGNATURES.put("BAPISDORDER_GETDETAILEDLIST", List.of(Set.of("[I_BAPI_VIEW]"), Set.of(), Set.of("SALES_DOCUMENTS", "ORDER_HEADERS_OUT")));
+        SIGNATURES.put("BAPI_SALESORDER_SIMULATE", List.of(Set.of("[ORDER_HEADER_IN]"), Set.of("[RETURN]"),
+                Set.of("ORDER_PARTNERS", "ORDER_ITEMS_IN", "ORDER_SCHEDULE_IN", "ORDER_ITEMS_OUT")));
         SIGNATURES.put("IDOC_INBOUND_ASYNCHRONOUS", List.of(Set.of(), Set.of(), Set.of("IDOC_CONTROL_REC_40", "IDOC_DATA_REC_40")));
     }
 

@@ -289,4 +289,27 @@ class EccEndpointTest {
         assertThrows(ConnectorException.Invalid.class, () -> new SapEccConnector().bind(config(
                 "{\"rfc\":{\"provider\":\"fake\"},\"priceCondition\":\"pr-00\"}", "u:p")));
     }
+
+    @Test
+    void dryRunPricesTheOrderWhenAsked() throws Exception {
+        // By default the dry run is the BAPI's test run alone: no price.
+        assertTrue(ecc.simulate("create-sales-order", json(ORDER)).path("netValue").isMissingNode());
+        String cfg = "{\"rfc\":{\"provider\":\"fake\",\"destination\":{\"ashost\":\"ecc1\",\"client\":\"100\"}},\"simulatePricing\":true}";
+        try (Endpoint pricing = new SapEccConnector().bind(config(cfg, "TURGON:pw"))) {
+            var preview = pricing.simulate("create-sales-order", json(ORDER));
+            // 2 x 49.90 + 1.5 x 12.50, as SAP's conditions price them.
+            assertEquals("118.55", preview.path("netValue").asText());
+            assertEquals("EUR", preview.path("currency").asText());
+            assertTrue(preview.path("testRun").asBoolean());
+            var refused = assertThrows(ConnectorException.Rejected.class,
+                    () -> pricing.simulate("create-sales-order", json(ORDER.replace("\"1000\"", "\"4711\""))));
+            assertTrue(refused.getMessage().contains("4711"), refused.getMessage());
+            assertTrue(pricing.check().stream().anyMatch(c -> c.name().equals("BAPI_SALESORDER_SIMULATE") && c.ok()));
+        }
+        assertFalse(ecc.check().stream().anyMatch(c -> c.name().equals("BAPI_SALESORDER_SIMULATE")));
+        // SAP's simulation takes no manual conditions, so it cannot price an order that keeps the source's prices.
+        var both = assertThrows(ConnectorException.Invalid.class, () -> new SapEccConnector().bind(config(
+                "{\"rfc\":{\"provider\":\"fake\"},\"simulatePricing\":true,\"priceCondition\":\"PR00\"}", "u:p")));
+        assertTrue(both.getMessage().contains("priceCondition"), both.getMessage());
+    }
 }

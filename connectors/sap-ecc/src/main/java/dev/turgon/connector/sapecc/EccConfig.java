@@ -24,6 +24,7 @@ import java.util.TreeMap;
  * orderType: TA                  # TA is the standard order (OR with English keys)
  * creditBlock: "01"              # the delivery block update-sales-order sets on an order to review
  * priceCondition: PR00           # sends each line's price as this manual condition (none: SAP prices)
+ * simulatePricing: true          # the dry run also prices the order (BAPI_SALESORDER_SIMULATE)
  * partnerRole: AG                # the sold-to party (SP with English keys)
  * lookupByPurchaseOrder: true    # find a retried create by its purchase order number
  * idoc:                          # events: IDocs SAP sends to a registered server program
@@ -44,7 +45,7 @@ import java.util.TreeMap;
 public record EccConfig(String provider, Map<String, String> destination, String salesOrg, String distributionChannel,
         String division, String orderType, String partnerRole, boolean lookupByPurchaseOrder, int peakLimit,
         Map<String, String> server, Map<String, IdocEvent> idocEvents, ChangePointerConfig changePointers, String creditBlock,
-        String priceCondition) {
+        String priceCondition, boolean simulatePricing) {
 
     /** Polled change pointer events: each names its message type, and optionally a read that fills "record". */
     public record ChangePointerConfig(int pageRows, long settleSeconds, Map<String, ChangePointerEvent> events) {}
@@ -146,11 +147,18 @@ public record EccConfig(String provider, Map<String, String> destination, String
         if (!priceCondition.isEmpty() && !priceCondition.matches("[A-Z0-9]{1,4}")) {
             throw new ConnectorException.Invalid("priceCondition must be a condition type (up to four characters, such as PR00; V/06 lists them)");
         }
+        boolean simulatePricing = c.path("simulatePricing").asBoolean(false);
+        if (simulatePricing && !priceCondition.isEmpty()) {
+            // BAPI_SALESORDER_SIMULATE takes no manual conditions: it would
+            // show SAP's own prices for an order that keeps the source's.
+            throw new ConnectorException.Invalid("simulatePricing prices the order with SAP's conditions, "
+                    + "so it cannot be combined with priceCondition, which keeps the source's prices");
+        }
         return new EccConfig(c.path("rfc").path("provider").asText(""), new LinkedHashMap<>(dest),
                 area.path("salesOrg").asText("1000"), area.path("distributionChannel").asText("10"),
                 area.path("division").asText("00"), c.path("orderType").asText("TA"), c.path("partnerRole").asText("AG"),
                 c.path("lookupByPurchaseOrder").asBoolean(true), peak, server, events,
-                new ChangePointerConfig(pageRows, settle, cpEvents), creditBlock, priceCondition);
+                new ChangePointerConfig(pageRows, settle, cpEvents), creditBlock, priceCondition, simulatePricing);
     }
 
     /** "ashost" -> "jco.client.ashost"; full property names pass through. */

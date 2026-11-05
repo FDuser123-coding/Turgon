@@ -12,7 +12,7 @@ spec:
 ---
 apiVersion: turgon.dev/v1alpha1
 kind: Plugin
-metadata: { name: sap-ecc, publisher: turgon, version: 0.5.2, certification: L0 }
+metadata: { name: sap-ecc, publisher: turgon, version: 0.5.3, certification: L0 }
 spec:
   type: connector
   runtime: container
