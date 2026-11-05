@@ -2,6 +2,7 @@ package dev.turgon.connector.sapecc;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -307,6 +308,20 @@ class EccEndpointTest {
             assertTrue(pricing.check().stream().anyMatch(c -> c.name().equals("BAPI_SALESORDER_SIMULATE") && c.ok()));
         }
         assertFalse(ecc.check().stream().anyMatch(c -> c.name().equals("BAPI_SALESORDER_SIMULATE")));
+        assertNull(object(ecc.discover(List.of()), "BAPIITEMEX"), "without simulatePricing the simulation is not used");
+        try (Endpoint pricing = new SapEccConnector().bind(config(cfg, "TURGON:pw"))) {
+            JsonNode cat = pricing.discover(List.of());
+            assertEquals("function", object(cat, "BAPI_SALESORDER_SIMULATE").path("kind").asText());
+            assertEquals(23, field(object(cat, "BAPIITEMEX"), "NET_VALUE1").path("length").asInt());
+            boolean fills = false, reads = false;
+            for (JsonNode u : cat.path("uses")) {
+                String at = u.path("object").asText() + "-" + u.path("field").asText();
+                fills |= at.equals("BAPIITEMIN-REQ_QTY") && u.path("creates").asBoolean();
+                reads |= at.equals("BAPIITEMEX-NET_VALUE1") && !u.path("creates").asBoolean()
+                        && u.path("by").asText().equals("operation create-sales-order");
+            }
+            assertTrue(fills && reads, cat.path("uses").toString());
+        }
         // SAP's simulation takes no manual conditions, so it cannot price an order that keeps the source's prices.
         var both = assertThrows(ConnectorException.Invalid.class, () -> new SapEccConnector().bind(config(
                 "{\"rfc\":{\"provider\":\"fake\"},\"simulatePricing\":true,\"priceCondition\":\"PR00\"}", "u:p")));
