@@ -78,6 +78,7 @@ jobs:
           go run ./cmd/turgon compile -c examples shopify-store-orders-to-s4 -o /dev/null
           go run ./cmd/turgon compile -c examples hubspot-won-deals-to-dynamics -o /dev/null
           go run ./cmd/turgon compile -c examples shopify-store-orders-to-netsuite -o /dev/null
+          go run ./cmd/turgon compile -c examples shopify-store-orders-to-business-central -o /dev/null
 
   console:
     runs-on: ubuntu-latest

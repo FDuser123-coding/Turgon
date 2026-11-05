@@ -344,6 +344,11 @@ configuration only: each Connection declares its events, reads and writes as HTT
   (`{{idempotencyKey}}`), quoted safely inside OData key literals. A retried write then finds its
   record. **APIs that answer 204 with no body** give the record's ID in a header
   (`idFrom: Location` or `OData-EntityId`), and the compensating delete is templated from it.
+- **APIs that can neither upsert nor take an idempotency key** (Business Central) look a retried
+  create's record up first. `existing` is a list request templated with the payload and
+  `{{idempotencyKey}}` (`$filter: "externalDocumentNumber eq '{{idempotencyKey}}'"`, quotes
+  doubled). When it lists a record, the create is not sent and that record is the result, with
+  `"existing": true`.
 - **Creates are previewed** as the request they would send, so approvers see the exact body, and a
   payload missing a field fails before anyone approves.
 - Client errors fail the step at once; rate limits and server errors are retried.
@@ -476,10 +481,10 @@ Measured against a Temporal 1.28 dev server and the fake account:
   a steward linked the contact (`turgon xref set`), `turgon retry` ran it again, and its deal got
   `erp_order_number: "8"`.
 
-### Dynamics 365 and NetSuite: ERPs through the REST connector
+### Dynamics 365, NetSuite and Business Central: ERPs through the REST connector
 
-Two more ERPs need no new connector, only configuration of `rest`
-(`examples/connections/dynamics-crm.yaml`, `netsuite-erp.yaml`):
+Three more ERPs need no new connector, only configuration of `rest`
+(`examples/connections/dynamics-crm.yaml`, `netsuite-erp.yaml`, `business-central.yaml`):
 
 - **Dynamics 365 (Dataverse Web API).**
   - **Auth:** an app registration's client credentials against Entra ID.
@@ -495,20 +500,42 @@ Two more ERPs need no new connector, only configuration of `rest`
     kept per deployment.
   - **Result:** the order's ID comes from `Location`.
   - **Events:** changed orders are read with SuiteQL (`Prefer: transient`).
+- **Dynamics 365 Business Central (API v2.0).**
+  - **Auth:** an app registration's client credentials against Entra ID, for the scope
+    `https://api.businesscentral.dynamics.com/.default`. The app is entered in Business
+    Central's *Microsoft Entra Applications* page with sales permission sets.
+  - **Creating orders:** the company is part of the base URL. An order and its lines go in one
+    `POST /salesOrders` (deep insert). Lines are items by number, through a mapping table kept per
+    deployment. A line's `unitPrice` is the shop's, and a line without one is priced from the
+    item card.
+  - **Retries:** Business Central has no upsert by an external key and takes no idempotency key.
+    The key goes into `externalDocumentNumber`, and the operation's `existing` lookup
+    (`GET /salesOrders?$filter=externalDocumentNumber eq '<key>'`) runs before the create. A
+    retried create that finds its order returns it, marked `"existing": true`, instead of making
+    a second one. `existing` is a general `rest` option for APIs like this.
+  - **Result:** the order as Business Central answers it. Its `number` goes into the Shopify
+    note (`sales-order-to-shopify-note` 1.1 takes an ERP's `number` where the result has one).
+  - **Undo:** `DELETE /salesOrders(<id>)` with `If-Match: *`.
+  - **Events:** changed orders are polled on `lastModifiedDateTime`.
 
 `hubspot-won-deals-to-dynamics` turns won HubSpot deals into Dynamics orders and records the
-order's GUID on the deal. `shopify-store-orders-to-netsuite` is the Shopify saga with NetSuite.
+order's GUID on the deal. `shopify-store-orders-to-netsuite` is the Shopify saga with NetSuite,
+and `shopify-store-orders-to-business-central` the same saga with Business Central.
 Without the systems, run the test fakes:
 
 ```sh
 go build -o bin/fakedynamics ./internal/tools/fakedynamics    # http://127.0.0.1:9700, client turgon-app / demo
 go build -o bin/fakenetsuite ./internal/tools/fakenetsuite    # http://127.0.0.1:9900, account 1234567_SB1
+go build -o bin/fakebc ./internal/tools/fakebc                # http://127.0.0.1:9800, client turgon-app / demo
 sed -i 's|https://login.microsoftonline.com/contoso.onmicrosoft.com/oauth2/v2.0/token|http://127.0.0.1:9700/oauth2/v2.0/token|; s|https://contoso.crm4.dynamics.com|http://127.0.0.1:9700|' \
   my-catalog/connections/dynamics-crm.yaml
 sed -i 's|https://1234567-sb1.suitetalk.api.netsuite.com|http://127.0.0.1:9900|' my-catalog/connections/netsuite-erp.yaml
+sed -i 's|https://login.microsoftonline.com|http://127.0.0.1:9800|; s|https://api.businesscentral.dynamics.com/v2.0|http://127.0.0.1:9800/v2.0|' \
+  my-catalog/connections/business-central.yaml
 export TURGON_SECRET_DYNAMICS_CRM_APP_REGISTRATION='{"clientId":"turgon-app","clientSecret":"demo"}'
+export TURGON_SECRET_BUSINESS_CENTRAL_APP_REGISTRATION='{"clientId":"turgon-app","clientSecret":"demo"}'
 export TURGON_SECRET_NETSUITE_ERP_TBA='{"consumerKey":"ck-demo","consumerSecret":"cs-demo","tokenId":"ti-demo","tokenSecret":"ts-demo"}'
-bin/turgon xref set --entity Customer --system shopify-store --source ada@example.com --master 1001
+bin/turgon xref set --entity Customer --system shopify-store --source ada@example.com --master 1001   # Business Central: --master 10000 (its customer number)
 bin/turgon xref set --entity Customer --system hubspot-crm --source ada@lovelace-gmbh.example \
   --master 6a1c0e2f-8b3d-4f5a-9c7e-1d2b3a4c5e6f
 ```
@@ -522,6 +549,11 @@ Measured against a Temporal 1.28 dev server and the fakes:
   shop as the line's `rate`, so the NetSuite order keeps the shop's total. A line without a price
   is priced from NetSuite's item list. Measured live with the fake account: a 420.00 shop order
   of an item NetSuite lists at 10.00 became sales order SO7331740 with a total of 420.
+- **Business Central:** a 420.00 Shopify order for an item Business Central lists at 1000.80
+  became sales order 971211 at 420, and the Shopify order's note was set to `ERP order 971211`.
+  When Shopify then refused a note (it required `tags`), the saga deleted the next order, 971212,
+  with `If-Match: *`. The retry lookup is tested against the fake (a second create returns the
+  first order, with one POST); it was not provoked live.
 
 ### SAP S/4HANA: sales orders through SAP's released APIs
 

@@ -1,0 +1,23 @@
+# A sales order in Business Central's shape. Lines are items by their
+# number; this company's numbers for the shop's SKUs are kept here (per
+# deployment). The idempotency key is the order's external document
+# number, which a retried create looks the order up by.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: sales-order-to-business-central-order
+  version: 1.0.0
+spec:
+  from: model.SalesOrder
+  to: model.SalesOrder
+  fields:
+    - { target: customerNumber,         expression: "customerId",              origin: human, confidence: 1.0 }
+    - { target: externalDocumentNumber, expression: "'SHOPIFY-' & shopifyId",  origin: human, confidence: 1.0 }
+    - { target: orderDate,              expression: "orderDate",               origin: human, confidence: 1.0 }
+    - target: bcLines
+      # A line's unitPrice is the shop's; without one Business Central uses the item card's.
+      expression: "lines.{ 'lineType': 'Item', 'lineObjectNumber': $lookup({ 'M-1': '1896-S', 'M-2': '1900-S' }, material), 'quantity': quantity, 'unitPrice': $number(price) }[]"
+      origin: human
+      confidence: 0.95
+    - { target: shopifyId,              expression: "shopifyId",               origin: human, confidence: 1.0 }
+    - { target: netValue,               expression: "netValue",                origin: human, confidence: 1.0 }
