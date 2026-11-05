@@ -32,6 +32,12 @@ temporal:
 database:
   existingSecret: ""       # Secret holding the connection URL
   existingSecretKey: url
+  # A Secret with the keys that seal the refresh tokens systems rotate
+  # (QuickBooks Online, Xero), kept in this database: "id:base64(32 bytes),...",
+  # newest first. Without it, oauth2-refresh connections cannot run.
+  tokenKeys:
+    existingSecret: ""
+    key: tokenKeys
   cloudNativePG:
     enabled: false
     instances: 1           # 3 for the medium and large profiles

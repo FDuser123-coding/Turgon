@@ -76,6 +76,7 @@ func mcpCmd() *cobra.Command {
 
 			ctx := cmd.Context()
 			var rec audit.Recorder
+			var statePool *pgxpool.Pool
 			if auditPath == "postgres" {
 				if dbURL == "" {
 					return errors.New(`--audit-log postgres needs --database-url (or TURGON_DATABASE_URL)`)
@@ -88,7 +89,7 @@ func mcpCmd() *cobra.Command {
 				if err := pgstore.Migrate(ctx, pool); err != nil {
 					return err
 				}
-				rec = pgstore.NewAuditLog(pool)
+				rec, statePool = pgstore.NewAuditLog(pool), pool
 			} else {
 				l, f, err := audit.OpenFile(auditPath)
 				if err != nil {
@@ -99,6 +100,9 @@ func mcpCmd() *cobra.Command {
 			}
 			secretsFrom, err := openSecrets()
 			if err != nil {
+				return err
+			}
+			if secretsFrom, err = withTokens(secretsFrom, statePool); err != nil {
 				return err
 			}
 			guard, err := pushGuard()

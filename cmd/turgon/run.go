@@ -225,6 +225,9 @@ func runCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if secretsFrom, err = withTokens(secretsFrom, pool); err != nil {
+				return err
+			}
 			// Channels come from TURGON_NOTIFY_* variables (the webhook URLs
 			// are credentials).
 			hub, err := notify.FromEnv(consoleURL, &http.Client{Timeout: 15 * time.Second})

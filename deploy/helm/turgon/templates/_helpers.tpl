@@ -93,6 +93,11 @@ app.kubernetes.io/instance: {{ .Release.Name }}
   valueFrom:
     secretKeyRef: { name: {{ . }}, key: {{ $.Values.temporal.payloadKeysKey }}, optional: true }
 {{- end }}
+{{- with .Values.database.tokenKeys.existingSecret }}
+- name: TURGON_TOKEN_KEYS
+  valueFrom:
+    secretKeyRef: { name: {{ . }}, key: {{ $.Values.database.tokenKeys.key }} }
+{{- end }}
 {{- end -}}
 
 {{/* Files every Turgon container may need: the Temporal TLS files, and
