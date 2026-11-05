@@ -648,6 +648,38 @@ Measured against a Temporal 1.28 dev server, Postgres, `fakeshop` and `fakeqbo`:
   `pkg/mapping`. The first mapping of `docNumber` with `~>` worked, and the second failed with
   "substring takes 3 arguments, got 4".
 
+### Xero: the same refresh tokens, and Xero's own conventions
+
+Xero (`examples/connections/xero.yaml`) authorizes an app with the same kind of rotating refresh
+token, so it uses `oauth2-refresh` and the token vault exactly as QuickBooks does. Its API needed
+four general additions to `rest`:
+
+- **List indexes in paths:** Xero answers every write and read with a list
+  (`{"Invoices": [...]}`), so a path may index one: `result: Invoices.0`, and a read's field
+  `Contacts.0.Name`.
+- **`constants`:** fixed field values sent with the mapped ones. A create sends
+  `Type: ACCREC, Status: AUTHORISED`, and the undo posts `Status: VOIDED` to
+  `/Invoices/{{InvoiceID}}` from the create's result.
+- **`positionFormat: msjson`:** Xero dates records as `/Date(1730803200000+0000)/`.
+- **Templated event headers, with `{{positionTime}}`:** changed invoices are read with
+  `If-Modified-Since: {{positionTime}}`, the cursor as a UTC time. Xero includes records
+  modified at that time, and the poll skips any it has already passed on.
+
+Every call names the organisation in the `xero-tenant-id` header. Writes carry Xero's
+`Idempotency-Key`, so a retried create is answered with the first one's invoice. The invoice's
+`InvoiceNumber` goes into the Shopify note (`sales-order-to-shopify-note` 1.4).
+`shopify-store-orders-to-xero` is the Shopify saga with it. Its peak is 0.5 orders a second,
+because Xero allows 60 calls a minute per organisation. The fake is `internal/tools/fakexero`
+(http://127.0.0.1:9880, client `xero-demo`), which prints the first refresh token as `fakeqbo`
+does.
+
+Measured against a Temporal 1.28 dev server, Postgres, `fakeshop` and `fakexero`:
+- **One refresh in all:** `turgon check` refreshed once, and the worker used the stored access
+  token.
+- **The order:** a 420.00 Shopify order became authorised invoice INV-3761, noted on the Shopify
+  order as `ERP order INV-3761`.
+- **The undo:** when Shopify refused the next note, the saga voided its invoice, INV-3762.
+
 ### Odoo: quotations through the JSON-2 API
 
 The `odoo` connector (`examples/connectors/odoo.yaml`) reaches Odoo 19 and later only through its

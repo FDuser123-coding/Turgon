@@ -37,6 +37,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/qbotest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/shoptest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/stripetest"
+	"github.com/fduser123-coding/turgon/pkg/connector/rest/xerotest"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce"
 	"github.com/fduser123-coding/turgon/pkg/connector/salesforce/sftest"
 	"github.com/fduser123-coding/turgon/pkg/connector/sap"
@@ -1254,6 +1255,64 @@ func TestShopifyRejectionVoidsTheQuickBooksReceipt(t *testing.T) {
 	}
 	if r := q.ReceiptByDocNumber(fmt.Sprintf("SHOP%d", id)); r == nil || r["TotalAmt"] != 0.0 || r["PrivateNote"] != "Voided" {
 		t.Fatalf("the QuickBooks receipt was not voided after Shopify rejected the note: %v", r)
+	}
+}
+
+// newXeroFixture runs the shopify-store-orders-to-xero recipe against the
+// fake Shopify store and the fake Xero organisation.
+func newXeroFixture(t *testing.T) (*fixture, *shoptest.Shop, *xerotest.Xero) {
+	t.Helper()
+	shop := shoptest.New("shpat_test")
+	t.Cleanup(shop.Close)
+	x, seed := xerotest.New("xero-app", "s3cret")
+	t.Cleanup(x.Close)
+	f := newFixtureFor(t, "shopify-store-orders-to-xero", connector.StaticSecrets{
+		"openbao://shopify-store/token": "shpat_test",
+		"openbao://xero/oauth":          `{"clientId": "xero-app", "clientSecret": "s3cret", "refreshToken": "` + seed + `"}`,
+	}, func(cfg string) string {
+		cfg = strings.ReplaceAll(cfg, "https://turgon-demo.myshopify.com/admin/api/"+shoptest.Version, shop.URL())
+		cfg = strings.ReplaceAll(cfg, "https://identity.xero.com", x.URL())
+		return strings.ReplaceAll(cfg, "https://api.xero.com", x.URL())
+	})
+	if err := f.store.PutXref(context.Background(), "Customer", "shopify-store", "ada@example.com", xerotest.Lovelace); err != nil {
+		t.Fatal(err)
+	}
+	return f, shop, x
+}
+
+// A paid shop order becomes an authorised Xero invoice, and its invoice
+// number goes on the Shopify order.
+func TestShopifyOrderBecomesXeroInvoice(t *testing.T) {
+	f, shop, x := newXeroFixture(t)
+	id := shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-11-05T09:30:00-04:00",
+		"subtotal_price": "420.00", "currency": "usd", "line_items": []any{map[string]any{"sku": "M-1", "quantity": 2, "price": "210.00"}},
+	})
+	if _, err, _ := f.run(f.dispatch()[0], approve("04-write")); err != nil {
+		t.Fatal(err)
+	}
+	inv := x.InvoiceByReference(fmt.Sprintf("Shopify SHOPIFY-%d", id))
+	if inv == nil || inv["Total"] != 420.0 || inv["Status"] != "AUTHORISED" || inv["Contact"].(map[string]any)["ContactID"] != xerotest.Lovelace {
+		t.Fatalf("Xero invoice = %v", inv)
+	}
+	if got := shop.Order(id)["note"]; got != "ERP order "+inv["InvoiceNumber"].(string) {
+		t.Fatalf("Shopify note = %v", got)
+	}
+}
+
+func TestShopifyRejectionVoidsTheXeroInvoice(t *testing.T) {
+	f, shop, x := newXeroFixture(t)
+	id := shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-11-05T09:30:00-04:00",
+		"subtotal_price": "235.00", "currency": "usd", "line_items": []any{map[string]any{"sku": "M-2", "quantity": 1, "price": "235.00"}},
+	})
+	shop.FailUpdates = true
+	_, err, _ := f.run(f.dispatch()[0], approve("04-write"))
+	if errType(err) != ErrTypeInvalid {
+		t.Fatalf("err = %v (%s)", err, errType(err))
+	}
+	if inv := x.InvoiceByReference(fmt.Sprintf("Shopify SHOPIFY-%d", id)); inv == nil || inv["Status"] != "VOIDED" {
+		t.Fatalf("the Xero invoice was not voided after Shopify rejected the note: %v", inv)
 	}
 }
 

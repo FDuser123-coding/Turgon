@@ -1,0 +1,69 @@
+# Accounting on Xero, through the Accounting API (2.0) with an app a person
+# authorized for the organisation (OAuth 2.0 with offline_access, scopes
+# accounting.transactions and accounting.contacts). The secret is that
+# authorization: {"clientId", "clientSecret", "refreshToken"}. Xero rotates
+# the refresh token on every refresh, so the secret only seeds it: Turgon
+# keeps the current one sealed in its database (TURGON_TOKEN_KEYS). Every
+# call names the organisation in xero-tenant-id. A paid shop order becomes an
+# authorised sales invoice; writes carry Xero's Idempotency-Key, so a retried
+# create is answered with the first one's invoice. A saga's undo voids the
+# invoice. Changed invoices are read with If-Modified-Since.
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata:
+  name: xero
+  description: "Xero, through the Accounting API (OAuth 2.0, rotating refresh token)."
+spec:
+  connector: rest@^1
+  secretRef: openbao://xero/oauth
+  entities: [SalesOrder, Customer]
+  # Xero allows 60 calls a minute and 5 at once per organisation.
+  limits: { maxConcurrentCalls: 4, requestsPerSecond: 1 }
+  events:
+    - { name: Invoice.Changed, entity: SalesOrder, interface: polling }
+  operations:
+    - { name: create-invoice, entity: SalesOrder, direction: write, interface: rest-api, risk: high, compensation: void-invoice }
+    - { name: void-invoice, entity: SalesOrder, direction: write, interface: rest-api, risk: high }
+    - { name: get-customer, entity: Customer, direction: read, interface: rest-api, risk: read }
+  config:
+    baseURL: https://api.xero.com/api.xro/2.0
+    auth:
+      type: oauth2-refresh
+      tokenURL: https://identity.xero.com/connect/token
+    headers: { xero-tenant-id: 70784a63-d24b-46a9-a4db-0e70a274b056 }
+    checkPath: /Organisation
+    events:
+      Invoice.Changed:
+        path: /Invoices
+        params: { where: 'Type=="ACCREC"', order: "UpdatedDateUTC ASC" }
+        # Xero dates records as /Date(ms)/ and takes the time it filters on
+        # as UTC "2009-11-12T00:00:00", modified at or after it.
+        headers: { If-Modified-Since: "{{positionTime}}" }
+        items: Invoices
+        id: InvoiceID
+        position: UpdatedDateUTC
+        positionFormat: msjson
+    operations:
+      create-invoice:
+        method: POST
+        path: /Invoices
+        idempotencyHeader: Idempotency-Key
+        constants: { Type: ACCREC, Status: AUTHORISED }
+        fields:
+          Contact.ContactID: contactId
+          Date: orderDate
+          DueDate: dueDate
+          Reference: reference
+          LineItems: xeroLines
+        result: Invoices.0
+      # Voiding an authorised invoice: its ID from the create's result.
+      void-invoice:
+        method: POST
+        path: "/Invoices/{{InvoiceID}}"
+        idempotencyHeader: Idempotency-Key
+        constants: { Status: VOIDED }
+        result: Invoices.0
+      get-customer:
+        method: GET
+        path: "/Contacts/{{id}}"
+        fields: { Contacts.0.Name: name, Contacts.0.EmailAddress: email, Contacts.0.ContactStatus: status }
