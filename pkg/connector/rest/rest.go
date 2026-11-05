@@ -131,7 +131,9 @@ type Operation struct {
 	Fields map[string]string `json:"fields,omitempty"`
 	// Wrap nests the body under a key, e.g. {"order": {...}}.
 	Wrap string `json:"wrap,omitempty"`
-	// BodyFormat is "json" (default) or "form": form-encoded, with nested
+	// BodyFormat is "json" (default), "none" (no body: an action such as
+	// Business Central's or SAP Business One's POST .../Cancel, whose
+	// payload only fills the path) or "form": form-encoded, with nested
 	// fields as metadata[key] and a null sent as "" (which Stripe reads
 	// as "unset").
 	BodyFormat string `json:"bodyFormat,omitempty"`
@@ -295,12 +297,16 @@ func (c Config) validate() error {
 		}
 		switch op.BodyFormat {
 		case "", "json":
+		case "none":
+			if len(op.Fields) > 0 || op.Capture != nil || op.Restore {
+				return fmt.Errorf("operation %s: a request without a body has no fields", name)
+			}
 		case "form":
 			if op.NullValue != nil {
 				return fmt.Errorf("operation %s: a form body sends null as \"\" already; nullValue is for JSON bodies", name)
 			}
 		default:
-			return fmt.Errorf("operation %s: bodyFormat must be json or form", name)
+			return fmt.Errorf("operation %s: bodyFormat must be json, form or none", name)
 		}
 	}
 	return nil
@@ -757,6 +763,9 @@ func (op Operation) values(doc map[string]any) (map[string]any, error) {
 
 // request builds the request body from API field values.
 func (op Operation) request(values map[string]any) any {
+	if op.BodyFormat == "none" {
+		return nil
+	}
 	var body any = values
 	if len(op.Fields) > 0 || op.Restore {
 		body = nest(values)

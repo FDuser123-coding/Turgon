@@ -1,0 +1,27 @@
+# A sales order in SAP Business One's shape. Lines are items by ItemCode;
+# this company's codes for the shop's SKUs are kept here (per deployment).
+# The customer is the master record's ID, the business partner's CardCode.
+# NumAtCard carries the idempotency key, which a retried create looks the
+# order up by.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: sales-order-to-business-one-order
+  version: 1.0.0
+spec:
+  from: model.SalesOrder
+  to: model.SalesOrder
+  fields:
+    - { target: customerCode, expression: "customerId",                origin: human, confidence: 1.0 }
+    - { target: orderDate,    expression: "orderDate",                 origin: human, confidence: 1.0 }
+    # Delivery is due the day the order is placed; the ERP plans from there.
+    - { target: dueDate,      expression: "orderDate",                 origin: human, confidence: 0.95 }
+    - { target: reference,    expression: "'SHOPIFY-' & $string(shopifyId)", origin: human, confidence: 1.0 }
+    - { target: comments,     expression: "'Shopify order ' & externalId", origin: human, confidence: 0.95 }
+    - target: b1Lines
+      # A line's UnitPrice is the shop's; without one Business One uses its price list.
+      expression: "lines.{ 'ItemCode': $lookup({ 'M-1': 'A00001', 'M-2': 'A00002' }, material), 'Quantity': quantity, 'UnitPrice': $number(price) }[]"
+      origin: human
+      confidence: 0.95
+    - { target: shopifyId,    expression: "shopifyId",                 origin: human, confidence: 1.0 }
+    - { target: netValue,     expression: "netValue",                  origin: human, confidence: 1.0 }
