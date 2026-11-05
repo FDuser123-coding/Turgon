@@ -703,9 +703,18 @@ declares what it uses:
   pricing with the source's. `shopify-store-orders-to-odoo` does this.
 - **Result:** the quotation's ID and number (`S00042`), which goes into the Shopify note.
 - **Undo:** `action_cancel`, so the quotation stays visible as cancelled, or `unlink`. Either is
-  confirmed by reading the quotation back.
-- **Events:** changed records are read with `search_read` on `write_date`. Odoo stamps it to the
-  second, so a poll never ends inside a second.
+  confirmed by reading the quotation back. `action_cancel` is sent with the context
+  `disable_cancel_warning`, so a quotation sent or confirmed in the meantime is cancelled rather
+  than answered with Odoo's confirmation wizard. Any other answer that is an action fails the undo,
+  naming it. A record deleted in the meantime counts as gone.
+- **The reference field** must be a char field that holds the whole key. Odoo would cut a longer
+  key, and the retry's lookup would then miss it. A mapped field missing from the payload is not
+  sent, so Odoo's default applies.
+- **Events:** changed records are read with `search_read` in `(write_date, id)` order. The cursor
+  is both, so a poll may end inside a second and the next one reads the rest of it, however many
+  records share it. A record younger than `settleSeconds` (60 by default) waits for a later
+  poll: Odoo stamps `write_date` when its transaction starts, so a long transaction commits
+  records stamped before others already read.
 - **Reads:** `get-customer` reads a partner. A many2one field reads as its ID.
 - **Check** signs in (`res.users/context_get`), reads every model's fields with `fields_get`,
   and counts its records, so a misspelled field, a missing app or a user without rights fails

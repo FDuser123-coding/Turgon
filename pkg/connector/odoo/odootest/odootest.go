@@ -138,6 +138,15 @@ func (o *Odoo) StartAt(number int, now func() time.Time) {
 	o.next, o.now = number, now
 }
 
+// SetState sets an order's state, as confirming it in Odoo would.
+func (o *Odoo) SetState(id int64, state string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if rec := o.records["sale.order"][id]; rec != nil {
+		rec["state"] = state
+	}
+}
+
 // SetRequired makes a field required, as a module or Studio would.
 func (o *Odoo) SetRequired(model, name string) {
 	o.mu.Lock()
@@ -379,6 +388,11 @@ func (o *Odoo) dispatch(model, method string, args map[string]any) (any, error) 
 				delete(o.records[model], id)
 				continue
 			}
+			ctx, _ := args["context"].(map[string]any)
+			if rec["state"] != "draft" && ctx["disable_cancel_warning"] != true {
+				// Odoo 16+: a sent or confirmed order gets the cancel wizard.
+				return map[string]any{"type": "ir.actions.act_window", "res_model": "sale.order.cancel", "view_mode": "form", "target": "new"}, nil
+			}
 			rec["state"] = "cancel"
 			rec["write_date"] = o.stamp()
 		}
@@ -532,35 +546,67 @@ func (o *Odoo) createOrder(vals map[string]any) (int64, error) {
 	return id, nil
 }
 
-// search evaluates a domain: terms [field, op, value] (=, !=, >, <, >=, <=,
-// in, ilike), ANDed; "&" is accepted, "|" and "!" are not supported.
+// search evaluates a domain as Odoo does: terms [field, op, value] (=, !=,
+// >, <, >=, <=, in, ilike) combined by the prefix operators "&" and "|"
+// (two operands) and "!" (one); consecutive expressions are ANDed.
 func (o *Odoo) search(model string, domain any) ([]int64, error) {
 	terms, _ := domain.([]any)
-	var conds [][]any
-	for _, t := range terms {
-		switch x := t.(type) {
+	type pred func(map[string]any) bool
+	var parse func(i int) (pred, int, error)
+	parse = func(i int) (pred, int, error) {
+		if i >= len(terms) {
+			return nil, 0, validation("Invalid domain: an operator lacks an operand")
+		}
+		switch x := terms[i].(type) {
 		case string:
-			if x != "&" {
-				return nil, validation("the fake supports no domain operator %q", x)
+			switch x {
+			case "!":
+				p, j, err := parse(i + 1)
+				if err != nil {
+					return nil, 0, err
+				}
+				return func(r map[string]any) bool { return !p(r) }, j, nil
+			case "&", "|":
+				a, j, err := parse(i + 1)
+				if err != nil {
+					return nil, 0, err
+				}
+				b, k, err := parse(j)
+				if err != nil {
+					return nil, 0, err
+				}
+				if x == "&" {
+					return func(r map[string]any) bool { return a(r) && b(r) }, k, nil
+				}
+				return func(r map[string]any) bool { return a(r) || b(r) }, k, nil
 			}
+			return nil, 0, validation("Invalid domain operator %q", x)
 		case []any:
 			if len(x) != 3 {
-				return nil, validation("Invalid domain term %v", x)
+				return nil, 0, validation("Invalid domain term %v", x)
 			}
 			f, _ := x[0].(string)
 			if _, ok := o.models[model][f]; !ok {
-				return nil, validation("Invalid field %s.%s in leaf %v", model, f, x)
+				return nil, 0, validation("Invalid field %s.%s in leaf %v", model, f, x)
 			}
-			conds = append(conds, x)
-		default:
-			return nil, validation("Invalid domain term %v", t)
+			op := fmt.Sprint(x[1])
+			return func(r map[string]any) bool { return match(r[f], op, x[2]) }, i + 1, nil
 		}
+		return nil, 0, validation("Invalid domain term %v", terms[i])
+	}
+	var all []pred
+	for i := 0; i < len(terms); {
+		p, j, err := parse(i)
+		if err != nil {
+			return nil, err
+		}
+		all, i = append(all, p), j
 	}
 	var ids []int64
 	for id, rec := range o.records[model] {
 		ok := true
-		for _, c := range conds {
-			if !match(rec[c[0].(string)], fmt.Sprint(c[1]), c[2]) {
+		for _, p := range all {
+			if !p(rec) {
 				ok = false
 				break
 			}

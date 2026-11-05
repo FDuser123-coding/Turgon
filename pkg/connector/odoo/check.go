@@ -80,6 +80,7 @@ func (c *Conn) uses(ctx context.Context) ([]use, error) {
 // every configured field must exist, so a typo, a missing app (Sales) or
 // a key whose user may not read the model fails here, not on the first order.
 func (c *Conn) Check(ctx context.Context) []connector.CheckResult {
+	c.Refresh() // check the fields as they are now
 	var out []connector.CheckResult
 	var who map[string]any
 	if err := c.call(ctx, "res.users", "context_get", nil, &who); err != nil {
