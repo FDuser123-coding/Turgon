@@ -6,6 +6,8 @@
 // /data/OpportunityChangeEvent. "account <AccountId> <ERP number> <name>"
 // creates an account, and "accounts <n>" creates n numbered ones, for
 // loading cross-references with the Bulk API (turgon xref load).
+// "amount <OpportunityId> <Amount>" changes a deal, as a salesperson
+// correcting it would.
 package main
 
 import (
@@ -54,6 +56,20 @@ func main() {
 			fmt.Fprintf(os.Stderr, "account %s: ERP customer %s\n", f[1], f[2])
 			continue
 		}
+		if len(f) == 3 && f[0] == "amount" {
+			opp := sf.Get("Opportunity", f[1])
+			if len(opp) == 0 {
+				fmt.Fprintf(os.Stderr, "no opportunity %s\n", f[1])
+				continue
+			}
+			amount, _ := strconv.ParseFloat(f[2], 64)
+			opp["Amount"] = amount
+			delete(opp, "Id")
+			delete(opp, "SystemModstamp")
+			sf.Put("Opportunity", f[1], opp, time.Now())
+			fmt.Fprintf(os.Stderr, "deal %s changed: %.2f\n", f[1], amount)
+			continue
+		}
 		if len(f) == 2 && f[0] == "reject" {
 			mu.Lock()
 			rejected[f[1]] = true
@@ -90,7 +106,7 @@ func main() {
 			continue
 		}
 		if len(f) != 2 {
-			fmt.Fprintln(os.Stderr, "usage: <AccountId> <Amount> | account <AccountId> <ERP number> <name> | accounts <n> | reject <RecordId> | readonly <SObject.Field> | managed <Name> <topic> [EARLIEST] | committed <Name>")
+			fmt.Fprintln(os.Stderr, "usage: <AccountId> <Amount> | amount <OpportunityId> <Amount> | account <AccountId> <ERP number> <name> | accounts <n> | reject <RecordId> | readonly <SObject.Field> | managed <Name> <topic> [EARLIEST] | committed <Name>")
 			continue
 		}
 		amount, _ := strconv.ParseFloat(f[1], 64)

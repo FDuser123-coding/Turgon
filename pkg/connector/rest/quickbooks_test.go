@@ -130,7 +130,7 @@ func TestQuickBooksReceiptRetryVoidAndQuery(t *testing.T) {
 		t.Fatalf("retry: %s, %v, receipts %d", again, err, q.Receipts())
 	}
 	evs, err := c.Poll(ctx, "SalesReceipt.Changed", 0, 10)
-	if err != nil || len(evs) != 1 || evs[0].ID != r.Id {
+	if err != nil || len(evs) != 1 || connector.RecordID(evs[0].ID) != r.Id {
 		t.Fatalf("changed receipts = %+v, %v", evs, err)
 	}
 	if _, err := c.Commit(ctx, "void-sales-receipt", "SHOPIFY-1#compensate", res); err != nil {

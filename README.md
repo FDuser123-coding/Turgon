@@ -1321,6 +1321,29 @@ and `stripe` take a `webhook` block in their config too (`shopify-admin.yaml`,
   into the same inbox, to catch deliveries the provider gave up on. The inbox keeps each
   event ID once, so an event that arrives both ways, or is redelivered, starts one run, and a
   run that ended (an approval that was rejected) is never started again.
+- **A change is its own event.** Feeds of changed records (Odoo, Salesforce and SAP OData
+  polling, and REST events whose `position` is another field than their `id`) name each event
+  by the record and its change, as `42@1762369200`. A record changed again after its first run
+  starts a new run, even when that run succeeded or its approval was rejected; the same change
+  read twice still starts one. REST takes `versioned: false` to keep the ID alone, and a
+  versioned event's webhook items must carry the position field.
+  - **Writes stay idempotent by their own keys.** A run for a later change that writes under
+    the same `idempotencyKey` (`{{ source.Id }}`) finds the earlier write and does not write
+    again, nor ask anyone to approve it.
+  - **Writes that should follow every change** need a key that names the change, such as
+    `{{ source.Id }}-{{ source.SystemModstamp }}`.
+  - **Two changes while a write waits for approval** each ask, since neither has written yet.
+    Whichever is approved second finds the first one's write.
+  - **A filter keeps a recipe's own write-back from coming back.**
+    `salesforce-prod` polls won deals with `ERP_Order_Number__c = null`, so the ERP number the
+    recipe writes back is not read as one more change.
+  - **Measured live** against a Temporal 1.28 dev server and `fakesf`, whose
+    `amount <OpportunityId> <Amount>` changes a deal:
+    - A won deal's approval was rejected. Its corrected amount started a new run, which was
+      approved and made one ERP order.
+    - With the filter, later changes started nothing.
+    - Without it, two later changes each started a run. Each run recorded two
+      `writeback.duplicate` and ended without asking anyone, and there was still one order.
 - A worker without `--webhook-listen` polls as before and needs no signing secret. A worker with
   it refuses to start while a configured signing secret is not set, and names it.
 
