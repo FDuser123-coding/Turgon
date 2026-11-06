@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -294,7 +295,7 @@ func TestTimestampCursorNeverSplitsASecond(t *testing.T) {
 		t.Fatal(err)
 	}
 	// The page is full and b and c share a timestamp: only a is taken now.
-	if len(evs) != 1 || evs[0].ID != "a" || gotSince != "1970-01-01T00:00:00.000Z" {
+	if len(evs) != 1 || evs[0].ID != "a@"+strconv.FormatInt(evs[0].Position, 10) || gotSince != "1970-01-01T00:00:00.000Z" {
 		t.Fatalf("events %+v, since %q", evs, gotSince)
 	}
 }

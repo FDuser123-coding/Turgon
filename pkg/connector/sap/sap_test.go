@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest"
 	"github.com/fduser123-coding/turgon/pkg/connector/sap"
 	"github.com/fduser123-coding/turgon/pkg/connector/sap/saptest"
@@ -191,7 +192,7 @@ func TestPollInChangeOrder(t *testing.T) {
 	}
 	// A page of 3 ends inside the second timestamp's pair: the batch stops
 	// before it.
-	if len(evs) != 2 || evs[0].ID != ids[0] || evs[1].ID != ids[1] {
+	if len(evs) != 2 || connector.RecordID(evs[0].ID) != ids[0] || connector.RecordID(evs[1].ID) != ids[1] {
 		t.Fatalf("first batch = %v", evs)
 	}
 	var payload map[string]any
@@ -205,11 +206,11 @@ func TestPollInChangeOrder(t *testing.T) {
 	}
 	// Again a full page: the order alone at the last timestamp waits, as
 	// more might share it.
-	if len(rest) != 2 || rest[0].ID != ids[2] || rest[1].ID != ids[3] {
+	if len(rest) != 2 || connector.RecordID(rest[0].ID) != ids[2] || connector.RecordID(rest[1].ID) != ids[3] {
 		t.Fatalf("second batch = %v", rest)
 	}
 	last, err := conn.Poll(ctx, "SalesOrder.Changed", rest[1].Position, 3)
-	if err != nil || len(last) != 1 || last[0].ID != ids[4] {
+	if err != nil || len(last) != 1 || connector.RecordID(last[0].ID) != ids[4] {
 		t.Fatalf("third batch = %v, %v", last, err)
 	}
 	rest = append(rest, last...)
@@ -217,7 +218,7 @@ func TestPollInChangeOrder(t *testing.T) {
 	clk.set(base.Add(time.Hour))
 	s4.Change(ids[0], "SalesOrderType", "OR")
 	again, err := conn.Poll(ctx, "SalesOrder.Changed", rest[2].Position, 3)
-	if err != nil || len(again) != 1 || again[0].ID != ids[0] {
+	if err != nil || len(again) != 1 || connector.RecordID(again[0].ID) != ids[0] {
 		t.Fatalf("after a change: %v, %v", again, err)
 	}
 }

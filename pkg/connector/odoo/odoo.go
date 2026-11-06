@@ -505,7 +505,7 @@ func toEvent(name string, e Event, rec map[string]any) (connector.Event, error) 
 	if n <= 0 || n >= 1<<idBits {
 		return connector.Event{}, fmt.Errorf("odoo: %s record ID %s is outside the positions' range", e.Model, id)
 	}
-	return connector.Event{ID: id, Position: position(t, n), Name: name, Payload: payload}, nil
+	return connector.Event{ID: connector.VersionID(id, t.Unix()), Position: position(t, n), Name: name, Payload: payload}, nil
 }
 
 func (c *Conn) operation(name, action string) (Operation, error) {

@@ -81,7 +81,7 @@ func TestPollPagesAndNeverSplitsATimestamp(t *testing.T) {
 func ids(evs []connector.Event) []string {
 	var out []string
 	for _, e := range evs {
-		out = append(out, e.ID)
+		out = append(out, connector.RecordID(e.ID))
 	}
 	return out
 }

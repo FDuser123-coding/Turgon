@@ -78,6 +78,11 @@ type Event struct {
 	ID string `json:"id,omitempty"`
 	// Position is the item field ordering items (default: the ID field).
 	Position string `json:"position,omitempty"`
+	// Versioned names each event by its item's ID and position
+	// (connector.VersionID), so a record changed again starts a new run.
+	// Default: true when Position is another field than ID, as in a feed of
+	// changed records; false keeps the ID alone.
+	Versioned *bool `json:"versioned,omitempty"`
 	// PositionFormat is "number" (default), "rfc3339", "unix" (seconds) or
 	// "msjson" (Microsoft's JSON date, "/Date(1730803200000+0000)/", as
 	// Xero answers). {{position}} renders in it; {{positionTime}} is always
@@ -98,6 +103,14 @@ type Event struct {
 	// that listens for webhooks; the list request then reconciles what was
 	// not delivered.
 	Webhook *WebhookConfig `json:"webhook,omitempty"`
+}
+
+// versioned reports whether the event's IDs name the item's version.
+func (e Event) versioned() bool {
+	if e.Versioned != nil {
+		return *e.Versioned
+	}
+	return e.Position != "" && e.Position != or(e.ID, "id")
 }
 
 // Pagination is cursor paging by the last item: the next page is
@@ -569,6 +582,9 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 			payload, err := json.Marshal(item)
 			if err != nil {
 				return nil, err
+			}
+			if e.versioned() {
+				id = connector.VersionID(id, pos)
 			}
 			events = append(events, connector.Event{ID: id, Position: pos, Name: event, Payload: payload})
 		}

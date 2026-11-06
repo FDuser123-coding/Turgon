@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -24,7 +25,10 @@ import (
 
 // Event is one business event read from a source system.
 type Event struct {
-	// ID is unique within the source and stable across re-reads.
+	// ID is unique within the source and stable across re-reads. The
+	// engine starts one run per ID, so an event that reports a record's
+	// change names that version (see VersionID): each change starts its
+	// own run, and the same change read twice starts one.
 	ID string `json:"id"`
 	// Position orders events within a source; cursors store it.
 	Position int64           `json:"position"`
@@ -236,4 +240,25 @@ func NetworkFix(err error, target string) string {
 		return "The credentials were rejected. Check the user and password in the secret."
 	}
 	return ""
+}
+
+// VersionID names one version of a record: its ID and the change's
+// position (a modification time), as in 42@1762369200. A change feed's
+// events use it, so a record changed again after its first run succeeded
+// starts a new run instead of being taken for the same event. Writes stay
+// idempotent by their own keys, so a run for a change that writes nothing
+// new finds the earlier write.
+func VersionID(id string, version int64) string {
+	return id + "@" + strconv.FormatInt(version, 10)
+}
+
+// RecordID is the record a VersionID names: id@version gives id. Other
+// IDs are returned as they are.
+func RecordID(eventID string) string {
+	if i := strings.LastIndexByte(eventID, '@'); i > 0 {
+		if _, err := strconv.ParseInt(eventID[i+1:], 10, 64); err == nil {
+			return eventID[:i]
+		}
+	}
+	return eventID
 }
