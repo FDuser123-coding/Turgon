@@ -94,6 +94,25 @@ function ApprovalCard({
         ) : null}
         <dt>If undone</dt>
         <dd className="mono">{req.compensation || "—"}</dd>
+        {p.waiting?.length ? (
+          <>
+            <dt>Newer changes</dt>
+            <dd>
+              {p.waiting.map((w, i) => (
+                <span key={w}>
+                  {i > 0 ? ", " : ""}
+                  <Link to={`/runs/${w}`} className="mono">
+                    {w}
+                  </Link>
+                </span>
+              ))}{" "}
+              <span className="muted small">
+                {p.waiting.length === 1 ? "waits" : "wait"} on this decision: approving writes this version; rejecting
+                lets the newest change ask with its own data.
+              </span>
+            </dd>
+          </>
+        ) : null}
       </dl>
 
       <PreviewTable preview={p.preview} />

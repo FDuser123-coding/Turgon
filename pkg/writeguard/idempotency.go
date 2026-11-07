@@ -27,9 +27,10 @@ type Store interface {
 
 // MemoryStore is an in-process Store.
 type MemoryStore struct {
-	mu       sync.Mutex
-	done     map[string]Outcome
-	inflight map[string]bool
+	mu        sync.Mutex
+	done      map[string]Outcome
+	inflight  map[string]bool
+	approvals map[string]*openApproval
 }
 
 func NewMemoryStore() *MemoryStore {

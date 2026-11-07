@@ -228,6 +228,26 @@ func (x *Activities) PrepareWrite(ctx context.Context, in PrepareInput) (Prepare
 	return PrepareOutput{Request: req, Prepared: p}, nil
 }
 
+// OpenApproval records the run's request for a write's approval, or
+// returns the run whose request for it is open. Without a ledger every run
+// asks, as before.
+func (x *Activities) OpenApproval(_ context.Context, in LedgerInput) (string, error) {
+	l := x.Guard.Ledger()
+	if l == nil {
+		return "", nil
+	}
+	return l.OpenApproval(in.Key, in.Run, in.Until)
+}
+
+// CloseApproval ends the run's request and returns the runs to wake.
+func (x *Activities) CloseApproval(_ context.Context, in LedgerInput) ([]string, error) {
+	l := x.Guard.Ledger()
+	if l == nil {
+		return nil, nil
+	}
+	return l.CloseApproval(in.Key, in.Run)
+}
+
 // CommitWrite runs the guard's second phase.
 func (x *Activities) CommitWrite(ctx context.Context, in CommitInput) (writeguard.Outcome, error) {
 	out, err := x.Guard.Commit(ctx, in.Request, in.Approval)

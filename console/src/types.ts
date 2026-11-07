@@ -36,6 +36,8 @@ export interface PendingApproval {
   preview?: unknown;
   reasons?: string[];
   since: string;
+  // Runs for later changes of the same record that wait on this decision.
+  waiting?: string[];
 }
 
 export interface RunSummary {

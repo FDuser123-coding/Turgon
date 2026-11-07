@@ -408,3 +408,34 @@ func TestDryRunAmountMustMatch(t *testing.T) {
 		t.Fatalf("no dry run: %+v", p)
 	}
 }
+
+func TestMemoryLedgerKeepsOneRequestPerWrite(t *testing.T) {
+	s := NewMemoryStore()
+	soon := time.Now().Add(time.Hour)
+	if h, _ := s.OpenApproval("k", "a", soon); h != "" {
+		t.Fatalf("first: %q", h)
+	}
+	if h, _ := s.OpenApproval("k", "a", soon); h != "" {
+		t.Fatalf("the holder again: %q", h)
+	}
+	for _, run := range []string{"b", "c", "b"} {
+		if h, _ := s.OpenApproval("k", run, soon); h != "a" {
+			t.Fatalf("%s: holder %q", run, h)
+		}
+	}
+	if w, _ := s.CloseApproval("k", "c"); w != nil {
+		t.Fatalf("a waiter closing: %v", w)
+	}
+	if w, _ := s.CloseApproval("k", "a"); len(w) != 1 || w[0] != "b" {
+		t.Fatalf("waiters %v", w)
+	}
+	if h, _ := s.OpenApproval("k", "b", soon); h != "" {
+		t.Fatalf("after close: %q", h)
+	}
+	// A request past its time is taken over, with its waiters.
+	_, _ = s.OpenApproval("x", "old", time.Now().Add(-time.Second))
+	_, _ = s.OpenApproval("y", "old", time.Now().Add(-time.Second))
+	if h, _ := s.OpenApproval("x", "new", soon); h != "" {
+		t.Fatalf("expired: %q", h)
+	}
+}

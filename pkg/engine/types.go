@@ -21,6 +21,13 @@ const (
 	WorkflowName   = "turgon.integration"
 	SignalApproval = "turgon.approval"
 	QueryPending   = "turgon.pending"
+	// SignalApprovalWaiting tells a run asking for a write's approval
+	// that another run (a later change of the same record) waits on its
+	// decision; the payload is that run's ID.
+	SignalApprovalWaiting = "turgon.approval-waiting"
+	// SignalApprovalClosed wakes a waiting run once the request it waited
+	// on is decided; the payload is the write's ledger key.
+	SignalApprovalClosed = "turgon.approval-closed"
 )
 
 // Error types reported by activities. Temporal does not retry them.
@@ -95,6 +102,17 @@ type PendingApproval struct {
 	Preview json.RawMessage    `json:"preview,omitempty"`
 	Reasons []string           `json:"reasons,omitempty"`
 	Since   time.Time          `json:"since"`
+	// Waiting lists runs for later changes of the same record that wait on
+	// this decision: approving makes their write a duplicate, rejecting
+	// lets the newest of them ask with its own data.
+	Waiting []string `json:"waiting,omitempty"`
+}
+
+// LedgerInput names a write's request for approval in the ledger.
+type LedgerInput struct {
+	Key   string    `json:"key"`
+	Run   string    `json:"run"`
+	Until time.Time `json:"until,omitempty"`
 }
 
 // Activity inputs and outputs.
