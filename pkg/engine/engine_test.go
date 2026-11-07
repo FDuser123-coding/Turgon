@@ -455,7 +455,7 @@ func newSalesforceFixture(t *testing.T) (*fixture, *sftest.Server) {
 func TestSalesforceWonDealBecomesERPOrderAndIsLinkedBack(t *testing.T) {
 	f, sf := newSalesforceFixture(t)
 	runs := f.dispatch()
-	if len(runs) != 1 || runs[0].Event.ID != wonDeal {
+	if len(runs) != 1 || connector.RecordID(runs[0].Event.ID) != wonDeal {
 		t.Fatalf("runs = %+v", runs)
 	}
 	res, err, pending := f.run(runs[0], approve("03-write"))
@@ -1326,7 +1326,7 @@ func TestHubSpotWonDealBecomesERPOrderAndIsLinkedBack(t *testing.T) {
 	id := hs.AddDeal(hubspotDeal("Ada@Lovelace-GmbH.example", "1500.50"))
 	open := hs.AddDeal(map[string]string{"dealname": "Turing pilot", "dealstage": "qualifiedtobuy", "customer_email": "alan@turing.example"})
 	runs := f.dispatch()
-	if len(runs) != 1 || runs[0].Event.ID != id {
+	if len(runs) != 1 || connector.RecordID(runs[0].Event.ID) != id {
 		t.Fatalf("runs = %+v", runs)
 	}
 	res, err, pending := f.run(runs[0], approve("03-write"))
@@ -1356,7 +1356,7 @@ func TestHubSpotWonDealBecomesERPOrderAndIsLinkedBack(t *testing.T) {
 		t.Fatalf("re-dispatched %+v", again)
 	}
 	hs.SetStage(open, "closedwon")
-	if later := f.dispatch(); len(later) != 1 || later[0].Event.ID != open {
+	if later := f.dispatch(); len(later) != 1 || connector.RecordID(later[0].Event.ID) != open {
 		t.Fatalf("later = %+v", later)
 	}
 }

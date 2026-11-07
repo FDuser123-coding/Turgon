@@ -13,6 +13,7 @@ import (
 
 	"sigs.k8s.io/yaml"
 
+	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/dataversetest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/netsuitetest"
@@ -129,11 +130,11 @@ func TestNetSuiteReadsAndChangedOrders(t *testing.T) {
 		}
 	}
 	evs, err := c.Poll(ctx, "SalesOrder.Changed", 0, 10)
-	if err != nil || len(evs) != 3 || evs[0].ID != "5000" || evs[2].ID != "5002" {
+	if err != nil || len(evs) != 3 || connector.RecordID(evs[0].ID) != "5000" || connector.RecordID(evs[2].ID) != "5002" {
 		t.Fatalf("changed orders = %+v, %v", evs, err)
 	}
 	later, err := c.Poll(ctx, "SalesOrder.Changed", evs[0].Position, 10)
-	if err != nil || len(later) != 2 || later[0].ID != "5001" {
+	if err != nil || len(later) != 2 || connector.RecordID(later[0].ID) != "5001" {
 		t.Fatalf("after the first: %+v, %v", later, err)
 	}
 	if n := ns.Requests["POST /services/rest/query/v1/suiteql"]; n != 2 {

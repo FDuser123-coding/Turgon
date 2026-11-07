@@ -234,14 +234,15 @@ func (s *Server) checkAssertion(jwt string) error {
 }
 
 var (
-	fromRE  = regexp.MustCompile(`FROM (\w+) WHERE`)
-	stampRE = regexp.MustCompile(`SystemModstamp > (\S+)`)
-	eqRE    = regexp.MustCompile(`\((\w+) = '([^']*)'\)`)
+	fromRE     = regexp.MustCompile(`FROM (\w+) WHERE`)
+	stampRE    = regexp.MustCompile(`SystemModstamp > (\S+)`)
+	soqlCondRE = regexp.MustCompile(`(\w+) (=|!=) (?:'([^']*)'|(null)\b)`)
 )
 
 // query supports the SOQL the connector issues:
-// SELECT ... FROM X WHERE [(Field = 'v') AND] SystemModstamp > T ORDER BY SystemModstamp, Id,
-// and SELECT ... FROM X WHERE (Id = 'v') to read one record.
+// SELECT ... FROM X WHERE [(conditions) AND] SystemModstamp > T ORDER BY SystemModstamp, Id,
+// and SELECT ... FROM X WHERE (Id = 'v') to read one record. The conditions
+// are ANDed Field = 'v', Field != 'v', Field = null and Field != null.
 func (s *Server) query(w http.ResponseWriter, soql string) {
 	m := fromRE.FindStringSubmatch(soql)
 	st := stampRE.FindStringSubmatch(soql)
@@ -257,12 +258,28 @@ func (s *Server) query(w http.ResponseWriter, soql string) {
 			return
 		}
 	}
-	eq := eqRE.FindStringSubmatch(soql)
+	where := soql[strings.Index(soql, " WHERE ")+7:]
+	conds := soqlCondRE.FindAllStringSubmatch(where, -1)
+	holds := func(rec map[string]any) bool {
+		for _, c := range conds {
+			v, set := rec[c[1]]
+			var same bool
+			if c[4] == "null" {
+				same = !set || v == nil
+			} else {
+				same = set && v != nil && fmt.Sprint(v) == c[3]
+			}
+			if same != (c[2] == "=") {
+				return false
+			}
+		}
+		return true
+	}
 	s.mu.Lock()
 	var out []map[string]any
 	for _, rec := range s.records[m[1]] {
 		ts, _ := time.Parse("2006-01-02T15:04:05.000-0700", rec["SystemModstamp"].(string))
-		if !ts.After(after) || (eq != nil && fmt.Sprint(rec[eq[1]]) != eq[2]) {
+		if !ts.After(after) || !holds(rec) {
 			continue
 		}
 		cp := map[string]any{"attributes": map[string]any{"type": m[1]}}

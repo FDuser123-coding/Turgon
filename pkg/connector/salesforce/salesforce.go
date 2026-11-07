@@ -379,7 +379,7 @@ func toEvent(name string, rec map[string]any) (connector.Event, error) {
 	if err != nil {
 		return connector.Event{}, err
 	}
-	return connector.Event{ID: id, Position: t.UnixMilli(), Name: name, Payload: payload}, nil
+	return connector.Event{ID: connector.VersionID(id, t.UnixMilli()), Position: t.UnixMilli(), Name: name, Payload: payload}, nil
 }
 
 // stripAttributes removes the API's per-record metadata, recursively.

@@ -75,9 +75,14 @@ func (w *WebhookConfig) validate() error {
 type webhook struct {
 	event  string
 	idPath string
-	cfg    WebhookConfig
-	secret []byte
-	err    error // resolving the secret failed
+	// A versioned event's webhook names its items as the poll does, from
+	// the item's position, so an item delivered and polled starts one run.
+	versioned bool
+	posPath   string
+	posFormat string
+	cfg       WebhookConfig
+	secret    []byte
+	err       error // resolving the secret failed
 }
 
 // resolveWebhookSecrets reads each webhook's signing secret. A missing
@@ -101,7 +106,8 @@ func (c *Conn) setWebhookSecret(event, secret string, err error) {
 		c.webhooks = map[string]*webhook{}
 	}
 	e := c.cfg.Events[event]
-	c.webhooks[event] = &webhook{event: event, idPath: or(e.ID, "id"), cfg: *e.Webhook, secret: []byte(secret), err: err}
+	c.webhooks[event] = &webhook{event: event, idPath: or(e.ID, "id"), versioned: e.versioned(), posPath: or(e.Position, or(e.ID, "id")),
+		posFormat: e.PositionFormat, cfg: *e.Webhook, secret: []byte(secret), err: err}
 }
 
 var _ connector.WebhookSource = (*Conn)(nil)
@@ -147,6 +153,13 @@ func (w *webhook) Receive(header http.Header, body []byte, now time.Time) ([]con
 		id := scalar(lookup(item, w.idPath))
 		if id == "" {
 			return nil, fmt.Errorf("rest: webhook for %s: item without %s", w.event, w.idPath)
+		}
+		if w.versioned {
+			pos, err := parsePosition(lookup(item, w.posPath), w.posFormat)
+			if err != nil {
+				return nil, fmt.Errorf("rest: webhook for %s: item %s without a usable %s, which names its version: %v", w.event, id, w.posPath, err)
+			}
+			id = connector.VersionID(id, pos)
 		}
 		payload, err := json.Marshal(item)
 		if err != nil {

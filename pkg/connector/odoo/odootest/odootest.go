@@ -138,12 +138,13 @@ func (o *Odoo) StartAt(number int, now func() time.Time) {
 	o.next, o.now = number, now
 }
 
-// SetState sets an order's state, as confirming it in Odoo would.
+// SetState sets an order's state, as confirming it in Odoo would, and
+// stamps its write_date.
 func (o *Odoo) SetState(id int64, state string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if rec := o.records["sale.order"][id]; rec != nil {
-		rec["state"] = state
+		rec["state"], rec["write_date"] = state, o.stamp()
 	}
 }
 

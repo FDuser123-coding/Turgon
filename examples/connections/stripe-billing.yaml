@@ -35,6 +35,8 @@ spec:
         items: data
         position: created
         positionFormat: unix
+        # Stripe's events never change: their own ID names each one.
+        versioned: false
         order: desc
         pagination: { param: starting_after, more: has_more }
         # Workers started with --webhook-listen also receive the event from

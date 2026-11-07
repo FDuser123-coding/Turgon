@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -13,6 +14,7 @@ import (
 
 	"sigs.k8s.io/yaml"
 
+	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/connector/odoo"
 	"github.com/fduser123-coding/turgon/pkg/connector/odoo/odootest"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
@@ -356,5 +358,44 @@ func TestOdooDomainArity(t *testing.T) {
 		if _, err := odoo.New(cfg, "k", http.DefaultClient); (err == nil) != ok {
 			t.Errorf("%s: accepted %v", domain, err == nil)
 		}
+	}
+}
+
+// Each change of a record is its own event: the engine starts one run per
+// event ID, so an order changed after its first run starts another, while
+// the same change read twice keeps its ID.
+func TestOdooEventIDsNameTheChange(t *testing.T) {
+	fake, c := newOdoo(t)
+	ctx := context.Background()
+	var mu sync.Mutex
+	clock := time.Date(2026, 11, 5, 8, 0, 0, 0, time.UTC)
+	now := func() time.Time { mu.Lock(); defer mu.Unlock(); return clock }
+	fake.StartAt(1, now)
+	c.SetClock(func() time.Time { return now().Add(time.Hour) })
+	res, err := c.Commit(ctx, "create-sales-order", "SHOPIFY-1", json.RawMessage(order))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct{ ID int64 }
+	_ = json.Unmarshal(res, &created)
+	first, err := c.Poll(ctx, "SalesOrder.Changed", 0, 10)
+	if err != nil || len(first) != 1 {
+		t.Fatalf("first poll: %+v, %v", first, err)
+	}
+	id := fmt.Sprint(created.ID)
+	if first[0].ID != connector.VersionID(id, clock.Unix()) || connector.RecordID(first[0].ID) != id {
+		t.Fatalf("event ID %q for order %s", first[0].ID, id)
+	}
+	again, _ := c.Poll(ctx, "SalesOrder.Changed", 0, 10)
+	if len(again) != 1 || again[0].ID != first[0].ID {
+		t.Fatalf("re-read: %+v", again)
+	}
+	mu.Lock()
+	clock = clock.Add(5 * time.Minute)
+	mu.Unlock()
+	fake.SetState(created.ID, "sale")
+	changed, err := c.Poll(ctx, "SalesOrder.Changed", first[0].Position, 10)
+	if err != nil || len(changed) != 1 || changed[0].ID == first[0].ID || connector.RecordID(changed[0].ID) != id {
+		t.Fatalf("after the change: %+v, %v", changed, err)
 	}
 }

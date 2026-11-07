@@ -18,3 +18,18 @@ func TestConfigSecretRefs(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestVersionIDNamesTheRecordAndItsChange(t *testing.T) {
+	id := VersionID("006A000001", 1762369200000)
+	if id != "006A000001@1762369200000" || RecordID(id) != "006A000001" {
+		t.Fatalf("%q -> %q", id, RecordID(id))
+	}
+	for _, plain := range []string{"42", "evt_1", "ada@example.com", "@5", "a@b@c"} {
+		if RecordID(plain) != plain {
+			t.Errorf("RecordID(%q) = %q", plain, RecordID(plain))
+		}
+	}
+	if RecordID(VersionID("ada@example.com", 7)) != "ada@example.com" {
+		t.Error("an ID with an @ of its own")
+	}
+}

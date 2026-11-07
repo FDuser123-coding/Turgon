@@ -17,7 +17,11 @@ spec:
     events:
       Opportunity.ClosedWon:
         sobject: Opportunity
-        where: "StageName = 'Closed Won'"
+        # A won deal not yet linked to an ERP order. Each change is its own
+        # event, so without the second condition the recipe's own write-back
+        # (the ERP number) would start another run, which would find its
+        # writes done.
+        where: "StageName = 'Closed Won' AND ERP_Order_Number__c = null"
         fields:
           - Id
           - AccountId

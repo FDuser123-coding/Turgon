@@ -56,7 +56,7 @@ func newHubSpot(t *testing.T) (*hubspottest.HubSpot, *Conn) {
 func dealIDs(evs []connector.Event) []string {
 	var out []string
 	for _, e := range evs {
-		out = append(out, e.ID)
+		out = append(out, connector.RecordID(e.ID))
 	}
 	return out
 }
