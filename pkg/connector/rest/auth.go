@@ -368,8 +368,8 @@ func (a *authenticator) current(ctx context.Context) (string, error) {
 		return "", &APIError{Method: http.MethodPost, Path: a.cfg.TokenURL, Status: resp.StatusCode, Body: strings.TrimSpace(string(data))}
 	}
 	var tok struct {
-		AccessToken string `json:"access_token"`
-		ExpiresIn   int    `json:"expires_in"`
+		AccessToken string  `json:"access_token"`
+		ExpiresIn   seconds `json:"expires_in"`
 	}
 	if err := json.Unmarshal(data, &tok); err != nil || tok.AccessToken == "" {
 		return "", fmt.Errorf("oauth2 token: no access_token in the response")
@@ -385,6 +385,23 @@ func (a *authenticator) current(ctx context.Context) (string, error) {
 	}
 	a.token, a.expires = tok.AccessToken, time.Now().Add(life-margin)
 	return a.token, nil
+}
+
+// seconds is a token's lifetime as servers send it: a number, or a number
+// in a string as Exact Online sends it ("600").
+type seconds int
+
+func (s *seconds) UnmarshalJSON(b []byte) error {
+	if string(b) == "null" {
+		*s = 0 // the default lifetime
+		return nil
+	}
+	n, err := strconv.Atoi(strings.Trim(string(b), `"`))
+	if err != nil {
+		return fmt.Errorf("expires_in %s is not a number of seconds", b)
+	}
+	*s = seconds(n)
+	return nil
 }
 
 // tokenState is what the token store keeps for an oauth2-refresh
@@ -524,9 +541,9 @@ func (a *authenticator) refreshGrant(ctx context.Context, refresh string) (acces
 		return "", "", 0, e
 	}
 	var tok struct {
-		AccessToken  string `json:"access_token"`
-		RefreshToken string `json:"refresh_token"`
-		ExpiresIn    int    `json:"expires_in"`
+		AccessToken  string  `json:"access_token"`
+		RefreshToken string  `json:"refresh_token"`
+		ExpiresIn    seconds `json:"expires_in"`
 	}
 	if err := json.Unmarshal(data, &tok); err != nil || tok.AccessToken == "" {
 		return "", "", 0, fmt.Errorf("oauth2 refresh: no access_token in the response")

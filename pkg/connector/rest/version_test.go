@@ -56,3 +56,29 @@ func TestChangedItemsAreNamedByTheirVersion(t *testing.T) {
 		t.Errorf("versioned: false: %+v, %v", evs, err)
 	}
 }
+
+// An API that answers at most maxItems is asked for no more, so a full
+// answer is known to be cut short: the timestamp it ends in waits for the
+// next poll instead of being split.
+func TestMaxItemsCapsAPollAndKeepsTimestampsWhole(t *testing.T) {
+	var asked string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.Query().Get("top")
+		// The API stops at 2, as Exact Online stops at 60.
+		fmt.Fprint(w, `{"d":{"results":[{"id":"a","m":"2026-09-24T10:00:00Z"},{"id":"b","m":"2026-09-24T10:00:01Z"}]}}`)
+	}))
+	defer api.Close()
+	c, err := New(Config{BaseURL: api.URL, Auth: Auth{Type: "none"}, Events: map[string]Event{"Changed": {
+		Path: "/x", Params: map[string]string{"top": "{{limit}}"}, Items: "d.results", Position: "m", PositionFormat: "rfc3339", MaxItems: 2,
+	}}}, "", http.DefaultClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	evs, err := c.Poll(context.Background(), "Changed", 0, 100)
+	if err != nil || asked != "2" || len(evs) != 1 || connector.RecordID(evs[0].ID) != "a" {
+		t.Fatalf("asked for %s: %+v, %v", asked, evs, err)
+	}
+	if _, err := New(Config{BaseURL: api.URL, Auth: Auth{Type: "none"}, Events: map[string]Event{"Changed": {Path: "/x", MaxItems: -1}}}, "", http.DefaultClient); err == nil {
+		t.Fatal("a negative maxItems was accepted")
+	}
+}

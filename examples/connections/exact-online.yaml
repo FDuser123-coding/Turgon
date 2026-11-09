@@ -1,0 +1,77 @@
+# The ERP on Exact Online, through its REST API (v1, OData) with an app a
+# person authorized for the company (OAuth 2.0). The secret is that
+# authorization: {"clientId", "clientSecret", "refreshToken"}. Exact rotates
+# the refresh token on every refresh and takes the client's credentials in
+# the token request's form, so the secret only seeds it: Turgon keeps the
+# current one sealed in its database (TURGON_TOKEN_KEYS). The division (the
+# company) is part of the base URL; the host is the country's
+# (start.exactonline.nl, .be, .co.uk, .de, .fr, .es, or exactonline.com).
+# A sales order and its lines go in one POST. Exact has no upsert by an
+# external key, so the idempotency key goes into YourRef (the customer's
+# reference) and a retried create finds the order by it. A saga's undo
+# deletes the order, which Exact refuses once it is delivered. Changed
+# orders are polled on Modified.
+apiVersion: turgon.dev/v1alpha1
+kind: Connection
+metadata:
+  name: exact-online
+  description: "Exact Online, through its REST API (OData, OAuth 2.0 with a rotating refresh token)."
+spec:
+  connector: rest@^1
+  secretRef: openbao://exact-online/oauth
+  entities: [SalesOrder, Customer]
+  # Exact allows 60 calls a minute per company (and a daily quota).
+  limits: { maxConcurrentCalls: 2, requestsPerSecond: 1 }
+  events:
+    - { name: SalesOrder.Changed, entity: SalesOrder, interface: polling }
+  operations:
+    - { name: create-sales-order, entity: SalesOrder, direction: write, interface: rest-api, risk: high, compensation: delete-sales-order }
+    - { name: delete-sales-order, entity: SalesOrder, direction: write, interface: rest-api, risk: high }
+    - { name: get-customer, entity: Customer, direction: read, interface: rest-api, risk: read }
+  config:
+    baseURL: https://start.exactonline.nl/api/v1/3191512
+    auth:
+      type: oauth2-refresh
+      tokenURL: https://start.exactonline.nl/api/oauth2/token
+      clientAuth: body
+    checkPath: "/salesorder/SalesOrders?$top=1&$select=OrderID"
+    events:
+      SalesOrder.Changed:
+        path: /salesorder/SalesOrders
+        # Exact dates records as /Date(ms)/ in the company's time and reads
+        # a datetime literal the same way, so the cursor's time is passed
+        # as it is. It answers at most 60 rows at once.
+        params:
+          $filter: "Modified gt datetime'{{positionTime}}'"
+          $orderby: Modified asc
+          $top: "{{limit}}"
+          $select: OrderID,OrderNumber,OrderedBy,OrderDate,YourRef,Description,Status,DeliveryStatus,AmountDC,Currency,Modified
+        items: d.results
+        id: OrderID
+        position: Modified
+        positionFormat: msjson
+        maxItems: 60
+    operations:
+      create-sales-order:
+        method: POST
+        path: /salesorder/SalesOrders
+        fields:
+          OrderedBy: accountId
+          OrderDate: orderDate
+          Description: description
+          SalesOrderLines: exactLines
+        # The idempotency key itself, which the lookup below finds it by.
+        keyField: YourRef
+        result: d
+        # A retried create finds the order its first try made.
+        existing:
+          path: /salesorder/SalesOrders
+          params: { $filter: "YourRef eq '{{idempotencyKey}}'", $top: "1" }
+          items: d.results
+      delete-sales-order:
+        method: DELETE
+        path: "/salesorder/SalesOrders(guid'{{OrderID}}')"
+      get-customer:
+        method: GET
+        path: "/crm/Accounts?$filter=ID%20eq%20guid'{{id}}'&$select=Name,Email,Code,Blocked"
+        fields: { d.results.0.Name: name, d.results.0.Email: email, d.results.0.Code: code, d.results.0.Blocked: blocked }

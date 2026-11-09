@@ -32,6 +32,7 @@ import (
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/b1test"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/bctest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/dataversetest"
+	"github.com/fduser123-coding/turgon/pkg/connector/rest/exacttest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/hubspottest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/netsuitetest"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest/qbotest"
@@ -1313,6 +1314,63 @@ func TestShopifyRejectionVoidsTheXeroInvoice(t *testing.T) {
 	}
 	if inv := x.InvoiceByReference(fmt.Sprintf("Shopify SHOPIFY-%d", id)); inv == nil || inv["Status"] != "VOIDED" {
 		t.Fatalf("the Xero invoice was not voided after Shopify rejected the note: %v", inv)
+	}
+}
+
+// newExactFixture runs the shopify-store-orders-to-exact-online recipe
+// against the fake Shopify store and the fake Exact Online division.
+func newExactFixture(t *testing.T) (*fixture, *shoptest.Shop, *exacttest.Exact) {
+	t.Helper()
+	shop := shoptest.New("shpat_test")
+	t.Cleanup(shop.Close)
+	x, seed := exacttest.New("exact-app", "s3cret")
+	t.Cleanup(x.Close)
+	f := newFixtureFor(t, "shopify-store-orders-to-exact-online", connector.StaticSecrets{
+		"openbao://shopify-store/token": "shpat_test",
+		"openbao://exact-online/oauth":  `{"clientId": "exact-app", "clientSecret": "s3cret", "refreshToken": "` + seed + `"}`,
+	}, func(cfg string) string {
+		cfg = strings.ReplaceAll(cfg, "https://turgon-demo.myshopify.com/admin/api/"+shoptest.Version, shop.URL())
+		return strings.ReplaceAll(cfg, "https://start.exactonline.nl", x.URL())
+	})
+	if err := f.store.PutXref(context.Background(), "Customer", "shopify-store", "ada@example.com", exacttest.Lovelace); err != nil {
+		t.Fatal(err)
+	}
+	return f, shop, x
+}
+
+// A paid shop order becomes an Exact Online sales order at the shop's
+// prices, and its order number goes on the Shopify order.
+func TestShopifyOrderBecomesExactSalesOrder(t *testing.T) {
+	f, shop, x := newExactFixture(t)
+	id := shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-11-09T09:30:00+01:00",
+		"subtotal_price": "420.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-1", "quantity": 2, "price": "210.00"}},
+	})
+	if _, err, _ := f.run(f.dispatch()[0], approve("04-write")); err != nil {
+		t.Fatal(err)
+	}
+	o := x.OrderByRef(fmt.Sprintf("SHOPIFY-%d", id))
+	if o == nil || o["AmountDC"] != 420.0 || o["OrderedBy"] != exacttest.Lovelace {
+		t.Fatalf("Exact order = %v", o)
+	}
+	if got := shop.Order(id)["note"]; got != fmt.Sprintf("ERP order %v", o["OrderNumber"]) {
+		t.Fatalf("Shopify note = %v", got)
+	}
+}
+
+func TestShopifyRejectionDeletesTheExactSalesOrder(t *testing.T) {
+	f, shop, x := newExactFixture(t)
+	shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-11-09T09:30:00+01:00",
+		"subtotal_price": "235.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-2", "quantity": 1, "price": "235.00"}},
+	})
+	shop.FailUpdates = true
+	_, err, _ := f.run(f.dispatch()[0], approve("04-write"))
+	if errType(err) != ErrTypeInvalid {
+		t.Fatalf("err = %v (%s)", err, errType(err))
+	}
+	if x.Orders() != 0 || x.Requests["DELETE salesorder/SalesOrders"] != 1 {
+		t.Fatalf("the Exact order was not deleted after Shopify rejected the note: %d orders", x.Orders())
 	}
 }
 
