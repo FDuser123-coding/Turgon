@@ -30,6 +30,14 @@ var activityRetry = &temporal.RetryPolicy{
 // activities, which older runs' histories recorded as activities.
 const localStepsVersion = "local-map-resolve"
 
+// approvalLedgerVersion gates the approval ledger: a run whose write
+// another run already asks to approve waits on that decision.
+const approvalLedgerVersion = "approval-ledger"
+
+// ledgerMargin keeps a request in the ledger a little past its run's
+// timeout, after which another run may take it over.
+const ledgerMargin = time.Hour
+
 // DefaultApprovalTimeout is how long a run waits for a person.
 const DefaultApprovalTimeout = 72 * time.Hour
 
@@ -70,6 +78,25 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 		return RunResult{}, err
 	}
 	approvals := workflow.GetSignalChannel(ctx, SignalApproval)
+	waiting := workflow.GetSignalChannel(ctx, SignalApprovalWaiting)
+	closed := workflow.GetSignalChannel(ctx, SignalApprovalClosed)
+	self := workflow.GetInfo(ctx).WorkflowExecution.ID
+	// held is the ledger key of the request this run holds open.
+	held := ""
+	release := func() {
+		if held == "" {
+			return
+		}
+		var waiters []string
+		if err := workflow.ExecuteActivity(ctx, a.CloseApproval, LedgerInput{Key: held, Run: self}).Get(ctx, &waiters); err != nil {
+			logger.Warn("could not close the request for approval; it expires on its own", "key", held, "error", err)
+		}
+		for _, w := range waiters {
+			// A waiter that ended meanwhile has nothing to wake.
+			_ = workflow.SignalExternalWorkflow(ctx, w, "", SignalApprovalClosed, held).Get(ctx, nil)
+		}
+		held = ""
+	}
 
 	var result RunResult
 	var done []committedWrite
@@ -166,8 +193,34 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 		case st.Write != nil:
 			var prep PrepareOutput
 			pin := PrepareInput{Workflow: in.Workflow.Name, Step: st.Name, Config: *st.Write, Source: source, Doc: doc}
-			if err := workflow.ExecuteActivity(ctx, a.PrepareWrite, pin).Get(ctx, &prep); err != nil {
-				return fail(err)
+			for {
+				prep = PrepareOutput{}
+				if err := workflow.ExecuteActivity(ctx, a.PrepareWrite, pin).Get(ctx, &prep); err != nil {
+					return fail(err)
+				}
+				if prep.Prepared.Duplicate != nil || !prep.Prepared.NeedsApproval ||
+					workflow.GetVersion(ctx, approvalLedgerVersion, workflow.DefaultVersion, 1) != 1 {
+					break
+				}
+				// One request per write: if another run (an earlier change
+				// of the record) already asks, wait on its decision, then
+				// prepare again. An approval makes this write a duplicate;
+				// a rejection lets this run ask with its own data.
+				key := writeguard.ApprovalKey(prep.Request)
+				lin := LedgerInput{Key: key, Run: self, Until: workflow.Now(ctx).Add(timeout + ledgerMargin)}
+				var holder string
+				if err := workflow.ExecuteActivity(ctx, a.OpenApproval, lin).Get(ctx, &holder); err != nil {
+					return fail(err)
+				}
+				if holder == "" {
+					held = key
+					break
+				}
+				logger.Info("waiting on another run's request for approval", "key", key, "holder", holder)
+				_ = workflow.SignalExternalWorkflow(ctx, holder, "", SignalApprovalWaiting, self).Get(ctx, nil)
+				since := workflow.Now(ctx)
+				awaitClosed(ctx, closed, timeout+ledgerMargin)
+				waited += workflow.Now(ctx).Sub(since)
 			}
 			rec := WriteRecord{Step: st.Name, Endpoint: st.Write.Endpoint, Operation: st.Write.Operation}
 			if d := prep.Prepared.Duplicate; d != nil {
@@ -185,7 +238,7 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 					Preview: prep.Prepared.Preview, Reasons: prep.Prepared.Decision.Reasons, Since: workflow.Now(ctx),
 				}
 				tell(ctx, in.Workflow.Name, approvalPending(*pending, pending.Since.Add(timeout)))
-				approval = awaitApproval(ctx, approvals, *pending, timeout)
+				approval = awaitApproval(ctx, approvals, waiting, pending, timeout)
 				wait := workflow.Now(ctx).Sub(pending.Since)
 				waited += wait
 				recordApproval(ctx, in.Workflow.Name, approval, wait)
@@ -197,7 +250,11 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 
 			var out writeguard.Outcome
 			cin := CommitInput{Request: prep.Request, Approval: approval}
-			if err := workflow.ExecuteActivity(ctx, a.CommitWrite, cin).Get(ctx, &out); err != nil {
+			err := workflow.ExecuteActivity(ctx, a.CommitWrite, cin).Get(ctx, &out)
+			// Waiters wake once the outcome is stored: after an approval
+			// they find the write done.
+			release()
+			if err != nil {
 				return fail(err)
 			}
 			rec.Status, rec.Result = out.Status, out.Result
@@ -242,7 +299,8 @@ const approvalTimeoutActor = "turgon/approval-timeout"
 // the timeout passes; a timeout is recorded as a rejection. Signals for
 // another step or another version of the request are ignored, so a decision
 // sent early, or about a different request, can never approve this one.
-func awaitApproval(ctx workflow.Context, ch workflow.ReceiveChannel, p PendingApproval, timeout time.Duration) *policy.Approval {
+// Runs that start waiting on the decision meanwhile are listed in p.Waiting.
+func awaitApproval(ctx workflow.Context, ch, waiting workflow.ReceiveChannel, p *PendingApproval, timeout time.Duration) *policy.Approval {
 	tctx, cancel := workflow.WithCancel(ctx)
 	defer cancel()
 	timer := workflow.NewTimer(tctx, timeout)
@@ -263,6 +321,16 @@ func awaitApproval(ctx workflow.Context, ch workflow.ReceiveChannel, p PendingAp
 			}
 			got = &policy.Approval{Status: status, By: sig.By, Note: sig.Note}
 		})
+		sel.AddReceive(waiting, func(c workflow.ReceiveChannel, _ bool) {
+			var run string
+			c.Receive(ctx, &run)
+			for _, w := range p.Waiting {
+				if w == run {
+					return
+				}
+			}
+			p.Waiting = append(p.Waiting, run)
+		})
 		sel.AddFuture(timer, func(workflow.Future) {
 			got = &policy.Approval{Status: policy.ApprovalRejected, By: approvalTimeoutActor,
 				Note: fmt.Sprintf("nobody decided within %s", timeout)}
@@ -270,6 +338,18 @@ func awaitApproval(ctx workflow.Context, ch workflow.ReceiveChannel, p PendingAp
 		sel.Select(ctx)
 	}
 	return got
+}
+
+// awaitClosed blocks until the request this run waits on is decided, or
+// the request's time in the ledger passes (its run ended without closing
+// it), whichever comes first.
+func awaitClosed(ctx workflow.Context, closed workflow.ReceiveChannel, limit time.Duration) {
+	tctx, cancel := workflow.WithCancel(ctx)
+	defer cancel()
+	sel := workflow.NewSelector(ctx)
+	sel.AddReceive(closed, func(c workflow.ReceiveChannel, _ bool) { c.Receive(ctx, nil) })
+	sel.AddFuture(workflow.NewTimer(tctx, limit), func(workflow.Future) {})
+	sel.Select(ctx)
 }
 
 // recordRun counts a finished run by outcome and records how long it took,

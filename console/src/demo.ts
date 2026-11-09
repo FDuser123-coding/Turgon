@@ -65,6 +65,9 @@ export function createDemoApi() {
       current: { ERP_Order_Number__c: null },
       proposed: { ERP_Order_Number__c: "7" },
     },
+    // The deal was edited after this run started: that change's run waits
+    // on this decision instead of asking a second time.
+    waiting: ["salesforce-won-deals-to-erp/006000000000002AAA@1790261600000"],
   };
 
   const agentOrder: PendingApproval = {
@@ -158,8 +161,10 @@ export function createDemoApi() {
       pending: agentOrder, request: agentOrder.request },
     { id: "shop-orders-to-erp/6", runId: "r6", workflow: "shop-orders-to-erp", status: "running", started: at(4), pending: erpOrder,
       event: { id: "6", position: 6, name: "Order.Created", payload: { order_number: 3002, total: "64000.00", currency: "eur", customer: { email: "ada@example.com" } } } },
-    { id: "salesforce-won-deals-to-erp/006000000000002AAA", runId: "r5", workflow: "salesforce-won-deals-to-erp", status: "running", started: at(11), pending: sfLink,
-      event: { id: "006000000000002AAA", position: 1790261000000, name: "Opportunity.ClosedWon", payload: { Id: "006000000000002AAA", AccountId: "001000000000001AAA", Amount: 4200 } } },
+    { id: "salesforce-won-deals-to-erp/006000000000002AAA@1790261600000", runId: "r10", workflow: "salesforce-won-deals-to-erp", status: "running", started: at(1),
+      event: { id: "006000000000002AAA@1790261600000", position: 1790261600000, name: "Opportunity.ClosedWon", payload: { Id: "006000000000002AAA", AccountId: "001000000000001AAA", Amount: 4350 } } },
+    { id: "salesforce-won-deals-to-erp/006000000000002AAA@1790261000000", runId: "r5", workflow: "salesforce-won-deals-to-erp", status: "running", started: at(11), pending: sfLink,
+      event: { id: "006000000000002AAA@1790261000000", position: 1790261000000, name: "Opportunity.ClosedWon", payload: { Id: "006000000000002AAA", AccountId: "001000000000001AAA", Amount: 4200 } } },
     { id: "s4-sales-orders-to-dynamics/5f0c5000124-2b1e-4c3d-9a8f-7e6d5c4b3a21", runId: "r9", workflow: "s4-sales-orders-to-dynamics", status: "running", started: at(3),
       pending: dvOrder, event: s4Event("5000124", "C-100", "2350.00", "M-2", "10") },
     { id: "s4-sales-orders-to-dynamics/5f0c5000118-2b1e-4c3d-9a8f-7e6d5c4b3a21", runId: "r8", workflow: "s4-sales-orders-to-dynamics", status: "completed", started: at(41), closed: at(40.7),
@@ -168,12 +173,12 @@ export function createDemoApi() {
     { id: "shop-orders-to-erp/5", runId: "r4", workflow: "shop-orders-to-erp", status: "completed", started: at(26), closed: at(25.6),
       result: { writes: [{ step: "03-write", endpoint: "erp-db", operation: "create-sales-order", status: "committed", result: { id: 7, external_id: "SHOP-3001", net_value: 1480.0, status: "open" } }] },
       event: { id: "5", position: 5, name: "Order.Created", payload: { order_number: 3001, total: "1480.00", currency: "eur" } } },
-    { id: "salesforce-won-deals-to-erp/006000000000001AAA", runId: "r3", workflow: "salesforce-won-deals-to-erp", status: "completed", started: at(58), closed: at(57.8),
+    { id: "salesforce-won-deals-to-erp/006000000000001AAA@1790259000000", runId: "r3", workflow: "salesforce-won-deals-to-erp", status: "completed", started: at(58), closed: at(57.8),
       result: { writes: [
         { step: "03-write", endpoint: "erp-db", operation: "create-sales-order", status: "committed", result: { id: 6, external_id: "006000000000001AAA", net_value: 7800.0 } },
         { step: "05-write", endpoint: "salesforce-prod", operation: "update-opportunity", status: "committed", result: { sobject: "Opportunity", id: "006000000000001AAA", previous: { ERP_Order_Number__c: null }, applied: { ERP_Order_Number__c: "6" } } },
       ] },
-      event: { id: "006000000000001AAA", position: 1790259000000, name: "Opportunity.ClosedWon", payload: { Id: "006000000000001AAA", Amount: 7800 } } },
+      event: { id: "006000000000001AAA@1790259000000", position: 1790259000000, name: "Opportunity.ClosedWon", payload: { Id: "006000000000001AAA", Amount: 7800 } } },
     { id: "shop-orders-to-erp/2", runId: "r2", workflow: "shop-orders-to-erp", status: "failed", started: at(95), closed: at(94.9),
       failure: "writeguard: simulation: write payload invalid: null value in column \"lines\" violates not-null constraint", failureType: "TurgonInvalid",
       result: undefined, event: { id: "2", position: 2, name: "Order.Created", payload: { order_number: 2002, total: "99000", items: [] } } },

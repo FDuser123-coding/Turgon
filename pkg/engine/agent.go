@@ -114,7 +114,7 @@ func agentWrite(ctx workflow.Context, in AgentWriteInput, push *pushes) (RunResu
 		name := "agent/" + req.Tool
 		tell(ctx, name, approvalPending(*pending, pending.Since.Add(timeout)))
 		push.notify(ctx, req.Tool, AgentWriteStatus{State: AgentWritePending, Pending: pending})
-		approval = awaitApproval(ctx, workflow.GetSignalChannel(ctx, SignalApproval), *pending, timeout)
+		approval = awaitApproval(ctx, workflow.GetSignalChannel(ctx, SignalApproval), workflow.GetSignalChannel(ctx, SignalApprovalWaiting), pending, timeout)
 		if approval.By == approvalTimeoutActor {
 			tell(ctx, name, approvalTimedOut(*pending))
 		}

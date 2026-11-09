@@ -1332,8 +1332,20 @@ and `stripe` take a `webhook` block in their config too (`shopify-admin.yaml`,
     again, nor ask anyone to approve it.
   - **Writes that should follow every change** need a key that names the change, such as
     `{{ source.Id }}-{{ source.SystemModstamp }}`.
-  - **Two changes while a write waits for approval** each ask, since neither has written yet.
-    Whichever is approved second finds the first one's write.
+  - **One request per write.** While a write waits for approval, a later change's run for
+    the same write (same target, operation and `idempotencyKey`) does not ask again:
+    - It waits on the open request, which lists it as a newer change (`waiting` in
+      `turgon pending`, "Newer changes" in the console).
+    - Approving makes the waiting run's write a duplicate.
+    - Rejecting wakes it to ask with its own data, so a corrected deal is what the approver sees
+      next.
+    - The ledger of open requests is `turgon_approvals`, in Turgon's database. A request whose run
+      ended without closing it expires an hour after that run's approval timeout.
+    - Measured live with `fakesf`:
+      - A deal won at 7800 asked. Its correction to 7500 waited, listed on the request. Rejecting
+        it made the 7500 run ask, and approving that made one order of 7500.
+      - A deal won at 1200 and changed to 1250 asked once. After the approval, the 1250 run found
+        both writes done, and there was one order.
   - **A filter keeps a recipe's own write-back from coming back.**
     `salesforce-prod` polls won deals with `ERP_Order_Number__c = null`, so the ERP number the
     recipe writes back is not read as one more change.
