@@ -689,6 +689,59 @@ Measured against a Temporal 1.28 dev server, Postgres, `fakeshop` and `fakexero`
   order as `ERP order INV-3761`.
 - **The undo:** when Shopify refused the next note, the saga voided its invoice, INV-3762.
 
+### Exact Online: OData, rotating refresh tokens and 60-row pages
+
+Exact Online (`examples/connections/exact-online.yaml`) also authorizes an app with a refresh
+token that rotates on every refresh, so it uses `oauth2-refresh` and the token vault as
+QuickBooks and Xero do. Exact differs in a few ways:
+
+- **Token requests:** the client's credentials go in the form (`clientAuth: body`), and Exact
+  gives the token's lifetime as a string (`"expires_in": "600"`), which `rest` now reads as well
+  as a number.
+- **The division (the company) is part of the base URL,** under the country's host
+  (`start.exactonline.nl`, `.be`, `.co.uk`, `.de`, and so on).
+- **OData v2 answers:** one entity as `{"d": {...}}` (`result: d`) and lists as
+  `{"d": {"results": [...]}}` (`items: d.results`).
+- **Creating orders:** a sales order and its lines go in one POST. Accounts and items are GUIDs:
+  the customer is the master record's ID, and `sales-order-to-exact-online-order` keeps this
+  division's item GUIDs for the shop's SKUs.
+- **Retries:** Exact has no upsert by an external key, so the idempotency key goes into `YourRef`
+  (`keyField`). A retried create finds the first order by it instead of making a second.
+- **Result:** the order. Its `OrderNumber` goes into the Shopify note
+  (`sales-order-to-shopify-note` 1.5).
+- **Undo:** `DELETE /salesorder/SalesOrders(guid'…')`, which Exact refuses once the order is
+  delivered. That refusal is final, and an operator is told.
+- **Events:** changed orders are polled with `Modified gt datetime'{{positionTime}}'`, ordered
+  by `Modified`. Exact dates records as `/Date(ms)/` in the company's time and reads the literal
+  the same way, so the cursor's time is passed as it is.
+- **60 rows at most:** Exact answers at most 60 rows, whatever `$top` asks for. A new event
+  option, `maxItems: 60`, caps the poll's request, so a full page is known to be cut short and
+  the timestamp it ends in waits whole for the next poll. Without it, a page that ended inside a
+  timestamp would move the cursor past the rest of that timestamp's orders. The test with 61
+  orders loses the 61st without it.
+- **Peak:** 0.5 orders a second, since Exact allows 60 calls a minute per company.
+
+`shopify-store-orders-to-exact-online` is the Shopify saga with it. The fake is
+`internal/tools/fakeexact` (http://127.0.0.1:9890, client `exact-demo`, division 3191512). It
+prints the first refresh token as `fakeqbo` does.
+
+```sh
+go build -o bin/fakeexact ./internal/tools/fakeexact
+bin/fakeexact > exact.seed &
+sed -i 's|https://start.exactonline.nl|http://127.0.0.1:9890|' my-catalog/connections/exact-online.yaml
+export TURGON_TOKEN_KEYS="t1:$(openssl rand -base64 32)"
+export TURGON_SECRET_EXACT_ONLINE_OAUTH="{\"clientId\":\"exact-demo\",\"clientSecret\":\"exact-demo-secret\",\"refreshToken\":\"$(cat exact.seed)\"}"
+bin/turgon xref set --entity Customer --system shopify-store --source ada@example.com \
+  --master 4b2fd0b1-3c8a-4b8e-9a3e-1d2c3b4a5f60
+```
+
+Measured against a Temporal 1.28 dev server, Postgres, `fakeshop` and `fakeexact`:
+- **One refresh in all:** `turgon check` refreshed once and stored the sealed token (202 bytes
+  under key `t1`). The worker used the stored access token.
+- **The order:** a 420.00 Shopify order became Exact sales order 1181 at 420, noted on the
+  Shopify order as `ERP order 1181`.
+- **The undo:** when Shopify refused the next note, the saga deleted that order, 1182.
+
 ### Odoo: quotations through the JSON-2 API
 
 The `odoo` connector (`examples/connectors/odoo.yaml`) reaches Odoo 19 and later only through its

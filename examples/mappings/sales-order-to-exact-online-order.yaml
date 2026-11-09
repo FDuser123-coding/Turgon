@@ -1,0 +1,23 @@
+# A paid order as an Exact Online sales order. Exact references accounts and
+# items by GUID: the customer is the master record's ID, the Exact
+# account's, and this division's item GUIDs for the shop's SKUs are kept
+# here (per deployment). Each line keeps the shop's price; without one Exact
+# uses the item's sales price.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: sales-order-to-exact-online-order
+  version: 1.0.0
+spec:
+  from: model.SalesOrder
+  to: model.SalesOrder
+  fields:
+    - { target: accountId,   expression: "customerId",                     origin: human, confidence: 1.0 }
+    - { target: orderDate,   expression: "orderDate",                      origin: human, confidence: 1.0 }
+    - { target: description, expression: "'Shopify order ' & externalId",  origin: human, confidence: 0.95 }
+    - target: exactLines
+      expression: "lines.{ 'Item': $lookup({ 'M-1': 'a1b2c3d4-0001-4e5f-9a8b-0c1d2e3f4a5b', 'M-2': 'a1b2c3d4-0002-4e5f-9a8b-0c1d2e3f4a5b' }, material), 'Quantity': quantity, 'UnitPrice': $number(price) }[]"
+      origin: human
+      confidence: 0.95
+    - { target: netValue,    expression: "netValue",                       origin: human, confidence: 1.0 }
+    - { target: shopifyId,   expression: "shopifyId",                      origin: human, confidence: 1.0 }

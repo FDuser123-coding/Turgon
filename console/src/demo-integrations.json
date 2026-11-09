@@ -90,6 +90,20 @@
       ]
     },
     {
+      "name": "exact-online",
+      "description": "Exact Online, through its REST API (OData, OAuth 2.0 with a rotating refresh token).",
+      "connector": "rest",
+      "product": "HTTP JSON APIs",
+      "role": "target",
+      "events": [],
+      "operations": [
+        "create-sales-order"
+      ],
+      "flows": [
+        "shopify-store-orders-to-exact-online"
+      ]
+    },
+    {
       "name": "hubspot-crm",
       "description": "The HubSpot CRM, where the sales team closes deals.",
       "connector": "rest",
@@ -323,6 +337,7 @@
         "shopify-store-orders-to-business-central",
         "shopify-store-orders-to-business-one",
         "shopify-store-orders-to-erp",
+        "shopify-store-orders-to-exact-online",
         "shopify-store-orders-to-netsuite",
         "shopify-store-orders-to-odoo",
         "shopify-store-orders-to-quickbooks",
@@ -1049,7 +1064,7 @@
         },
         {
           "kind": "map",
-          "mapping": "sales-order-to-shopify-note@1.4.0",
+          "mapping": "sales-order-to-shopify-note@1.5.0",
           "from": "model.SalesOrder",
           "to": "model.Order",
           "fields": 2
@@ -1147,7 +1162,7 @@
         },
         {
           "kind": "map",
-          "mapping": "sales-order-to-shopify-note@1.4.0",
+          "mapping": "sales-order-to-shopify-note@1.5.0",
           "from": "model.SalesOrder",
           "to": "model.Order",
           "fields": 2
@@ -1212,7 +1227,7 @@
         },
         {
           "kind": "map",
-          "mapping": "sales-order-to-shopify-note@1.4.0",
+          "mapping": "sales-order-to-shopify-note@1.5.0",
           "from": "model.SalesOrder",
           "to": "model.Order",
           "fields": 2
@@ -1270,7 +1285,7 @@
         },
         {
           "kind": "map",
-          "mapping": "sales-order-to-shopify-note@1.4.0",
+          "mapping": "sales-order-to-shopify-note@1.5.0",
           "from": "model.SalesOrder",
           "to": "model.Order",
           "fields": 2
@@ -1288,6 +1303,71 @@
       ],
       "targets": [
         "erp-db",
+        "shopify-store"
+      ],
+      "slo": "p95 10s"
+    },
+    {
+      "name": "shopify-store-orders-to-exact-online",
+      "version": "1.0.0",
+      "description": "A paid Shopify order becomes an Exact Online sales order; its number is added to the Shopify order as a note.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "shopify-store",
+        "event": "Order.Created",
+        "delivery": "webhook"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "shopify-rest-order-to-order@1.1.0",
+          "from": "shopify-store.Order",
+          "to": "model.SalesOrder",
+          "fields": 7
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.Customer",
+          "strategy": "probabilistic"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-exact-online-order@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.SalesOrder",
+          "fields": 6
+        },
+        {
+          "kind": "write",
+          "entity": "SalesOrder",
+          "system": "exact-online",
+          "operation": "create-sales-order",
+          "risk": "high",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "delete-sales-order"
+        },
+        {
+          "kind": "map",
+          "mapping": "sales-order-to-shopify-note@1.5.0",
+          "from": "model.SalesOrder",
+          "to": "model.Order",
+          "fields": 2
+        },
+        {
+          "kind": "write",
+          "entity": "Order",
+          "system": "shopify-store",
+          "operation": "update-order",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "restore-order"
+        }
+      ],
+      "targets": [
+        "exact-online",
         "shopify-store"
       ],
       "slo": "p95 10s"
@@ -1335,7 +1415,7 @@
         },
         {
           "kind": "map",
-          "mapping": "sales-order-to-shopify-note@1.4.0",
+          "mapping": "sales-order-to-shopify-note@1.5.0",
           "from": "model.SalesOrder",
           "to": "model.Order",
           "fields": 2
@@ -1400,7 +1480,7 @@
         },
         {
           "kind": "map",
-          "mapping": "sales-order-to-shopify-note@1.4.0",
+          "mapping": "sales-order-to-shopify-note@1.5.0",
           "from": "model.SalesOrder",
           "to": "model.Order",
           "fields": 2
@@ -1465,7 +1545,7 @@
         },
         {
           "kind": "map",
-          "mapping": "sales-order-to-shopify-note@1.4.0",
+          "mapping": "sales-order-to-shopify-note@1.5.0",
           "from": "model.SalesOrder",
           "to": "model.Order",
           "fields": 2
@@ -1523,7 +1603,7 @@
         },
         {
           "kind": "map",
-          "mapping": "sales-order-to-shopify-note@1.4.0",
+          "mapping": "sales-order-to-shopify-note@1.5.0",
           "from": "model.SalesOrder",
           "to": "model.Order",
           "fields": 2
@@ -1588,7 +1668,7 @@
         },
         {
           "kind": "map",
-          "mapping": "sales-order-to-shopify-note@1.4.0",
+          "mapping": "sales-order-to-shopify-note@1.5.0",
           "from": "model.SalesOrder",
           "to": "model.Order",
           "fields": 2

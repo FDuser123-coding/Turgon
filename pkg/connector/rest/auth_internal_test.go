@@ -56,3 +56,20 @@ func TestStoredTokenUnderTheOldKeyIsAdopted(t *testing.T) {
 		t.Fatalf("stored %+v, legacy key %q", st, a.legacyKey)
 	}
 }
+
+func TestTokenLifetimeAsNumberOrString(t *testing.T) {
+	for raw, want := range map[string]seconds{`600`: 600, `"600"`: 600} {
+		var tok struct {
+			ExpiresIn seconds `json:"expires_in"`
+		}
+		if err := json.Unmarshal([]byte(`{"expires_in":`+raw+`}`), &tok); err != nil || tok.ExpiresIn != want {
+			t.Errorf("%s: %d, %v", raw, tok.ExpiresIn, err)
+		}
+	}
+	var tok struct {
+		ExpiresIn seconds `json:"expires_in"`
+	}
+	if err := json.Unmarshal([]byte(`{"expires_in":"soon"}`), &tok); err == nil {
+		t.Error("a lifetime that is not a number was accepted")
+	}
+}

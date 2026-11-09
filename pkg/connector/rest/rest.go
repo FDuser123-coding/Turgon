@@ -96,6 +96,11 @@ type Event struct {
 	Order string `json:"order,omitempty"`
 	// Pagination pages a list by the last item's ID.
 	Pagination *Pagination `json:"pagination,omitempty"`
+	// MaxItems is the most items the API answers at once, whatever it is
+	// asked for (Exact Online: 60). A poll asks for no more, so that a full
+	// answer is known to be cut short, and a timestamp it ends in is never
+	// split.
+	MaxItems int `json:"maxItems,omitempty"`
 	// Headers are sent with this event's requests only, e.g. NetSuite's
 	// "Prefer: transient" for SuiteQL.
 	Headers map[string]string `json:"headers,omitempty"`
@@ -249,6 +254,9 @@ func (c Config) validate() error {
 	for name, e := range c.Events {
 		if !strings.HasPrefix(e.Path, "/") {
 			return fmt.Errorf("event %s: path must start with /", name)
+		}
+		if e.MaxItems < 0 {
+			return fmt.Errorf("event %s: maxItems must not be negative", name)
 		}
 		switch e.Method {
 		case "", http.MethodGet:
@@ -542,6 +550,9 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 	}
 	idField := or(e.ID, "id")
 	posField := or(e.Position, idField)
+	if e.MaxItems > 0 && limit > e.MaxItems {
+		limit = e.MaxItems
+	}
 	method, q, body := e.listRequest(after, limit)
 	desc := e.Order == "desc"
 	maxPages := 1
