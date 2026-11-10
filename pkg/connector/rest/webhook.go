@@ -171,12 +171,7 @@ func (w *webhook) Receive(header http.Header, body []byte, now time.Time) ([]con
 }
 
 func (w *webhook) matches(item map[string]any) bool {
-	for k, want := range w.cfg.Filter {
-		if scalar(lookup(item, k)) != want {
-			return false
-		}
-	}
-	return true
+	return matchFilter(item, w.cfg.Filter)
 }
 
 func (w *webhook) mac(parts ...[]byte) []byte {

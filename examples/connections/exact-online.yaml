@@ -10,7 +10,8 @@
 # external key, so the idempotency key goes into YourRef (the customer's
 # reference) and a retried create finds the order by it. A saga's undo
 # deletes the order, which Exact refuses once it is delivered. Changed
-# orders are read from Exact's sync API, by row version.
+# orders are read from Exact's sync API, by row version, and deleted ones
+# from its record of deletions.
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
 metadata:
@@ -24,6 +25,7 @@ spec:
   limits: { maxConcurrentCalls: 2, requestsPerSecond: 1 }
   events:
     - { name: SalesOrder.Changed, entity: SalesOrder, interface: polling }
+    - { name: SalesOrder.Deleted, entity: SalesOrder, interface: polling }
   operations:
     - { name: create-sales-order, entity: SalesOrder, direction: write, interface: rest-api, risk: high, compensation: delete-sales-order }
     - { name: delete-sales-order, entity: SalesOrder, direction: write, interface: rest-api, risk: high }
@@ -48,6 +50,22 @@ spec:
         items: d.results
         id: OrderID
         position: Timestamp
+        maxItems: 1000
+      SalesOrder.Deleted:
+        # The sync API's record of deletions, of every entity, by the same
+        # row versions; EntityKey is the deleted order's OrderID. It cannot
+        # be asked for one entity, so the filter keeps sales orders
+        # (EntityType 32) and the cursor moves past the rest. Exact
+        # deletes a record once: its key alone names the event.
+        path: /sync/Deleted
+        params:
+          $filter: "Timestamp gt {{position}}"
+          $select: Timestamp,ID,EntityKey,EntityType,DeletedBy,DeletedDate
+        items: d.results
+        id: EntityKey
+        position: Timestamp
+        versioned: false
+        filter: { EntityType: "32" }
         maxItems: 1000
     operations:
       create-sales-order:

@@ -34,6 +34,11 @@ type Event struct {
 	Position int64           `json:"position"`
 	Name     string          `json:"name"`
 	Payload  json.RawMessage `json:"payload"`
+	// Skip marks a position the source read past without an event to
+	// start: items its filter left out. The engine moves the cursor to it
+	// and starts nothing, so a long run of left-out items is not read again
+	// on every poll. A source returns at most one, last.
+	Skip bool `json:"skip,omitempty"`
 }
 
 // Instance is a connector bound to one system.

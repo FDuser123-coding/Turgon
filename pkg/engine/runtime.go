@@ -317,8 +317,17 @@ func (d *Dispatcher) reconcile(ctx context.Context, src connector.Source, wf com
 		if len(events) == 0 {
 			return nil
 		}
-		if _, err := d.Inbox.Deliver(ctx, inbox, events); err != nil {
-			return fmt.Errorf("%s: inbox: %w", cursor, err)
+		// Skip markers only move the cursor.
+		var deliver []connector.Event
+		for _, ev := range events {
+			if !ev.Skip {
+				deliver = append(deliver, ev)
+			}
+		}
+		if len(deliver) > 0 {
+			if _, err := d.Inbox.Deliver(ctx, inbox, deliver); err != nil {
+				return fmt.Errorf("%s: inbox: %w", cursor, err)
+			}
 		}
 		if err := d.Cursors.SetCursor(ctx, cursor, events[len(events)-1].Position); err != nil {
 			return err
@@ -342,6 +351,13 @@ func (d *Dispatcher) drain(ctx context.Context, wf compiler.Workflow, cursor str
 	}
 	started := 0
 	for _, ev := range events {
+		if ev.Skip {
+			// Items the source's filter left out: nothing to start.
+			if err := d.Cursors.SetCursor(ctx, cursor, ev.Position); err != nil {
+				return started, err
+			}
+			continue
+		}
 		in := RunInput{SpecDigest: d.Runtime.Spec.Metadata.Digest, Workflow: wf, Event: ev, ApprovalTimeout: d.ApprovalTimeout}
 		if err := d.Starter.Start(ctx, RunID(wf.Name, ev), in); err != nil {
 			return started, fmt.Errorf("%s: start %s: %w", cursor, ev.ID, err) // keep the cursor before it

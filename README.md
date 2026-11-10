@@ -720,6 +720,17 @@ QuickBooks and Xero do. Exact differs in a few ways:
     changes made in the repeated autumn hour.
   - **No 60-row pages:** the regular endpoints answer at most 60 rows. Polled on a timestamp
     with 60 rows, more than 60 orders changed within one second would fill every page.
+- **Deleted orders** (`SalesOrder.Deleted`) come from the sync API's record of deletions
+  (`/sync/Deleted`), by the same row versions. Each row names the deleted record by
+  `EntityKey` (the order's `OrderID`) and its entity by `EntityType`. The sync API cannot be
+  asked for one entity, so the event's `filter: {EntityType: "32"}` keeps sales orders.
+  - **The cursor still moves past the other entities' deletions.** A poll whose filter left
+    items out ends with a skip marker (`connector.Event.Skip`) at the last one. The engine moves
+    the cursor to it and starts no run, whether it polls the event or reconciles it into a
+    webhook inbox. Without it, a thousand deleted accounts would fill every page.
+  - **A deletion happens once,** so its key alone names the event (`versioned: false`).
+  - **`filter` is general:** any `rest` event can keep the items whose dotted fields have given
+    values, as a webhook's `filter` does.
 - **Two general additions to `rest`** came out of the first version, which polled the regular
   endpoint:
   - `maxItems` caps a poll's request at what the API answers at once, so a full page is known to

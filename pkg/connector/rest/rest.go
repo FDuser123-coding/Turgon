@@ -99,6 +99,11 @@ type Event struct {
 	Order string `json:"order,omitempty"`
 	// Pagination pages a list by the last item's ID.
 	Pagination *Pagination `json:"pagination,omitempty"`
+	// Filter keeps items whose dotted fields have these values, as a
+	// webhook's does, for an API that lists several kinds of items and
+	// cannot be asked for one (Exact Online's sync/Deleted, of every
+	// entity). The cursor still moves past the items it leaves out.
+	Filter map[string]string `json:"filter,omitempty"`
 	// MaxItems is the most items the API answers at once, whatever it is
 	// asked for (Exact Online: 60). A poll asks for no more, so that a full
 	// answer is known to be cut short, and a timestamp it ends in is never
@@ -260,6 +265,11 @@ func (c Config) validate() error {
 		}
 		if e.MaxItems < 0 {
 			return fmt.Errorf("event %s: maxItems must not be negative", name)
+		}
+		for k := range e.Filter {
+			if !fieldRE.MatchString(k) {
+				return fmt.Errorf("event %s: invalid filter field %q", name, k)
+			}
 		}
 		switch e.Method {
 		case "", http.MethodGet:
@@ -593,6 +603,10 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 				reached = true
 				continue
 			}
+			if !matchFilter(item, e.Filter) {
+				events = append(events, connector.Event{Position: pos, Name: event, Skip: true})
+				continue
+			}
 			payload, err := json.Marshal(item)
 			if err != nil {
 				return nil, err
@@ -637,7 +651,29 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 			return nil, fmt.Errorf("rest: %s: all %d items of a full answer share one %s; the cursor cannot pass it without skipping items", e.Path, len(events), posField)
 		}
 	}
-	return events, nil
+	return lastSkip(events), nil
+}
+
+// lastSkip keeps only a trailing skip marker: an event after a skipped
+// item moves the cursor past it anyway.
+func lastSkip(events []connector.Event) []connector.Event {
+	out := events[:0]
+	for i, ev := range events {
+		if !ev.Skip || i == len(events)-1 {
+			out = append(out, ev)
+		}
+	}
+	return out
+}
+
+// matchFilter reports whether an item has the filter's field values.
+func matchFilter(item map[string]any, filter map[string]string) bool {
+	for k, want := range filter {
+		if scalar(lookup(item, k)) != want {
+			return false
+		}
+	}
+	return true
 }
 
 // listRequest is the first list request for items after a position.
