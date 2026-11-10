@@ -96,6 +96,7 @@ func consoleCmd() *cobra.Command {
 				cfg.Reviews = pgstore.New(pool).Reviews()
 				cfg.Meta = pgstore.New(pool)
 				cfg.Retry = runs
+				cfg.Ledger, cfg.Waker = pgstore.New(pool), runs
 			}
 			for _, a := range auditLogs {
 				if a != "postgres" {

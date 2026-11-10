@@ -1411,6 +1411,17 @@ and `stripe` take a `webhook` block in their config too (`shopify-admin.yaml`,
       next.
     - The ledger of open requests is `turgon_approvals`, in Turgon's database. A request whose run
       ended without closing it expires an hour after that run's approval timeout.
+    - **Orphaned requests:** `turgon approvals` lists the open requests with the run holding each,
+      its status and the runs waiting on it. A request whose run ended without closing it
+      (terminated from Temporal, say) is marked orphaned.
+      - `turgon approvals release WRITE --holder RUN --note WHY` releases one and wakes its
+        waiters, newest first. The console's Approvals page lists the orphaned ones and does the
+        same for operators.
+      - A release is recorded in the audit log (`approval.released`) before it happens. It is
+        refused while the holding run still runs, since its approver decides it.
+      - Measured live: a deal's request was held by a run terminated from Temporal, with its
+        correction waiting on it. Releasing it woke the correction, which asked at 7500; once
+        approved there was one order of 7500 and no request left.
     - Measured live with `fakesf`:
       - A deal won at 7800 asked. Its correction to 7500 waited, listed on the request. Rejecting
         it made the 7500 run ask, and approving that made one order of 7500.

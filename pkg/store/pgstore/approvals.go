@@ -91,3 +91,40 @@ func (s *Store) CloseApproval(key, run string) ([]string, error) {
 	}
 	return waiters, nil
 }
+
+var _ writeguard.ApprovalLedgerAdmin = (*Store)(nil)
+
+// OpenApprovals implements writeguard.ApprovalLedgerAdmin.
+func (s *Store) OpenApprovals() ([]writeguard.HeldApproval, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	rows, err := s.pool.Query(ctx, `SELECT key, holder, until, waiters FROM turgon_approvals ORDER BY key`)
+	if err != nil {
+		return nil, fmt.Errorf("pgstore: open approvals: %w", err)
+	}
+	defer rows.Close()
+	out := []writeguard.HeldApproval{}
+	for rows.Next() {
+		var a writeguard.HeldApproval
+		if err := rows.Scan(&a.Key, &a.Holder, &a.Until, &a.Waiters); err != nil {
+			return nil, fmt.Errorf("pgstore: open approvals: %w", err)
+		}
+		out = append(out, a)
+	}
+	return out, rows.Err()
+}
+
+// ReleaseApproval implements writeguard.ApprovalLedgerAdmin.
+func (s *Store) ReleaseApproval(key, holder string) ([]string, bool, error) {
+	ctx, cancel := s.ctx()
+	defer cancel()
+	var waiters []string
+	err := s.pool.QueryRow(ctx, `DELETE FROM turgon_approvals WHERE key = $1 AND holder = $2 RETURNING waiters`, key, holder).Scan(&waiters)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, fmt.Errorf("pgstore: release approval %s: %w", key, err)
+	}
+	return waiters, true, nil
+}

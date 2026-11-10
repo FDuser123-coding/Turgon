@@ -1,6 +1,7 @@
 package writeguard
 
 import (
+	"sort"
 	"time"
 )
 
@@ -82,3 +83,47 @@ func without(list []string, s string) []string {
 }
 
 var _ ApprovalLedger = (*MemoryStore)(nil)
+
+// HeldApproval is an open request in the ledger: the run holding it, until
+// when, and the runs waiting on its decision.
+type HeldApproval struct {
+	Key     string    `json:"key"`
+	Holder  string    `json:"holder"`
+	Until   time.Time `json:"until"`
+	Waiters []string  `json:"waiters,omitempty"`
+}
+
+// ApprovalLedgerAdmin lets operators see the open requests and release one
+// whose run ended without closing it (it was terminated, say), so the runs
+// waiting on it need not wait for it to expire.
+type ApprovalLedgerAdmin interface {
+	OpenApprovals() ([]HeldApproval, error)
+	// ReleaseApproval ends key's request if holder still holds it, and
+	// returns the runs that waited on it, to be woken. released is false
+	// when another run holds it now, or nobody does.
+	ReleaseApproval(key, holder string) (waiters []string, released bool, err error)
+}
+
+func (s *MemoryStore) OpenApprovals() ([]HeldApproval, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]HeldApproval, 0, len(s.approvals))
+	for k, a := range s.approvals {
+		out = append(out, HeldApproval{Key: k, Holder: a.holder, Until: a.until, Waiters: append([]string(nil), a.waiters...)})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	return out, nil
+}
+
+func (s *MemoryStore) ReleaseApproval(key, holder string) ([]string, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	a := s.approvals[key]
+	if a == nil || a.holder != holder {
+		return nil, false, nil
+	}
+	delete(s.approvals, key)
+	return a.waiters, true, nil
+}
+
+var _ ApprovalLedgerAdmin = (*MemoryStore)(nil)

@@ -3,7 +3,7 @@ import demoMeta from "./demo-meta.json";
 
 // Sample data for the demo build (Vercel). It mirrors what the real API
 // returns for the example recipes, and keeps decisions in memory only.
-import type { Integrations, MetaDetail, MetaOverview, AuditEntry, AuditLog, CatalogReport, Link, LinkResult, PendingApproval, RunDetail, RunSummary, StewardItem, User } from "./types";
+import type { Integrations, MetaDetail, MetaOverview, AuditEntry, AuditLog, CatalogReport, HeldRequest, Link, LinkResult, PendingApproval, RunDetail, RunSummary, StewardItem, User } from "./types";
 
 // createDemoApi builds the sample state. Only the demo build calls it, so
 // production bundles drop it entirely.
@@ -257,8 +257,30 @@ export function createDemoApi() {
     return [...items.values()].sort((a, b) => a.since.localeCompare(b.since));
   }
 
+  // An order whose run an operator terminated in Temporal while it waited:
+  // its request stays held, and a later change of the order waits on it.
+  const ledger: HeldRequest[] = [
+    {
+      key: "erp-db/create-sales-order/SHOP-2998",
+      holder: "shop-orders-to-erp/3",
+      until: at(-60 * 70),
+      waiters: ["shop-orders-to-erp/4"],
+      holderStatus: "terminated",
+      orphaned: true,
+    },
+  ];
+
   return {
     me: () => delay(user),
+    ledger: () => delay(ledger.slice()),
+    release: (q: { key: string; holder: string; note: string }) => {
+      const i = ledger.findIndex((h) => h.key === q.key && h.holder === q.holder);
+      if (i < 0) return Promise.reject(new Error("that run no longer holds this request"));
+      if (!user.roles.includes("operator")) return Promise.reject(new Error("you are not an operator"));
+      const h = ledger.splice(i, 1)[0]!;
+      audit(user.id, "approval.released", { key: h.key, holder: h.holder, holderStatus: h.holderStatus, reason: q.note }, 0);
+      return delay({ waiters: (h.waiters ?? []).length, woken: (h.waiters ?? []).length });
+    },
     steward: () => delay(stewardItems()),
     link: (l: { entity: string; system: string; ref: string; master: string; note?: string }): Promise<LinkResult> => {
       const waiting = runs.filter((r) => {
