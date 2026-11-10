@@ -711,14 +711,22 @@ QuickBooks and Xero do. Exact differs in a few ways:
   (`sales-order-to-shopify-note` 1.5).
 - **Undo:** `DELETE /salesorder/SalesOrders(guid'…')`, which Exact refuses once the order is
   delivered. That refusal is final, and an operator is told.
-- **Events:** changed orders are polled with `Modified gt datetime'{{positionTime}}'`, ordered
-  by `Modified`. Exact dates records as `/Date(ms)/` in the company's time and reads the literal
-  the same way, so the cursor's time is passed as it is.
+- **Events:** changed orders are polled with `Modified gt datetime'{{positionTimeMillis}}'`,
+  ordered by `Modified`. Exact dates records as `/Date(ms)/` in the company's time and reads the
+  literal the same way, so the cursor's time is passed as it is, to the millisecond. A cursor cut
+  to the second would re-read the start of its second on every poll. More than 60 orders
+  changed within one second would then fill every page with orders already read, and the poll
+  would stop moving.
+  - **Known gap:** when the clocks go back in autumn, changes made in the repeated hour date
+    before the cursor and are not polled. Exact's sync API, which pages on a `Timestamp` that
+    only grows, would not have that gap.
 - **60 rows at most:** Exact answers at most 60 rows, whatever `$top` asks for. A new event
   option, `maxItems: 60`, caps the poll's request, so a full page is known to be cut short and
   the timestamp it ends in waits whole for the next poll. Without it, a page that ended inside a
   timestamp would move the cursor past the rest of that timestamp's orders. The test with 61
-  orders loses the 61st without it.
+  orders loses the 61st without it. A page of 60 whose items all share one timestamp cannot be
+  passed without skipping some, since asking for more would get the same 60, so the poll reports
+  it as an error instead of moving on.
 - **Peak:** 0.5 orders a second, since Exact allows 60 calls a minute per company.
 
 `shopify-store-orders-to-exact-online` is the Shopify saga with it. The fake is
@@ -738,6 +746,8 @@ bin/turgon xref set --entity Customer --system shopify-store --source ada@exampl
 Measured against a Temporal 1.28 dev server, Postgres, `fakeshop` and `fakeexact`:
 - **One refresh in all:** `turgon check` refreshed once and stored the sealed token (202 bytes
   under key `t1`). The worker used the stored access token.
+- **Reads:** `get-customer` filters the accounts by ID and takes the first (`result:
+  d.results.0`), so an account that does not exist is not found, rather than read as an empty one.
 - **The order:** a 420.00 Shopify order became Exact sales order 1181 at 420, noted on the
   Shopify order as `ERP order 1181`.
 - **The undo:** when Shopify refused the next note, the saga deleted that order, 1182.
