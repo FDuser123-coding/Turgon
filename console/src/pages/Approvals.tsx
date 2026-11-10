@@ -3,7 +3,7 @@ import { api } from "../api";
 import { Empty, ErrorBanner, Json, Link, PreviewTable, Risk } from "../components";
 import { ago } from "../format";
 import { refreshAll, usePoll } from "../hooks";
-import type { RunSummary, User } from "../types";
+import type { HeldRequest, RunSummary, User } from "../types";
 
 export function Approvals({ user }: { user: User }) {
   const { data, error, refresh } = usePoll(api.runs);
@@ -22,7 +22,95 @@ export function Approvals({ user }: { user: User }) {
       {waiting.map((r) => (
         <ApprovalCard key={r.id + r.pending.digest} run={r} user={user} onDone={refresh} />
       ))}
+      <Orphaned user={user} />
     </section>
+  );
+}
+
+// Requests whose run ended without closing them: the runs waiting on them
+// sleep until the request expires, unless an operator releases it.
+function Orphaned({ user }: { user: User }) {
+  const { data, error, refresh } = usePoll(api.ledger);
+  const orphaned = (data ?? []).filter((h) => h.orphaned);
+  if (!error && orphaned.length === 0) return null;
+  return (
+    <>
+      <h2>Orphaned requests</h2>
+      <p className="muted">
+        The run that asked for these approvals ended without closing its request (it was terminated, say). Runs for
+        later changes of the same record wait on it until it expires. Releasing it wakes them, and the newest asks.
+      </p>
+      <ErrorBanner error={error} />
+      {orphaned.map((h) => (
+        <OrphanCard key={h.key} held={h} user={user} onDone={refresh} />
+      ))}
+    </>
+  );
+}
+
+function OrphanCard({ held, user, onDone }: { held: HeldRequest; user: User; onDone: () => void }) {
+  const [note, setNote] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const canRelease = user.roles.includes("operator");
+  async function release() {
+    setBusy(true);
+    setError(null);
+    try {
+      await api.release({ key: held.key, holder: held.holder, note });
+      setNote("");
+      onDone();
+      refreshAll();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <article className="card">
+      <div className="card-head">
+        <div>
+          <div className="title mono">{held.key}</div>
+          <div className="muted small">
+            held by <Link to={`/runs/${held.holder}`}>{held.holder}</Link> ({held.holderStatus}) · expires{" "}
+            {new Date(held.until).toLocaleString()}
+          </div>
+        </div>
+      </div>
+      <dl className="facts">
+        <dt>Waiting</dt>
+        <dd>
+          {(held.waiters ?? []).length === 0
+            ? "no run waits on it"
+            : (held.waiters ?? []).map((w, i) => (
+                <span key={w}>
+                  {i > 0 ? ", " : ""}
+                  <Link to={`/runs/${w}`} className="mono">
+                    {w}
+                  </Link>
+                </span>
+              ))}
+        </dd>
+      </dl>
+      <ErrorBanner error={error} />
+      {canRelease ? (
+        <div className="decide">
+          <input
+            aria-label="Why release it"
+            placeholder="Why release it (recorded in the audit log)"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            maxLength={500}
+          />
+          <button className="btn btn-ok" disabled={busy || !note.trim()} onClick={() => void release()}>
+            Release
+          </button>
+        </div>
+      ) : (
+        <p className="muted small">An operator can release it.</p>
+      )}
+    </article>
   );
 }
 

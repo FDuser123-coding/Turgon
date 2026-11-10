@@ -40,6 +40,18 @@ export interface PendingApproval {
   waiting?: string[];
 }
 
+// An open request for approval in the ledger. Orphaned: the run holding it
+// ended without closing it, so the runs waiting on it wait for it to expire
+// unless an operator releases it.
+export interface HeldRequest {
+  key: string;
+  holder: string;
+  until: string;
+  waiters?: string[];
+  holderStatus: string;
+  orphaned: boolean;
+}
+
 export interface RunSummary {
   id: string;
   runId: string;

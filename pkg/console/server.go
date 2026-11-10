@@ -51,6 +51,10 @@ type Config struct {
 	// Meta reads the metadata graph: what each system holds, as `turgon
 	// discover` found it, and how it changed.
 	Meta MetaStore
+	// Ledger lists the open requests for approval and releases orphaned
+	// ones (audited in Recorder), and Waker wakes the runs that waited.
+	Ledger Ledger
+	Waker  Waker
 	// Assets overrides the embedded web app; for tests and development.
 	Assets fs.FS
 }
@@ -79,6 +83,8 @@ func New(cfg Config) *Server {
 	s.mux.HandleFunc("GET /api/steward", s.stewardQueue)
 	s.mux.HandleFunc("POST /api/steward/links", s.stewardLink)
 	s.mux.HandleFunc("POST /api/reviews", s.reviewField)
+	s.mux.HandleFunc("GET /api/ledger", s.ledger)
+	s.mux.HandleFunc("POST /api/ledger/release", s.releaseRequest)
 	s.mux.HandleFunc("GET /api/meta", s.metaOverview)
 	s.mux.HandleFunc("GET /api/meta/{endpoint}", s.metaDetail)
 	s.mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {

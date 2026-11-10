@@ -127,3 +127,17 @@ func Pending(ctx context.Context, c client.Client, id string) (*PendingApproval,
 	}
 	return p, nil
 }
+
+// WakeWaiters wakes the runs that waited on a request an operator released,
+// as its holder would have when its run ended. It returns how many it
+// reached; a run that ended meanwhile has nothing to wake.
+func WakeWaiters(ctx context.Context, c client.Client, key string, waiters []string) int {
+	woken := 0
+	// Newest first, as a holder wakes them, so the newest change asks.
+	for i := len(waiters) - 1; i >= 0; i-- {
+		if c.SignalWorkflow(ctx, waiters[i], "", SignalApprovalClosed, key) == nil {
+			woken++
+		}
+	}
+	return woken
+}

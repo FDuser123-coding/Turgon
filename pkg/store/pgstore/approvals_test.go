@@ -57,3 +57,40 @@ func TestApprovalLedger(t *testing.T) {
 		t.Fatalf("expired request still held by %q", h)
 	}
 }
+
+// Operators list the open requests and release one, only from the run that
+// holds it.
+func TestApprovalLedgerAdmin(t *testing.T) {
+	s := newStore(t)
+	key := "erp/create/" + strings.ReplaceAll(t.Name(), "/", "-")
+	soon := time.Now().Add(time.Hour)
+	_, _ = s.OpenApproval(key, "holder", soon)
+	_, _ = s.OpenApproval(key, "waiter", soon)
+	held, err := s.OpenApprovals()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mine *writeguardHeld
+	for i := range held {
+		if held[i].Key == key {
+			mine = &writeguardHeld{held[i].Holder, held[i].Waiters}
+		}
+	}
+	if mine == nil || mine.holder != "holder" || len(mine.waiters) != 1 || mine.waiters[0] != "waiter" {
+		t.Fatalf("held %+v", held)
+	}
+	if w, ok, err := s.ReleaseApproval(key, "waiter"); err != nil || ok || w != nil {
+		t.Fatalf("released by a waiter: %v %v %v", w, ok, err)
+	}
+	if w, ok, err := s.ReleaseApproval(key, "holder"); err != nil || !ok || len(w) != 1 {
+		t.Fatalf("release: %v %v %v", w, ok, err)
+	}
+	if h, _ := s.OpenApproval(key, "next", soon); h != "" {
+		t.Fatalf("still held by %s", h)
+	}
+}
+
+type writeguardHeld struct {
+	holder  string
+	waiters []string
+}

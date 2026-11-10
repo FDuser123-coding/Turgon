@@ -1,5 +1,5 @@
 import { createDemoApi } from "./demo";
-import type { AuditLog, CatalogReport, LinkResult, MetaDetail, MetaOverview, RunDetail, RunSummary, StewardItem, User, Integrations } from "./types";
+import type { AuditLog, CatalogReport, HeldRequest, LinkResult, MetaDetail, MetaOverview, RunDetail, RunSummary, StewardItem, User, Integrations } from "./types";
 
 export class ApiError extends Error {
   constructor(
@@ -60,6 +60,13 @@ const liveApi = {
     }),
   review: (r: { mapping: string; target: string; expression: string; decision: "approved" | "rejected"; note?: string }) =>
     request<{ decision: string; reviewer: string }>("/api/reviews", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(r),
+    }),
+  ledger: () => request<HeldRequest[]>("/api/ledger"),
+  release: (r: { key: string; holder: string; note: string }) =>
+    request<{ waiters: number; woken: number }>("/api/ledger/release", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(r),
