@@ -1,12 +1,14 @@
 # The Shopify saga with Exact Online as the ERP: each new (paid) Shopify
 # order becomes an Exact sales order (a retried create finds the first
 # one's order by YourRef), and its order number is noted on the Shopify
-# order. If the note cannot be written, the order is deleted.
+# order. If the note cannot be written, the order is deleted. Each Exact
+# order is linked to its Shopify order, so its deletion in Exact finds it
+# (exact-online-deleted-orders-to-shopify-note).
 apiVersion: turgon.dev/v1alpha1
 kind: Recipe
 metadata:
   name: shopify-store-orders-to-exact-online
-  version: 1.0.0
+  version: 1.1.0
   description: "A paid Shopify order becomes an Exact Online sales order; its number is added to the Shopify order as a note."
 spec:
   trigger:
@@ -35,6 +37,8 @@ spec:
         idempotencyKey: "SHOPIFY-{{ source.id }}"
         simulate: true
         output: erpOrder
+        # (SalesOrder, exact-online, the order's OrderID) -> the Shopify order.
+        link: { entity: model.SalesOrder, id: OrderID, master: shopifyId }
     - map:
         from: model.SalesOrder
         to: model.Order

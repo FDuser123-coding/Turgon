@@ -122,3 +122,40 @@ func TestRecipeStepUnion(t *testing.T) {
 		t.Errorf("write without idempotency key accepted: %v", es)
 	}
 }
+
+// ifUnknown: skip needs the exact strategy, and a write's link names the
+// result's ID and the document field it links to.
+func TestRecipeSkipAndLink(t *testing.T) {
+	r := &Recipe{
+		TypeMeta: TypeMeta{APIVersion: APIVersion, Kind: KindRecipe},
+		Metadata: ObjectMeta{Name: "r"},
+		Spec: RecipeSpec{
+			Trigger: Trigger{Source: "a", Event: "E"},
+			Steps: []Step{
+				{Resolve: &ResolveStep{Entity: "model.Customer", Strategy: StrategyProbabilistic, AutoMatchAbove: 0.9,
+					Match: []MatchField{{Field: "email", Kind: MatchEmail}}, IfUnknown: IfUnknownSkip}},
+				{Resolve: &ResolveStep{Entity: "model.Customer", Strategy: StrategyExact, AutoMatchAbove: 1, IfUnknown: "ignore"}},
+				{Resolve: &ResolveStep{Entity: "model.Customer", Strategy: StrategyExact, AutoMatchAbove: 1, IfUnknown: IfUnknownSkip}},
+				{Write: &WriteStep{Target: "b", Operation: "op", IdempotencyKey: "k", Link: &WriteLink{Entity: "model.SalesOrder", ID: "d.OrderID", Master: "a.b"}}},
+				{Write: &WriteStep{Target: "b", Operation: "op", IdempotencyKey: "k", Link: &WriteLink{ID: "", Master: "shopifyId"}}},
+			},
+		},
+	}
+	es := r.Validate()
+	for _, want := range []struct{ path, msg string }{
+		{"spec.steps[0].resolve.ifUnknown", "exact strategy"},
+		{"spec.steps[1].resolve.ifUnknown", "must be skip"},
+		{"spec.steps[3].write.link.master", "document field"},
+		{"spec.steps[4].write.link.entity", "required"},
+		{"spec.steps[4].write.link.id", "ID field"},
+	} {
+		if !hasError(es, want.path, want.msg) {
+			t.Errorf("no %s error %q: %v", want.path, want.msg, es)
+		}
+	}
+	for _, e := range es {
+		if strings.HasPrefix(e.Path, "spec.steps[2]") || e.Path == "spec.steps[3].write.link.id" {
+			t.Errorf("valid step refused: %v", e)
+		}
+	}
+}

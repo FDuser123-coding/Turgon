@@ -7,11 +7,13 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	"go.temporal.io/sdk/temporal"
 	"go.temporal.io/sdk/workflow"
 
+	"github.com/fduser123-coding/turgon/apis/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/policy"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
@@ -206,6 +208,16 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 		return workflow.ExecuteLocalActivity(lctx, name, input).Get(lctx, out)
 	}
 
+	// link records a written record as a cross-reference, when the step
+	// asks (only new specs do, so runs from before replay as they ran).
+	link := func(w *compiler.WriteConfig, res json.RawMessage) error {
+		if w.Link == nil {
+			return nil
+		}
+		lin := LinkInput{Link: *w.Link, System: w.Endpoint, Result: res, Doc: doc}
+		return workflow.ExecuteActivity(ctx, a.LinkWrite, lin).Get(ctx, nil)
+	}
+
 	for _, st := range in.Workflow.Steps {
 		failedStep = st.Name
 		switch {
@@ -224,6 +236,13 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 				return fail(err)
 			}
 			doc = next
+			if _, into := st.Resolve.Fields(); st.Resolve.IfUnknown == v1alpha1.IfUnknownSkip && doc[into] == nil {
+				// A record Turgon never linked: nothing of it to update.
+				entity := strings.TrimPrefix(st.Resolve.Entity, "model.")
+				result.Skipped = fmt.Sprintf("%s: a %s from %s without a cross-reference", st.Name, entity, in.Workflow.Trigger.Endpoint)
+				logger.Info("run skipped", "reason", result.Skipped)
+				return result, nil
+			}
 		case st.Write != nil:
 			var prep PrepareOutput
 			pin := PrepareInput{Workflow: in.Workflow.Name, Step: st.Name, Config: *st.Write, Source: source, Doc: doc}
@@ -267,6 +286,9 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 				// Written before this run: not ours to compensate.
 				result.Writes = append(result.Writes, rec)
 				doc = withOutput(doc, st.Write.Output, d.Result)
+				if err := link(st.Write, d.Result); err != nil {
+					return fail(err)
+				}
 				continue
 			}
 
@@ -311,6 +333,9 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 			result.Writes = append(result.Writes, rec)
 			done = append(done, committedWrite{step: st.Name, request: prep.Request, result: out.Result})
 			doc = withOutput(doc, st.Write.Output, out.Result)
+			if err := link(st.Write, out.Result); err != nil {
+				return fail(err)
+			}
 			if len(st.Write.Plugins) > 0 && out.Status == writeguard.StatusCommitted && pluginsOn() {
 				runPlugins(ctx, in.Workflow.Name, st.Name, st.Write, modelRecord(prep.Request.Payload, out.Result))
 			}

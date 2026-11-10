@@ -765,6 +765,40 @@ Measured against a Temporal 1.28 dev server, Postgres, `fakeshop` and `fakeexact
   Shopify order as `ERP order 1181`.
 - **The undo:** when Shopify refused the next note, the saga deleted that order, 1182.
 
+#### Orders deleted in Exact: back to the Shopify order
+
+`exact-online-deleted-orders-to-shopify-note` reacts to `SalesOrder.Deleted`. When a person deletes
+in Exact an order the saga made, the Shopify order's note says so: `ERP order deleted in Exact
+Online on 2026-11-10`. A deletion row names only the order's `OrderID`, so two general additions
+connect it to the Shopify order:
+
+- **A write can link what it made** (`link` on a write step). The saga's create records the cross-reference
+  (`SalesOrder`, `exact-online`, the `OrderID` in its result) → the document's `shopifyId`. It
+  does so after the write commits, or when a retry finds the write already done. The link is
+  idempotent, and the verifier checks that a mapping sets the master field.
+- **A resolve step can skip what it does not know** (`ifUnknown: skip`, exact strategy only).
+  The deletion recipe resolves the deleted `OrderID` back to the Shopify order through that
+  link. An order made in Exact by hand has no link, so its run ends without writing, with a
+  reason (`RunResult.Skipped`) and no data steward.
+
+Lines on `fakeexact`'s standard input act as a person in Exact: `delete <order number>` deletes a
+sales order, and `delete-account <ID>` records an account's deletion.
+
+```sh
+touch exact.cmds && (tail -f exact.cmds | bin/fakeexact > exact.seed &)
+bin/turgon compile -c my-catalog exact-online-deleted-orders-to-shopify-note -o deleted.json
+bin/turgon run -s deleted.json &
+echo "delete 5031" >> exact.cmds                                 # a person deletes the order
+```
+
+Measured against a Temporal 1.28 dev server, Postgres, `fakeshop` and `fakeexact`, with both
+recipes running:
+- **The link:** a 420.00 Shopify order became Exact order 5031, noted as `ERP order 5031`. The
+  saga linked the order's `OrderID` to the Shopify order's ID.
+- **The deletion:** a deleted account, then order 5031, were deleted in Exact. The account's
+  row started no run. The order's started one run, which replaced the Shopify note with `ERP
+  order deleted in Exact Online on 2026-11-10`.
+
 ### Odoo: quotations through the JSON-2 API
 
 The `odoo` connector (`examples/connectors/odoo.yaml`) reaches Odoo 19 and later only through its
@@ -2586,6 +2620,12 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
   `Commit` phases let a workflow wait durably for a person between them.
 - **Write outputs.** A write step's `output` puts its result into the document, so later steps
   can use it (the ERP order number linked back to Salesforce).
+- **Write links.** A write step's `link: {entity, id, master}` records the record it made as a
+  cross-reference to a document field. A later event from the target about that record then
+  resolves back to it (an order deleted in Exact Online, back to its Shopify order).
+- **Unknown references can end a run.** A resolve step with `ifUnknown: skip` (exact strategy)
+  ends the run without writing when the reference has no cross-reference, instead of asking a
+  data steward. Use it for events about records Turgon never linked.
 - **Document fields, by convention or by name.**
   - **Resolve steps:** by default they read `<entity>Ref` and set `<entity>Id` (`customerRef` →
     `customerId`). `ref` and `into` name other fields (`ref: buyerEmail`, `into: soldTo`).

@@ -151,6 +151,16 @@ func (x *Exact) Deliver(id string) {
 	}
 }
 
+// Remove deletes an order, as a person deleting it in Exact would.
+func (x *Exact) Remove(id string) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.orders[id] != nil {
+		delete(x.orders, id)
+		x.recordDeleted(EntitySalesOrderHeader, id)
+	}
+}
+
 // Touch changes an order, as editing it in Exact would.
 func (x *Exact) Touch(id, description string) {
 	x.mu.Lock()

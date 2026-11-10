@@ -1,0 +1,13 @@
+# When the ERP's order for a Shopify order is deleted, say so on the
+# Shopify order, in place of the note with its number.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: deleted-sales-order-to-shopify-note
+  version: 1.0.0
+spec:
+  from: model.SalesOrder
+  to: model.Order
+  fields:
+    - { target: orderId, expression: "salesOrderId",                                  origin: human, confidence: 1.0 }
+    - { target: note,    expression: "'ERP order deleted in Exact Online on ' & deletedOn", origin: human, confidence: 1.0 }
