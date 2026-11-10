@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"github.com/fduser123-coding/turgon/apis/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/identity"
@@ -83,6 +84,10 @@ type RunInput struct {
 // RunResult reports what a run wrote.
 type RunResult struct {
 	Writes []WriteRecord `json:"writes"`
+	// Skipped says why the run ended before its last step without a
+	// failure: a resolve step with ifUnknown: skip found no
+	// cross-reference.
+	Skipped string `json:"skipped,omitempty"`
 }
 
 type WriteRecord struct {
@@ -155,6 +160,15 @@ type PrepareOutput struct {
 type CommitInput struct {
 	Request  writeguard.Request `json:"request"`
 	Approval *policy.Approval   `json:"approval,omitempty"`
+}
+
+// LinkInput records a written record as a cross-reference: (Entity,
+// System, the ID at Link.ID in Result) -> the document's Link.Master.
+type LinkInput struct {
+	Link   v1alpha1.WriteLink `json:"link"`
+	System string             `json:"system"`
+	Result json.RawMessage    `json:"result"`
+	Doc    map[string]any     `json:"doc"`
 }
 
 type CompensateInput struct {

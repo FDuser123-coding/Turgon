@@ -1,0 +1,40 @@
+# When a sales order that shopify-store-orders-to-exact-online made is
+# deleted in Exact Online, the Shopify order it was made for says so. The
+# saga's create links each Exact order to its Shopify order (write link);
+# a deleted order resolves back by that link. Orders made in Exact by hand
+# have none, and their runs end without writing (ifUnknown: skip).
+apiVersion: turgon.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: exact-online-deleted-orders-to-shopify-note
+  version: 1.0.0
+  description: "An Exact Online sales order made for a Shopify order is deleted; the Shopify order's note says so."
+spec:
+  trigger:
+    source: exact-online
+    event: SalesOrder.Deleted
+  steps:
+    - map:
+        from: exact-online.SalesOrder
+        to: model.SalesOrder
+        mapping: exact-online-deleted-order-to-sales-order@1
+    # salesOrderRef (the Exact OrderID) -> salesOrderId (the Shopify order).
+    - resolve:
+        entity: model.SalesOrder
+        strategy: exact
+        autoMatchAbove: 1
+        ifUnknown: skip
+    - map:
+        from: model.SalesOrder
+        to: model.Order
+        mapping: deleted-sales-order-to-shopify-note@1
+    - write:
+        target: shopify-store
+        operation: update-order
+        idempotencyKey: "EXACT-DELETED-{{ source.EntityKey }}"
+        simulate: true
+  policies: [writeback-default]
+  capacity:
+    peakPerSecond: 0.5
+  slo:
+    p95Latency: 10s

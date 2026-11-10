@@ -131,6 +131,9 @@ type ResolveConfig struct {
 	// v1alpha1.ResolveStep); empty means <entity>Ref and <entity>Id.
 	Ref  string `json:"ref,omitempty"`
 	Into string `json:"into,omitempty"`
+	// IfUnknown is skip to end the run when the reference has no
+	// cross-reference (see v1alpha1.ResolveStep).
+	IfUnknown string `json:"ifUnknown,omitempty"`
 }
 
 // Fields returns the document fields the step reads the reference from
@@ -170,6 +173,9 @@ type WriteConfig struct {
 	Amount string `json:"amount,omitempty"`
 	// CheckAmount compares it with the dry run's (see v1alpha1.WriteStep).
 	CheckAmount *v1alpha1.AmountCheck `json:"checkAmount,omitempty"`
+	// Link records the written record as a cross-reference (see
+	// v1alpha1.WriteStep).
+	Link *v1alpha1.WriteLink `json:"link,omitempty"`
 }
 
 // PluginDeployment is a plugin with the capabilities granted to it.
@@ -396,7 +402,7 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 			step.Map = &MapConfig{Mapping: ref(m.Metadata), From: s.Map.From, To: s.Map.To, Fields: fields}
 		case s.Resolve != nil:
 			step.Resolve = &ResolveConfig{Entity: s.Resolve.Entity, Strategy: s.Resolve.Strategy, AutoMatchAbove: s.Resolve.AutoMatchAbove, Match: s.Resolve.Match,
-				Ref: s.Resolve.Ref, Into: s.Resolve.Into}
+				Ref: s.Resolve.Ref, Into: s.Resolve.Into, IfUnknown: s.Resolve.IfUnknown}
 			if doc != nil {
 				// The resolve activity adds the master ID.
 				_, into := step.Resolve.Fields()
@@ -422,7 +428,7 @@ func (b *builder) recipe(r *v1alpha1.Recipe, rep *verifier.Report) {
 				Endpoint: b.endpoint(w.Target), Connector: m.Metadata.Name, Operation: op.Name,
 				Interface: op.Interface, Risk: op.Risk, Entity: op.Entity, IdempotencyKey: w.IdempotencyKey,
 				Approval: approval, Compensation: comp, Metered: m.Spec.Metering.SAPDigitalAccess, Output: w.Output,
-				Amount: w.Amount, CheckAmount: w.CheckAmount,
+				Amount: w.Amount, CheckAmount: w.CheckAmount, Link: w.Link,
 			}
 			if w.Simulate {
 				wc.Simulation = iface.Simulation

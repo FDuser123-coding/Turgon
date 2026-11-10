@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -135,6 +136,16 @@ func (x *Activities) Resolve(ctx context.Context, in ResolveInput) (map[string]a
 	if err != nil {
 		return nil, err // transient: retry
 	}
+	if !found && in.Config.IfUnknown == v1alpha1.IfUnknownSkip {
+		// No master to set: the workflow ends the run.
+		out := make(map[string]any, len(in.Doc))
+		for k, v := range in.Doc {
+			if k != into {
+				out[k] = v
+			}
+		}
+		return out, nil
+	}
 	if !found {
 		attrs := identity.Extract(in.Doc, in.Config.Match)
 		var suggestions []identity.Suggestion
@@ -246,6 +257,47 @@ func (x *Activities) CloseApproval(_ context.Context, in LedgerInput) ([]string,
 		return nil, nil
 	}
 	return l.CloseApproval(in.Key, in.Run)
+}
+
+// Linker records cross-references (pgstore.Store).
+type Linker interface {
+	PutXref(ctx context.Context, entity, system, sourceID, masterID string) error
+}
+
+// LinkWrite records the record a write made as a cross-reference to the
+// document's master field, so the target's later events about it (its
+// deletion) resolve back. Linking again is harmless.
+func (x *Activities) LinkWrite(ctx context.Context, in LinkInput) error {
+	l, ok := x.Resolver.(Linker)
+	if !ok {
+		return nonRetryable(ErrTypeInvalid, errors.New("write link: no cross-reference store configured"))
+	}
+	var result map[string]any
+	if err := json.Unmarshal(in.Result, &result); err != nil {
+		return nonRetryable(ErrTypeInvalid, fmt.Errorf("write link: the result is not an object: %v", err))
+	}
+	id, _ := lookup(result, in.Link.ID)
+	master, _ := lookup(in.Doc, in.Link.Master)
+	sid, mid := scalarString(id), scalarString(master)
+	if sid == "" || mid == "" {
+		return nonRetryable(ErrTypeInvalid, fmt.Errorf("write link: the result has no %s or the document no %s", in.Link.ID, in.Link.Master))
+	}
+	return l.PutXref(ctx, strings.TrimPrefix(in.Link.Entity, "model."), in.System, sid, mid)
+}
+
+// scalarString renders an ID: a string, or a number without exponent.
+func scalarString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	case json.Number:
+		return t.String()
+	case bool, nil:
+		return ""
+	}
+	return fmt.Sprint(v)
 }
 
 // CommitWrite runs the guard's second phase.

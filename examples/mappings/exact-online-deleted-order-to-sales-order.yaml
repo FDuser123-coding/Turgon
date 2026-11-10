@@ -1,0 +1,18 @@
+# A row of Exact Online's record of deletions (sync/Deleted) about a sales
+# order: the deleted order's ID, to resolve back to the order it was made
+# for, and the day it was deleted.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: exact-online-deleted-order-to-sales-order
+  version: 1.0.0
+spec:
+  from: exact-online.SalesOrder
+  to: model.SalesOrder
+  fields:
+    - { target: salesOrderRef, expression: "EntityKey", origin: human, confidence: 1.0 }
+    # DeletedDate is a Microsoft JSON date ("/Date(1794322945192)/").
+    - target: deletedOn
+      expression: "$substring($fromMillis($number($substringBefore($substringAfter(DeletedDate, '/Date('), ')'))), 0, 10)"
+      origin: human
+      confidence: 1.0

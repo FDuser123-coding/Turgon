@@ -186,6 +186,9 @@ func (v *Verifier) recipe(rec *v1alpha1.Recipe, bound map[string]*v1alpha1.Conne
 			if w.Amount != "" && !fields[strings.SplitN(w.Amount, ".", 2)[0]] {
 				r.add(StagePolicy, SeverityError, path+".write.amount", "the amount is read from %s, which mapping %s does not set: approval thresholds would see 0", w.Amount, mapping)
 			}
+			if l := w.Link; l != nil && !fields[strings.SplitN(l.Master, ".", 2)[0]] {
+				r.add(StageMapping, SeverityError, path+".write.link.master", "the link's master is read from %s, which mapping %s does not set", l.Master, mapping)
+			}
 			if w.Output != "" {
 				fields[w.Output] = true
 			}

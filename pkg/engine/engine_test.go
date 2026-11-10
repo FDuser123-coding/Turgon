@@ -59,6 +59,7 @@ type fixture struct {
 	rt       *Runtime
 	store    *pgstore.Store
 	auditLog *bytes.Buffer
+	tokens   *connector.MemoryTokens
 }
 
 // localize rewrites the example's schema names so parallel tests do not collide.
@@ -109,7 +110,22 @@ func newFixtureReg(t *testing.T, recipe string, extra connector.StaticSecrets, w
 	if err := store.PutXref(ctx, "Customer", "shop-db", "ada@example.com", "C-100"); err != nil {
 		t.Fatal(err)
 	}
+	f := &fixture{t: t, pool: pool, schema: schema, store: store, tokens: &connector.MemoryTokens{}}
+	f.rt, f.auditLog = f.runtime(recipe, extra, webhooks, reg, rewrites...)
+	return f
+}
 
+// also returns a fixture for another recipe on the same database, systems
+// and tokens.
+func (f *fixture) also(recipe string, extra connector.StaticSecrets, rewrites ...func(string) string) *fixture {
+	g := *f
+	g.rt, g.auditLog = f.runtime(recipe, extra, false, nil, rewrites...)
+	return &g
+}
+
+func (f *fixture) runtime(recipe string, extra connector.StaticSecrets, webhooks bool, reg connector.Registry, rewrites ...func(string) string) (*Runtime, *bytes.Buffer) {
+	t, ctx, schema, store := f.t, context.Background(), f.schema, f.store
+	t.Helper()
 	cat, err := catalog.Load("../../examples")
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +158,7 @@ func newFixtureReg(t *testing.T, recipe string, extra connector.StaticSecrets, w
 	rt, err := New(ctx, spec, Options{
 		Registry: registry,
 		// Connections whose systems rotate refresh tokens keep them here.
-		Secrets:  connector.WithTokens(secrets, &connector.MemoryTokens{}),
+		Secrets:  connector.WithTokens(secrets, f.tokens),
 		Store:    store,
 		Resolver: store,
 		Audit:    audit.New(&syncWriter{w: &buf}),
@@ -152,7 +168,7 @@ func newFixtureReg(t *testing.T, recipe string, extra connector.StaticSecrets, w
 		t.Fatal(err)
 	}
 	t.Cleanup(rt.Close)
-	return &fixture{t: t, pool: pool, schema: schema, rt: rt, store: store, auditLog: &buf}
+	return rt, &buf
 }
 
 type syncWriter struct {
@@ -1320,22 +1336,75 @@ func TestShopifyRejectionVoidsTheXeroInvoice(t *testing.T) {
 // newExactFixture runs the shopify-store-orders-to-exact-online recipe
 // against the fake Shopify store and the fake Exact Online division.
 func newExactFixture(t *testing.T) (*fixture, *shoptest.Shop, *exacttest.Exact) {
+	f, shop, x, _ := newExactFixtures(t)
+	return f, shop, x
+}
+
+// newExactFixtures also returns a fixture for the recipe on Exact's deleted
+// orders, on the same database and systems.
+func newExactFixtures(t *testing.T) (*fixture, *shoptest.Shop, *exacttest.Exact, func() *fixture) {
 	t.Helper()
 	shop := shoptest.New("shpat_test")
 	t.Cleanup(shop.Close)
 	x, seed := exacttest.New("exact-app", "s3cret")
 	t.Cleanup(x.Close)
-	f := newFixtureFor(t, "shopify-store-orders-to-exact-online", connector.StaticSecrets{
+	secrets := connector.StaticSecrets{
 		"openbao://shopify-store/token": "shpat_test",
 		"openbao://exact-online/oauth":  `{"clientId": "exact-app", "clientSecret": "s3cret", "refreshToken": "` + seed + `"}`,
-	}, func(cfg string) string {
+	}
+	rewrite := func(cfg string) string {
 		cfg = strings.ReplaceAll(cfg, "https://turgon-demo.myshopify.com/admin/api/"+shoptest.Version, shop.URL())
 		return strings.ReplaceAll(cfg, "https://start.exactonline.nl", x.URL())
-	})
+	}
+	f := newFixtureFor(t, "shopify-store-orders-to-exact-online", secrets, rewrite)
 	if err := f.store.PutXref(context.Background(), "Customer", "shopify-store", "ada@example.com", exacttest.Lovelace); err != nil {
 		t.Fatal(err)
 	}
-	return f, shop, x
+	deleted := func() *fixture { return f.also("exact-online-deleted-orders-to-shopify-note", secrets, rewrite) }
+	return f, shop, x, deleted
+}
+
+// The saga links each Exact order to its Shopify order. When a person
+// deletes that order in Exact, the Shopify order's note says so; a deleted
+// order Turgon never made (nor linked) ends its run without writing.
+func TestExactDeletedOrderIsNotedOnShopify(t *testing.T) {
+	f, shop, x, deleted := newExactFixtures(t)
+	id := shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-11-09T09:30:00+01:00",
+		"subtotal_price": "420.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-1", "quantity": 2, "price": "210.00"}},
+	})
+	if _, err, _ := f.run(f.dispatch()[0], approve("04-write")); err != nil {
+		t.Fatal(err)
+	}
+	o := x.OrderByRef(fmt.Sprintf("SHOPIFY-%d", id))
+	master, found, err := f.store.Xref(context.Background(), "SalesOrder", "exact-online", o["OrderID"].(string))
+	if err != nil || !found || master != fmt.Sprint(id) {
+		t.Fatalf("link of the Exact order: %q %v %v", master, found, err)
+	}
+
+	x.Deleted(exacttest.EntitySalesOrderHeader, "0d9c8b7a-1111-4e3a-8b2c-6f1e0d9c8b7a") // made by hand
+	x.Deleted(exacttest.EntityAccount, exacttest.Hopper)
+	x.Remove(o["OrderID"].(string))
+	g := deleted()
+	runs := g.dispatch()
+	if len(runs) != 2 {
+		t.Fatalf("runs = %d", len(runs))
+	}
+	res, err, _ := g.run(runs[0])
+	if err != nil || len(res.Writes) != 0 || !strings.Contains(res.Skipped, "without a cross-reference") {
+		t.Fatalf("an order made by hand: %+v, %v", res, err)
+	}
+	res, err, _ = g.run(runs[1])
+	if err != nil || len(res.Writes) != 1 || res.Writes[0].Status != writeguard.StatusCommitted {
+		t.Fatalf("the saga's order: %+v, %v", res, err)
+	}
+	want := "ERP order deleted in Exact Online on " + time.Now().UTC().Format("2006-01-02")
+	if got := shop.Order(id)["note"]; got != want {
+		t.Fatalf("Shopify note = %v, want %q", got, want)
+	}
+	if again := g.dispatch(); len(again) != 0 {
+		t.Fatalf("read again: %d runs", len(again))
+	}
 }
 
 // A paid shop order becomes an Exact Online sales order at the shop's

@@ -105,6 +105,7 @@ var (
 	secretRefRE = regexp.MustCompile(`^[a-z][a-z0-9+.-]*://\S+$`)
 	handleRE    = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]*[a-z0-9])?$`)
 	fieldRE     = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	pathRE      = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z0-9_]+)*$`)
 )
 
 func validateTypeMeta(t TypeMeta, kind string, es *FieldErrors) {

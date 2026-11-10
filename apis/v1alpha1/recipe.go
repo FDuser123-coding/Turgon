@@ -85,7 +85,15 @@ type ResolveStep struct {
 	// <entity>Ref and <entity>Id (customerRef, customerId).
 	Ref  string `json:"ref,omitempty"`
 	Into string `json:"into,omitempty"`
+	// IfUnknown is what a reference without a cross-reference does: a data
+	// steward links it (default), or skip ends the run without writing,
+	// for events about records Turgon never linked (an order made in the
+	// ERP by hand). Only with the exact strategy.
+	IfUnknown string `json:"ifUnknown,omitempty"`
 }
+
+// IfUnknownSkip ends a run whose reference has no cross-reference.
+const IfUnknownSkip = "skip"
 
 // MatchField is one identifying field of a record.
 type MatchField struct {
@@ -136,6 +144,23 @@ type WriteStep struct {
 	// shows (the ERP's own price), and asks a person when they differ.
 	// It needs simulate.
 	CheckAmount *AmountCheck `json:"checkAmount,omitempty"`
+	// Link records the record the write made as a cross-reference to the
+	// record the run is about, so a later event from the target (the
+	// record deleted there) resolves back to it.
+	Link *WriteLink `json:"link,omitempty"`
+}
+
+// WriteLink links the record a write made, by an ID in its result, to a
+// document field's value: the cross-reference (Entity, the target, ID) ->
+// Master.
+type WriteLink struct {
+	Entity string `json:"entity"`
+	// ID is the dotted path of the record's ID in the write's result, such
+	// as OrderID.
+	ID string `json:"id"`
+	// Master is the document field with the ID it links to, such as
+	// shopifyId.
+	Master string `json:"master"`
 }
 
 // AmountCheck names where the target's dry run shows the write's amount.
@@ -224,6 +249,15 @@ func (r *Recipe) Validate() FieldErrors {
 			if s.Resolve.Strategy == StrategyProbabilistic && len(s.Resolve.Match) == 0 {
 				es.add(path+".resolve.match", "the probabilistic strategy needs the fields to match on")
 			}
+			switch s.Resolve.IfUnknown {
+			case "":
+			case IfUnknownSkip:
+				if s.Resolve.Strategy != StrategyExact {
+					es.add(path+".resolve.ifUnknown", "skip needs the exact strategy: the others link unknown records by matching")
+				}
+			default:
+				es.add(path+".resolve.ifUnknown", "must be skip, got %q", s.Resolve.IfUnknown)
+			}
 		case "write":
 			w := s.Write
 			if w.Target == "" {
@@ -237,6 +271,17 @@ func (r *Recipe) Validate() FieldErrors {
 			}
 			if w.Output != "" && !fieldRE.MatchString(w.Output) {
 				es.add(path+".write.output", "must be a field name, got %q", w.Output)
+			}
+			if l := w.Link; l != nil {
+				if l.Entity == "" {
+					es.add(path+".write.link.entity", "is required")
+				}
+				if !pathRE.MatchString(l.ID) {
+					es.add(path+".write.link.id", "must be the result's ID field (a dotted path), got %q", l.ID)
+				}
+				if !fieldRE.MatchString(l.Master) {
+					es.add(path+".write.link.master", "must be the document field to link to, got %q", l.Master)
+				}
 			}
 			if w.Approval != "" && !oneOf(w.Approval, ApprovalPolicy, ApprovalRequired, ApprovalNone) {
 				es.add(path+".write.approval", "must be policy, required or none, got %q", w.Approval)
