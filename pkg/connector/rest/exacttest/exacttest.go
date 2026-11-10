@@ -15,6 +15,8 @@
 //     (sync/SalesOrder/SalesOrderHeaders): rows whose Timestamp, a row
 //     version every change raises, is above the one asked for, in Timestamp
 //     order, 1000 a page, taking no parameter but that filter and $select;
+//   - records deletions in sync/Deleted, of every entity (EntityType 32 is a
+//     sales order header), by the same row versions and rules;
 //   - filters lists with OData v2: Modified gt datetime'…', YourRef eq '…',
 //     ID eq guid'…', ordered by $orderby (Modified asc), cut to $top, with
 //     the fields $select names;
@@ -74,6 +76,7 @@ type Exact struct {
 	accounts map[string]map[string]any
 	items    map[string]map[string]any
 	orders   map[string]map[string]any
+	deleted  []map[string]any
 	next     int
 	rowver   int64 // the last row version given
 	now      func() time.Time
@@ -155,6 +158,26 @@ func (x *Exact) Touch(id, description string) {
 	if o := x.orders[id]; o != nil {
 		o["Description"], o["Modified"], o["Timestamp"] = description, msdate(x.now()), x.bump()
 	}
+}
+
+// EntitySalesOrderHeader is sync/Deleted's EntityType for a sales order;
+// EntityAccount is an account's.
+const (
+	EntitySalesOrderHeader = 32
+	EntityAccount          = 2
+)
+
+// Deleted records that a record of an entity type was deleted, as deleting
+// it in Exact would.
+func (x *Exact) Deleted(entityType int, key string) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.recordDeleted(entityType, key)
+}
+
+func (x *Exact) recordDeleted(entityType int, key string) {
+	x.deleted = append(x.deleted, map[string]any{"ID": guid(), "EntityKey": key, "EntityType": entityType,
+		"Division": Division, "DeletedBy": "9d6f1b0e-2a3c-4d5e-8f70-1a2b3c4d5e6f", "DeletedDate": msdate(x.now()), "Timestamp": x.bump()})
 }
 
 // bump gives the next row version.
@@ -270,7 +293,12 @@ func (x *Exact) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == API+"/sync/SalesOrder/SalesOrderHeaders" && r.Method == http.MethodGet {
 		x.Requests["GET sync/SalesOrder/SalesOrderHeaders"]++
-		x.sync(w, r)
+		x.sync(w, r, x.syncOrders(), x.view)
+		return
+	}
+	if r.URL.Path == API+"/sync/Deleted" && r.Method == http.MethodGet {
+		x.Requests["GET sync/Deleted"]++
+		x.sync(w, r, x.deleted, clone)
 		return
 	}
 	m := keyRE.FindStringSubmatch(strings.TrimPrefix(r.URL.Path, API+"/"))
@@ -426,9 +454,18 @@ func (x *Exact) list(w http.ResponseWriter, r *http.Request, rows map[string]map
 
 var syncRE = regexp.MustCompile(`^Timestamp gt (\d+)$`)
 
-// sync answers sales orders whose row version is above the filter's, in
-// row version order, 1000 at most, with the fields $select names.
-func (x *Exact) sync(w http.ResponseWriter, r *http.Request) {
+// syncOrders is the sales orders the sync API reads.
+func (x *Exact) syncOrders() []map[string]any {
+	out := make([]map[string]any, 0, len(x.orders))
+	for _, o := range x.orders {
+		out = append(out, o)
+	}
+	return out
+}
+
+// sync answers rows whose row version is above the filter's, in row
+// version order, 1000 at most, with the fields $select names.
+func (x *Exact) sync(w http.ResponseWriter, r *http.Request, rows []map[string]any, view func(map[string]any) map[string]any) {
 	q := r.URL.Query()
 	for k := range q {
 		if k != "$filter" && k != "$select" {
@@ -443,7 +480,7 @@ func (x *Exact) sync(w http.ResponseWriter, r *http.Request) {
 	}
 	after, _ := strconv.ParseInt(m[1], 10, 64)
 	var out []map[string]any
-	for _, o := range x.orders {
+	for _, o := range rows {
 		if o["Timestamp"].(int64) > after {
 			out = append(out, o)
 		}
@@ -458,7 +495,7 @@ func (x *Exact) sync(w http.ResponseWriter, r *http.Request) {
 	}
 	results := make([]any, len(out))
 	for i, o := range out {
-		v := x.view(o)
+		v := view(o)
 		if sel != nil {
 			p := map[string]any{}
 			for _, f := range sel {
@@ -561,5 +598,6 @@ func (x *Exact) delete(w http.ResponseWriter, id string) {
 		return
 	}
 	delete(x.orders, id)
+	x.recordDeleted(EntitySalesOrderHeader, id)
 	reply(w, http.StatusNoContent, nil)
 }

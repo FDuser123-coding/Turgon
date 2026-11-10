@@ -169,3 +169,81 @@ func TestExactChangedOrdersBySyncTimestamp(t *testing.T) {
 		t.Fatal("the sync API was not polled")
 	}
 }
+
+// Deleted orders come from sync/Deleted, which lists deletions of every
+// entity: the filter keeps sales orders, and a poll that finds only other
+// deletions still moves the cursor past them with a skip marker, so they
+// are not read again.
+func TestExactDeletedOrders(t *testing.T) {
+	x, seed := exacttest.New("exact-app", "s3cret")
+	t.Cleanup(x.Close)
+	c := newExactConn(t, x, seed, &connector.MemoryTokens{})
+	ctx := context.Background()
+	var ids []string
+	for i := 0; i < 3; i++ {
+		res, err := c.Commit(ctx, "create-sales-order", fmt.Sprintf("SHOPIFY-%d", i), json.RawMessage(exactOrder))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var o struct{ OrderID string }
+		_ = json.Unmarshal(res, &o)
+		ids = append(ids, o.OrderID)
+	}
+	del := func(i int) {
+		if _, err := c.Commit(ctx, "delete-sales-order", fmt.Sprintf("SHOPIFY-%d#compensate", i), json.RawMessage(`{"OrderID":"`+ids[i]+`"}`)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	del(1)
+	// More deleted accounts than a page holds, then an order.
+	for i := 0; i < 1500; i++ {
+		x.Deleted(exacttest.EntityAccount, fmt.Sprintf("acct-%d", i))
+	}
+	del(2)
+
+	var after int64
+	var got []string
+	polls := 0
+	for ; polls < 10; polls++ {
+		evs, err := c.Poll(ctx, "SalesOrder.Deleted", after, 5000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(evs) == 0 {
+			break
+		}
+		for i, ev := range evs {
+			if ev.Skip {
+				if i != len(evs)-1 || ev.ID != "" || len(ev.Payload) != 0 {
+					t.Fatalf("skip marker %+v at %d of %d", ev, i, len(evs))
+				}
+			} else {
+				if !strings.Contains(string(ev.Payload), `"EntityType":32`) {
+					t.Fatalf("event %s: %s", ev.ID, ev.Payload)
+				}
+				got = append(got, ev.ID)
+			}
+			if ev.Position <= after {
+				t.Fatalf("position %d does not move past %d", ev.Position, after)
+			}
+			after = ev.Position
+		}
+	}
+	if fmt.Sprint(got) != fmt.Sprint([]string{ids[1], ids[2]}) {
+		t.Fatalf("deleted orders %v, want %v", got, ids[1:])
+	}
+	// One page of 1000, then the rest with the order, then nothing.
+	if polls != 2 || x.Requests["GET sync/Deleted"] != 3 {
+		t.Fatalf("%d polls with events, %d requests", polls, x.Requests["GET sync/Deleted"])
+	}
+
+	// Only other entities' deletions: a lone skip marker, read once.
+	x.Deleted(exacttest.EntityAccount, "acct-last")
+	evs, err := c.Poll(ctx, "SalesOrder.Deleted", after, 100)
+	if err != nil || len(evs) != 1 || !evs[0].Skip {
+		t.Fatalf("only accounts deleted: %+v, %v", evs, err)
+	}
+	if evs, err := c.Poll(ctx, "SalesOrder.Deleted", evs[0].Position, 100); err != nil || len(evs) != 0 {
+		t.Fatalf("after the skip: %+v, %v", evs, err)
+	}
+}
