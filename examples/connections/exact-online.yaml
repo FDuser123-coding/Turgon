@@ -10,7 +10,7 @@
 # external key, so the idempotency key goes into YourRef (the customer's
 # reference) and a retried create finds the order by it. A saga's undo
 # deletes the order, which Exact refuses once it is delivered. Changed
-# orders are polled on Modified.
+# orders are read from Exact's sync API, by row version.
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
 metadata:
@@ -37,23 +37,18 @@ spec:
     checkPath: "/salesorder/SalesOrders?$top=1&$select=OrderID"
     events:
       SalesOrder.Changed:
-        path: /salesorder/SalesOrders
-        # Exact dates records as /Date(ms)/ in the company's time and reads
-        # a datetime literal the same way, so the cursor's time is passed
-        # as it is, to the millisecond. It answers at most 60 rows at once.
-        # When the clocks go back in autumn, changes made in the repeated
-        # hour date before the cursor and are not polled; Exact's sync API
-        # (Timestamp) would not have that gap.
+        # Exact's sync API: orders whose Timestamp, a row version every
+        # change raises (not a date), is above the cursor, in Timestamp
+        # order, 1000 a page. It takes no parameter but that filter and
+        # $select, and never goes back when the clocks do.
+        path: /sync/SalesOrder/SalesOrderHeaders
         params:
-          $filter: "Modified gt datetime'{{positionTimeMillis}}'"
-          $orderby: Modified asc
-          $top: "{{limit}}"
-          $select: OrderID,OrderNumber,OrderedBy,OrderDate,YourRef,Description,Status,DeliveryStatus,AmountDC,Currency,Modified
+          $filter: "Timestamp gt {{position}}"
+          $select: Timestamp,OrderID,OrderNumber,OrderedBy,OrderDate,YourRef,Description,Status,DeliveryStatus,AmountDC,Currency,Modified
         items: d.results
         id: OrderID
-        position: Modified
-        positionFormat: msjson
-        maxItems: 60
+        position: Timestamp
+        maxItems: 1000
     operations:
       create-sales-order:
         method: POST

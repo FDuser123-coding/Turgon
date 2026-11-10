@@ -80,43 +80,6 @@ func TestExactOrderRetryAndDelete(t *testing.T) {
 	}
 }
 
-// Changed orders are read on Modified (/Date(ms)/), at most 60 at once: a
-// poll asks for no more, and leaves the timestamp a full page ends in for
-// the next one. An order changed again is a new event of the same order.
-func TestExactChangedOrders(t *testing.T) {
-	x, seed := exacttest.New("exact-app", "s3cret")
-	t.Cleanup(x.Close)
-	clock := time.Date(2026, 11, 9, 9, 0, 0, 0, time.UTC)
-	x.StartAt(1, func() time.Time { return clock })
-	c := newExactConn(t, x, seed, &connector.MemoryTokens{})
-	ctx := context.Background()
-	// 59 orders in one second, then two a second later: a page of 60 ends
-	// inside the second second, which waits whole for the next poll.
-	for i := 0; i < 61; i++ {
-		if i == 59 {
-			clock = clock.Add(time.Second)
-		}
-		if _, err := c.Commit(ctx, "create-sales-order", "SHOPIFY-"+string(rune('A'+i/26))+string(rune('a'+i%26)), json.RawMessage(exactOrder)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	first, err := c.Poll(ctx, "SalesOrder.Changed", 0, 100)
-	if err != nil || len(first) != 59 {
-		t.Fatalf("first poll: %d events, %v", len(first), err)
-	}
-	rest, err := c.Poll(ctx, "SalesOrder.Changed", first[58].Position, 100)
-	if err != nil || len(rest) != 2 || !strings.Contains(string(rest[1].Payload), `"OrderNumber":61`) {
-		t.Fatalf("second poll: %d events, %v", len(rest), err)
-	}
-	clock = clock.Add(time.Minute)
-	order := connector.RecordID(first[0].ID)
-	x.Touch(order, "changed")
-	again, err := c.Poll(ctx, "SalesOrder.Changed", rest[1].Position, 100)
-	if err != nil || len(again) != 1 || connector.RecordID(again[0].ID) != order || again[0].ID == first[0].ID {
-		t.Fatalf("after a change: %+v, %v", again, err)
-	}
-}
-
 // Exact gives the token's lifetime as a string and takes the client's
 // credentials in the form; the refresh token rotates, kept in the store.
 // The customer is read by ID, and check reads one order.
@@ -144,58 +107,6 @@ func TestExactTokensReadAndCheck(t *testing.T) {
 	}
 }
 
-// More than 60 orders changed within one second are all read: the cursor
-// keeps its milliseconds, so a poll does not re-read the start of its
-// second and fill the 60 rows with orders it has passed.
-func TestExactReadsABurstWithinOneSecond(t *testing.T) {
-	x, seed := exacttest.New("exact-app", "s3cret")
-	t.Cleanup(x.Close)
-	clock := time.Date(2026, 11, 9, 9, 0, 0, 5_000_000, time.UTC)
-	x.StartAt(1, func() time.Time { return clock })
-	c := newExactConn(t, x, seed, &connector.MemoryTokens{})
-	ctx := context.Background()
-	for i := 0; i < 100; i++ {
-		clock = clock.Add(5 * time.Millisecond)
-		if _, err := c.Commit(ctx, "create-sales-order", fmt.Sprintf("SHOPIFY-%d", i), json.RawMessage(exactOrder)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	seen := map[string]bool{}
-	var after int64
-	for poll := 0; poll < 5; poll++ {
-		evs, err := c.Poll(ctx, "SalesOrder.Changed", after, 100)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, ev := range evs {
-			seen[ev.ID] = true
-			after = ev.Position
-		}
-	}
-	if len(seen) != 100 {
-		t.Fatalf("seen %d of 100 orders", len(seen))
-	}
-}
-
-// A full page of orders sharing one timestamp cannot be passed without
-// skipping some: the poll says so instead of moving on.
-func TestExactFullPageOfOneTimestampIsAnError(t *testing.T) {
-	x, seed := exacttest.New("exact-app", "s3cret")
-	t.Cleanup(x.Close)
-	clock := time.Date(2026, 11, 9, 9, 0, 0, 0, time.UTC)
-	x.StartAt(1, func() time.Time { return clock })
-	c := newExactConn(t, x, seed, &connector.MemoryTokens{})
-	ctx := context.Background()
-	for i := 0; i < 61; i++ {
-		if _, err := c.Commit(ctx, "create-sales-order", fmt.Sprintf("SHOPIFY-%d", i), json.RawMessage(exactOrder)); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if evs, err := c.Poll(ctx, "SalesOrder.Changed", 0, 100); err == nil || !strings.Contains(err.Error(), "share one Modified") {
-		t.Fatalf("%d events, %v", len(evs), err)
-	}
-}
-
 // A customer that does not exist is not found, rather than read as an
 // empty, unblocked one.
 func TestExactMissingCustomerIsNotFound(t *testing.T) {
@@ -204,5 +115,57 @@ func TestExactMissingCustomerIsNotFound(t *testing.T) {
 	c := newExactConn(t, x, seed, &connector.MemoryTokens{})
 	if got, err := c.Read(context.Background(), "get-customer", "00000000-0000-4000-8000-000000000000"); !errors.Is(err, writeguard.ErrNotFound) {
 		t.Fatalf("%s, %v", got, err)
+	}
+}
+
+// Changed orders come from the sync API, by row version: every order is
+// read once however many pages it takes, an order changed again is a new
+// event of it, and a change made after the clocks went back is read too.
+func TestExactChangedOrdersBySyncTimestamp(t *testing.T) {
+	x, seed := exacttest.New("exact-app", "s3cret")
+	t.Cleanup(x.Close)
+	clock := time.Date(2026, 10, 25, 2, 30, 0, 0, time.UTC)
+	x.StartAt(1, func() time.Time { return clock })
+	c := newExactConn(t, x, seed, &connector.MemoryTokens{})
+	ctx := context.Background()
+	for i := 0; i < 1200; i++ {
+		if _, err := c.Commit(ctx, "create-sales-order", fmt.Sprintf("SHOPIFY-%d", i), json.RawMessage(exactOrder)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := map[string]bool{}
+	var after int64
+	poll := func() []connector.Event {
+		evs, err := c.Poll(ctx, "SalesOrder.Changed", after, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range evs {
+			if seen[ev.ID] {
+				t.Fatalf("event %s read twice", ev.ID)
+			}
+			seen[ev.ID] = true
+			after = ev.Position
+		}
+		return evs
+	}
+	for i := 0; i < 20; i++ {
+		if len(poll()) == 0 {
+			break
+		}
+	}
+	if len(seen) != 1200 {
+		t.Fatalf("seen %d of 1200 orders", len(seen))
+	}
+	// The clocks go back an hour; the order changed then is still read.
+	clock = clock.Add(-time.Hour)
+	ids := x.OrderIDs()
+	x.Touch(ids[0], "changed in the repeated hour")
+	again := poll()
+	if len(again) != 1 || connector.RecordID(again[0].ID) != ids[0] || !strings.Contains(string(again[0].Payload), `"OrderNumber":1`) {
+		t.Fatalf("after the change: %+v", again)
+	}
+	if x.Requests["GET sync/SalesOrder/SalesOrderHeaders"] == 0 {
+		t.Fatal("the sync API was not polled")
 	}
 }
