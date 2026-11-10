@@ -2,8 +2,11 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -81,6 +84,61 @@ func approvalPending(p PendingApproval, deadline time.Time) notify.Notification 
 		Text:  "A run is waiting for someone to approve or reject this write. Nothing is written until then.",
 		Facts: notify.SortedFacts(facts),
 	}
+}
+
+// newerChangeWaiting tells the approvers of a write that its record changed
+// meanwhile, and that the change's run waits on their decision. It names
+// the fields that differ, not their values; the amount, which the request
+// notice already shows, is given before and after.
+func newerChangeWaiting(p PendingApproval, c NewerChange) notify.Notification {
+	r := p.Request
+	facts := map[string]string{
+		"Target":                r.Target,
+		"Operation":             r.Operation,
+		"Step":                  p.Step,
+		"Reference":             r.IdempotencyKey,
+		"Newer run":             c.Run,
+		"Changed":               strings.Join(changedFields(r.Payload, c.Request.Payload), ", "),
+		"Newer changes waiting": strconv.Itoa(len(p.Waiting)),
+	}
+	if facts["Changed"] == "" {
+		facts["Changed"] = "nothing this write sends"
+	}
+	if r.Amount != c.Request.Amount {
+		facts["Amount"] = strconv.FormatFloat(r.Amount, 'f', 2, 64) + " → " + strconv.FormatFloat(c.Request.Amount, 'f', 2, 64)
+	}
+	return notify.Notification{
+		Kind: notify.ApprovalNewerChange, Step: p.Step,
+		Title: fmt.Sprintf("A newer change waits: %s on %s", r.Operation, r.Target),
+		Text: "The record changed while this write waits for approval. Approving writes the version awaiting approval, " +
+			"and the newer change finds it done; rejecting lets the newer change ask with its own data.",
+		Facts: notify.SortedFacts(facts),
+	}
+}
+
+// changedFields names the top-level fields of two payloads that differ,
+// sorted: those set in only one of them, and those whose values differ.
+func changedFields(a, b json.RawMessage) []string {
+	var x, y map[string]json.RawMessage
+	_ = json.Unmarshal(a, &x)
+	_ = json.Unmarshal(b, &y)
+	same := func(p, q json.RawMessage) bool {
+		var u, v any
+		return json.Unmarshal(p, &u) == nil && json.Unmarshal(q, &v) == nil && reflect.DeepEqual(u, v)
+	}
+	var out []string
+	for k, v := range x {
+		if w, ok := y[k]; !ok || !same(v, w) {
+			out = append(out, k)
+		}
+	}
+	for k := range y {
+		if _, ok := x[k]; !ok {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
 }
 
 func approvalTimedOut(p PendingApproval) notify.Notification {

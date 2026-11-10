@@ -1388,7 +1388,12 @@ and `stripe` take a `webhook` block in their config too (`shopify-admin.yaml`,
   - **One request per write.** While a write waits for approval, a later change's run for
     the same write (same target, operation and `idempotencyKey`) does not ask again:
     - It waits on the open request, which lists it as a newer change (`waiting` in
-      `turgon pending`, "Newer changes" in the console).
+      `turgon pending`, "Newer changes" in the console). Its approvers are told
+      (`approval.newer-change`), with the fields that differ and the amount before and after.
+      Measured live with the signed JSON webhook: a deal won at 7800 sent `approval.pending`. Its
+      correction sent `approval.newer-change` with `Amount: 7800.00 → 7500.00` and
+      `Changed: netValue`, linking the waiting request. Rejecting that request sent a new
+      `approval.pending` at 7500.
     - Approving makes the waiting run's write a duplicate.
     - Rejecting wakes it to ask with its own data, so a corrected deal is what the approver sees
       next.
@@ -1633,6 +1638,7 @@ Workers tell people when a run needs them, so nobody has to watch the console:
 | Event | Who acts | Link |
 |---|---|---|
 | A write waits for approval (a recipe's, or one an agent asked for: the message names the agent and the user it acts for) | an approver, before the deadline shown | the run |
+| The record changed while its write waits for approval: the newer change waits on the decision (the message names the fields that differ, and the amount before and after) | the approver, who approves the version waiting or rejects it so the newer change asks | the run |
 | Nobody decided in time (the write was rejected) | an operator, who retries the run to ask again | the run |
 | A record matches no master record | a data steward | the steward queue |
 | A system refused a write as invalid (the message names the fields the refusal says were missing, and says whether the earlier writes were undone) | an operator, who fixes the mapping or the record and retries the run | the run |
