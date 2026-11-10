@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"time"
 
 	"go.temporal.io/sdk/temporal"
@@ -37,6 +38,16 @@ const approvalLedgerVersion = "approval-ledger"
 // approvalNewerVersion gates telling the holder of a request the waiting
 // run's own request (SignalApprovalNewer) rather than only its ID.
 const approvalNewerVersion = "approval-newer"
+
+// ledgerReleaseVersion gates closing a run's requests when the run ends
+// (on a disconnected context, newest waiter first), rather than right
+// after each write's commit.
+const ledgerReleaseVersion = "ledger-release-at-end"
+
+// approvalNoticeVersion gates telling approvers of a newer change
+// (approval.newer-change), which runs that received the signal before the
+// notice existed replay without.
+const approvalNoticeVersion = "approval-newer-notice"
 
 // ledgerMargin keeps a request in the ledger a little past its run's
 // timeout, after which another run may take it over.
@@ -86,22 +97,40 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 	newer := workflow.GetSignalChannel(ctx, SignalApprovalNewer)
 	closed := workflow.GetSignalChannel(ctx, SignalApprovalClosed)
 	self := workflow.GetInfo(ctx).WorkflowExecution.ID
-	// held is the ledger key of the request this run holds open.
-	held := ""
-	release := func() {
-		if held == "" {
-			return
+	// held are the ledger keys of the requests this run holds open, closed
+	// when the run ends (see release).
+	var held []string
+	// release closes a request and wakes the runs that waited on it.
+	// Runs from before ledgerReleaseVersion closed it right after its
+	// commit, on the run's own context, and woke waiters oldest first.
+	release := func(key string, atEnd bool) {
+		rctx := ctx
+		if atEnd {
+			// A cancelled run still closes what it holds.
+			rctx, _ = workflow.NewDisconnectedContext(ctx)
 		}
 		var waiters []string
-		if err := workflow.ExecuteActivity(ctx, a.CloseApproval, LedgerInput{Key: held, Run: self}).Get(ctx, &waiters); err != nil {
-			logger.Warn("could not close the request for approval; it expires on its own", "key", held, "error", err)
+		if err := workflow.ExecuteActivity(rctx, a.CloseApproval, LedgerInput{Key: key, Run: self}).Get(rctx, &waiters); err != nil {
+			logger.Warn("could not close the request for approval; it expires on its own", "key", key, "error", err)
+		}
+		if atEnd {
+			// The newest change is woken first, so it is the one that asks
+			// again after a rejection.
+			slices.Reverse(waiters)
 		}
 		for _, w := range waiters {
 			// A waiter that ended meanwhile has nothing to wake.
-			_ = workflow.SignalExternalWorkflow(ctx, w, "", SignalApprovalClosed, held).Get(ctx, nil)
+			_ = workflow.SignalExternalWorkflow(rctx, w, "", SignalApprovalClosed, key).Get(rctx, nil)
 		}
-		held = ""
 	}
+	// Requests are closed once the run has ended, its compensations
+	// included: a waiter woken earlier could find a write that a later
+	// failure of this run then undoes.
+	defer func() {
+		for _, key := range held {
+			release(key, true)
+		}
+	}()
 
 	var result RunResult
 	var done []committedWrite
@@ -198,6 +227,7 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 		case st.Write != nil:
 			var prep PrepareOutput
 			pin := PrepareInput{Workflow: in.Workflow.Name, Step: st.Name, Config: *st.Write, Source: source, Doc: doc}
+			stepKey := "" // the request this step holds
 			for {
 				prep = PrepareOutput{}
 				if err := workflow.ExecuteActivity(ctx, a.PrepareWrite, pin).Get(ctx, &prep); err != nil {
@@ -218,7 +248,7 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 					return fail(err)
 				}
 				if holder == "" {
-					held = key
+					stepKey = key
 					break
 				}
 				logger.Info("waiting on another run's request for approval", "key", key, "holder", holder)
@@ -247,8 +277,14 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 					Preview: prep.Prepared.Preview, Reasons: prep.Prepared.Decision.Reasons, Since: workflow.Now(ctx),
 				}
 				tell(ctx, in.Workflow.Name, approvalPending(*pending, pending.Since.Add(timeout)))
-				onNewer := func(c NewerChange) { tell(ctx, in.Workflow.Name, newerChangeWaiting(*pending, c)) }
-				approval = awaitApproval(ctx, approvals, waitingRuns{ids: waiting, changes: newer, onNewer: onNewer}, pending, timeout)
+				onNewer := func(c NewerChange) {
+					// Runs from before the notice replay without it.
+					if workflow.GetVersion(ctx, approvalNoticeVersion, workflow.DefaultVersion, 1) == 1 {
+						tell(ctx, in.Workflow.Name, newerChangeWaiting(*pending, c))
+					}
+				}
+				wr := waitingRuns{ids: waiting, changes: newer, onNewer: onNewer, key: writeguard.ApprovalKey(prep.Request)}
+				approval = awaitApproval(ctx, approvals, wr, pending, timeout)
 				wait := workflow.Now(ctx).Sub(pending.Since)
 				waited += wait
 				recordApproval(ctx, in.Workflow.Name, approval, wait)
@@ -261,9 +297,13 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 			var out writeguard.Outcome
 			cin := CommitInput{Request: prep.Request, Approval: approval}
 			err := workflow.ExecuteActivity(ctx, a.CommitWrite, cin).Get(ctx, &out)
-			// Waiters wake once the outcome is stored: after an approval
-			// they find the write done.
-			release()
+			if stepKey != "" {
+				if workflow.GetVersion(ctx, ledgerReleaseVersion, workflow.DefaultVersion, 1) == 1 {
+					held = append(held, stepKey) // closed when the run ends
+				} else {
+					release(stepKey, false)
+				}
+			}
 			if err != nil {
 				return fail(err)
 			}
@@ -315,6 +355,9 @@ const approvalTimeoutActor = "turgon/approval-timeout"
 type waitingRuns struct {
 	ids, changes workflow.ReceiveChannel
 	onNewer      func(NewerChange)
+	// key is the pending request's ledger key: a change for another write
+	// (announced to an earlier step of this run) is not listed.
+	key string
 }
 
 // Runs that start waiting on the decision meanwhile are listed in p.Waiting.
@@ -356,6 +399,9 @@ func awaitApproval(ctx workflow.Context, ch workflow.ReceiveChannel, w waitingRu
 		sel.AddReceive(w.changes, func(c workflow.ReceiveChannel, _ bool) {
 			var nc NewerChange
 			c.Receive(ctx, &nc)
+			if w.key != "" && writeguard.ApprovalKey(nc.Request) != w.key {
+				return
+			}
 			if add(nc.Run) && w.onNewer != nil {
 				w.onNewer(nc)
 			}
