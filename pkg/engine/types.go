@@ -28,7 +28,18 @@ const (
 	// SignalApprovalClosed wakes a waiting run once the request it waited
 	// on is decided; the payload is the write's ledger key.
 	SignalApprovalClosed = "turgon.approval-closed"
+	// SignalApprovalNewer replaces SignalApprovalWaiting: it carries the
+	// waiting run's request (a NewerChange), so the run holding the
+	// request can tell the approvers what changed.
+	SignalApprovalNewer = "turgon.approval-newer"
 )
+
+// NewerChange is a later change's run waiting on an open request, with the
+// request it would make.
+type NewerChange struct {
+	Run     string             `json:"run"`
+	Request writeguard.Request `json:"request"`
+}
 
 // Error types reported by activities. Temporal does not retry them.
 const (

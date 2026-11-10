@@ -26,11 +26,14 @@ import (
 
 // Kinds of notification.
 const (
-	ApprovalPending    = "approval.pending"
-	ApprovalTimedOut   = "approval.timed-out"
-	StewardNeeded      = "steward.needed"
-	CompensationFailed = "compensation.failed"
-	WriteRefused       = "write.refused"
+	ApprovalPending  = "approval.pending"
+	ApprovalTimedOut = "approval.timed-out"
+	// ApprovalNewerChange: the record changed while its write waits for
+	// approval, and the change's run waits on the decision.
+	ApprovalNewerChange = "approval.newer-change"
+	StewardNeeded       = "steward.needed"
+	CompensationFailed  = "compensation.failed"
+	WriteRefused        = "write.refused"
 )
 
 // Notification is one message about one run.

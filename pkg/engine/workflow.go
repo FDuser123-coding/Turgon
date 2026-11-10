@@ -34,6 +34,10 @@ const localStepsVersion = "local-map-resolve"
 // another run already asks to approve waits on that decision.
 const approvalLedgerVersion = "approval-ledger"
 
+// approvalNewerVersion gates telling the holder of a request the waiting
+// run's own request (SignalApprovalNewer) rather than only its ID.
+const approvalNewerVersion = "approval-newer"
+
 // ledgerMargin keeps a request in the ledger a little past its run's
 // timeout, after which another run may take it over.
 const ledgerMargin = time.Hour
@@ -79,6 +83,7 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 	}
 	approvals := workflow.GetSignalChannel(ctx, SignalApproval)
 	waiting := workflow.GetSignalChannel(ctx, SignalApprovalWaiting)
+	newer := workflow.GetSignalChannel(ctx, SignalApprovalNewer)
 	closed := workflow.GetSignalChannel(ctx, SignalApprovalClosed)
 	self := workflow.GetInfo(ctx).WorkflowExecution.ID
 	// held is the ledger key of the request this run holds open.
@@ -217,7 +222,11 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 					break
 				}
 				logger.Info("waiting on another run's request for approval", "key", key, "holder", holder)
-				_ = workflow.SignalExternalWorkflow(ctx, holder, "", SignalApprovalWaiting, self).Get(ctx, nil)
+				if workflow.GetVersion(ctx, approvalNewerVersion, workflow.DefaultVersion, 1) == 1 {
+					_ = workflow.SignalExternalWorkflow(ctx, holder, "", SignalApprovalNewer, NewerChange{Run: self, Request: prep.Request}).Get(ctx, nil)
+				} else {
+					_ = workflow.SignalExternalWorkflow(ctx, holder, "", SignalApprovalWaiting, self).Get(ctx, nil)
+				}
 				since := workflow.Now(ctx)
 				awaitClosed(ctx, closed, timeout+ledgerMargin)
 				waited += workflow.Now(ctx).Sub(since)
@@ -238,7 +247,8 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 					Preview: prep.Prepared.Preview, Reasons: prep.Prepared.Decision.Reasons, Since: workflow.Now(ctx),
 				}
 				tell(ctx, in.Workflow.Name, approvalPending(*pending, pending.Since.Add(timeout)))
-				approval = awaitApproval(ctx, approvals, waiting, pending, timeout)
+				onNewer := func(c NewerChange) { tell(ctx, in.Workflow.Name, newerChangeWaiting(*pending, c)) }
+				approval = awaitApproval(ctx, approvals, waitingRuns{ids: waiting, changes: newer, onNewer: onNewer}, pending, timeout)
 				wait := workflow.Now(ctx).Sub(pending.Since)
 				waited += wait
 				recordApproval(ctx, in.Workflow.Name, approval, wait)
@@ -299,8 +309,16 @@ const approvalTimeoutActor = "turgon/approval-timeout"
 // the timeout passes; a timeout is recorded as a rejection. Signals for
 // another step or another version of the request are ignored, so a decision
 // sent early, or about a different request, can never approve this one.
+// waitingRuns are the channels on which later changes' runs announce that
+// they wait on a request: by ID (SignalApprovalWaiting), or with their own
+// request (SignalApprovalNewer), which onNewer, if set, tells people about.
+type waitingRuns struct {
+	ids, changes workflow.ReceiveChannel
+	onNewer      func(NewerChange)
+}
+
 // Runs that start waiting on the decision meanwhile are listed in p.Waiting.
-func awaitApproval(ctx workflow.Context, ch, waiting workflow.ReceiveChannel, p *PendingApproval, timeout time.Duration) *policy.Approval {
+func awaitApproval(ctx workflow.Context, ch workflow.ReceiveChannel, w waitingRuns, p *PendingApproval, timeout time.Duration) *policy.Approval {
 	tctx, cancel := workflow.WithCancel(ctx)
 	defer cancel()
 	timer := workflow.NewTimer(tctx, timeout)
@@ -321,15 +339,26 @@ func awaitApproval(ctx workflow.Context, ch, waiting workflow.ReceiveChannel, p 
 			}
 			got = &policy.Approval{Status: status, By: sig.By, Note: sig.Note}
 		})
-		sel.AddReceive(waiting, func(c workflow.ReceiveChannel, _ bool) {
-			var run string
-			c.Receive(ctx, &run)
+		add := func(run string) bool {
 			for _, w := range p.Waiting {
 				if w == run {
-					return
+					return false
 				}
 			}
 			p.Waiting = append(p.Waiting, run)
+			return true
+		}
+		sel.AddReceive(w.ids, func(c workflow.ReceiveChannel, _ bool) {
+			var run string
+			c.Receive(ctx, &run)
+			add(run)
+		})
+		sel.AddReceive(w.changes, func(c workflow.ReceiveChannel, _ bool) {
+			var nc NewerChange
+			c.Receive(ctx, &nc)
+			if add(nc.Run) && w.onNewer != nil {
+				w.onNewer(nc)
+			}
 		})
 		sel.AddFuture(timer, func(workflow.Future) {
 			got = &policy.Approval{Status: policy.ApprovalRejected, By: approvalTimeoutActor,
