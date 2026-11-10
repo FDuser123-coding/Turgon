@@ -379,12 +379,16 @@ func (a *authenticator) current(ctx context.Context) (string, error) {
 		life = time.Hour
 	}
 	// Refresh early so a request never carries an expiring token.
-	margin := time.Minute
-	if life < 4*margin {
-		margin = life / 4
-	}
-	a.token, a.expires = tok.AccessToken, time.Now().Add(life-margin)
+	a.token, a.expires = tok.AccessToken, time.Now().Add(life-refreshMargin(life))
 	return a.token, nil
+}
+
+// refreshMargin is how long before a token expires it is refreshed, so a
+// request never carries an expiring one: a minute, or a twentieth of a
+// short life. Exact Online's tokens live ten minutes and Exact refuses a
+// refresh in the first 570 seconds, so they are refreshed at 570.
+func refreshMargin(life time.Duration) time.Duration {
+	return min(time.Minute, life/20)
 }
 
 // seconds is a token's lifetime as servers send it: a number, or a number
@@ -481,12 +485,8 @@ func (a *authenticator) refreshed(ctx context.Context) (string, error) {
 			if err != nil {
 				return nil, err
 			}
-			margin := time.Minute
-			if life < 4*margin {
-				margin = life / 4
-			}
 			spent := st.RefreshToken
-			st.AccessToken, st.Expires = access, time.Now().Add(life-margin)
+			st.AccessToken, st.Expires = access, time.Now().Add(life-refreshMargin(life))
 			if refresh != "" {
 				st.RefreshToken = refresh
 			}

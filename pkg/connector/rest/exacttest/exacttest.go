@@ -11,6 +11,10 @@
 //   - wraps one entity as {"d": {...}} and lists as {"d": {"results": [...]}},
 //     at most 60 a page, and dates records as Microsoft JSON
 //     ("/Date(1730803200000)/");
+//   - serves changed sales orders through the sync API
+//     (sync/SalesOrder/SalesOrderHeaders): rows whose Timestamp, a row
+//     version every change raises, is above the one asked for, in Timestamp
+//     order, 1000 a page, taking no parameter but that filter and $select;
 //   - filters lists with OData v2: Modified gt datetime'…', YourRef eq '…',
 //     ID eq guid'…', ordered by $orderby (Modified asc), cut to $top, with
 //     the fields $select names;
@@ -53,8 +57,12 @@ const (
 	Chair    = "a1b2c3d4-0002-4e5f-9a8b-0c1d2e3f4a5b" // item M-2, 235.00
 )
 
-// PageSize is the most rows Exact Online answers at once.
-const PageSize = 60
+// PageSize is the most rows Exact Online's regular endpoints answer at
+// once; SyncPageSize is the sync API's.
+const (
+	PageSize     = 60
+	SyncPageSize = 1000
+)
 
 // Exact is the fake division.
 type Exact struct {
@@ -67,6 +75,7 @@ type Exact struct {
 	items    map[string]map[string]any
 	orders   map[string]map[string]any
 	next     int
+	rowver   int64 // the last row version given
 	now      func() time.Time
 	srv      *httptest.Server
 	// Refreshes counts refresh grants that succeeded; Spent counts refused ones.
@@ -135,7 +144,7 @@ func (x *Exact) Deliver(id string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	if o := x.orders[id]; o != nil {
-		o["DeliveryStatus"], o["DeliveryStatusDescription"], o["Modified"] = 21, "Complete", msdate(x.now())
+		o["DeliveryStatus"], o["DeliveryStatusDescription"], o["Modified"], o["Timestamp"] = 21, "Complete", msdate(x.now()), x.bump()
 	}
 }
 
@@ -144,8 +153,14 @@ func (x *Exact) Touch(id, description string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	if o := x.orders[id]; o != nil {
-		o["Description"], o["Modified"] = description, msdate(x.now())
+		o["Description"], o["Modified"], o["Timestamp"] = description, msdate(x.now()), x.bump()
 	}
+}
+
+// bump gives the next row version.
+func (x *Exact) bump() int64 {
+	x.rowver += 7 // row versions grow, not by one
+	return x.rowver
 }
 
 func (x *Exact) URL() string { return x.srv.URL }
@@ -251,6 +266,11 @@ func (x *Exact) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if !strings.HasPrefix(r.URL.Path, API+"/") {
 		fail(w, http.StatusUnauthorized, "Forbidden: the division is not in this user's divisions")
+		return
+	}
+	if r.URL.Path == API+"/sync/SalesOrder/SalesOrderHeaders" && r.Method == http.MethodGet {
+		x.Requests["GET sync/SalesOrder/SalesOrderHeaders"]++
+		x.sync(w, r)
 		return
 	}
 	m := keyRE.FindStringSubmatch(strings.TrimPrefix(r.URL.Path, API+"/"))
@@ -404,6 +424,55 @@ func (x *Exact) list(w http.ResponseWriter, r *http.Request, rows map[string]map
 	reply(w, http.StatusOK, map[string]any{"d": map[string]any{"results": results}})
 }
 
+var syncRE = regexp.MustCompile(`^Timestamp gt (\d+)$`)
+
+// sync answers sales orders whose row version is above the filter's, in
+// row version order, 1000 at most, with the fields $select names.
+func (x *Exact) sync(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	for k := range q {
+		if k != "$filter" && k != "$select" {
+			fail(w, http.StatusBadRequest, "The sync API takes only a Timestamp filter and $select, not "+k)
+			return
+		}
+	}
+	m := syncRE.FindStringSubmatch(q.Get("$filter"))
+	if m == nil {
+		fail(w, http.StatusBadRequest, "The sync API needs $filter=Timestamp gt <n>")
+		return
+	}
+	after, _ := strconv.ParseInt(m[1], 10, 64)
+	var out []map[string]any
+	for _, o := range x.orders {
+		if o["Timestamp"].(int64) > after {
+			out = append(out, o)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i]["Timestamp"].(int64) < out[j]["Timestamp"].(int64) })
+	if len(out) > SyncPageSize {
+		out = out[:SyncPageSize]
+	}
+	var sel []string
+	if s := q.Get("$select"); s != "" {
+		sel = strings.Split(s, ",")
+	}
+	results := make([]any, len(out))
+	for i, o := range out {
+		v := x.view(o)
+		if sel != nil {
+			p := map[string]any{}
+			for _, f := range sel {
+				if val, ok := v[strings.TrimSpace(f)]; ok {
+					p[strings.TrimSpace(f)] = val
+				}
+			}
+			v = p
+		}
+		results[i] = v
+	}
+	reply(w, http.StatusOK, map[string]any{"d": map[string]any{"results": results}})
+}
+
 func num(v any) (float64, bool) {
 	switch n := v.(type) {
 	case json.Number:
@@ -475,7 +544,7 @@ func (x *Exact) create(w http.ResponseWriter, r *http.Request) {
 	o := map[string]any{"OrderID": id, "OrderNumber": x.next, "OrderedBy": cust, "OrderedByName": acct["Name"], "OrderDate": msdate(date),
 		"YourRef": in["YourRef"], "Description": in["Description"], "Status": 12, "StatusDescription": "Open", "DeliveryStatus": 12,
 		"DeliveryStatusDescription": "Open", "AmountDC": math.Round(total*100) / 100, "Currency": "EUR",
-		"Created": msdate(x.now()), "Modified": msdate(x.now()), "Lines": out}
+		"Created": msdate(x.now()), "Modified": msdate(x.now()), "Timestamp": x.bump(), "Lines": out}
 	x.next++
 	x.orders[id] = o
 	reply(w, http.StatusCreated, map[string]any{"d": x.view(o)})

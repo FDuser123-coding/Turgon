@@ -82,3 +82,30 @@ func TestMaxItemsCapsAPollAndKeepsTimestampsWhole(t *testing.T) {
 		t.Fatal("a negative maxItems was accepted")
 	}
 }
+
+// {{positionTimeMillis}} keeps the cursor's milliseconds, so a poll does
+// not re-read the start of its second. With maxItems, a full page whose
+// items all share one timestamp is an error: asking again would get the
+// same page, and moving past it would skip the rest of that timestamp.
+func TestPositionTimeMillisAndAFullPageOfOneTimestamp(t *testing.T) {
+	var asked string
+	page := `{"d":{"results":[{"id":"a","m":"2026-09-24T10:00:00.250Z"},{"id":"b","m":"2026-09-24T10:00:00.250Z"}]}}`
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		asked = r.URL.Query().Get("since")
+		fmt.Fprint(w, page)
+	}))
+	defer api.Close()
+	c, err := New(Config{BaseURL: api.URL, Auth: Auth{Type: "none"}, Events: map[string]Event{"Changed": {
+		Path: "/x", Params: map[string]string{"since": "{{positionTimeMillis}}"}, Items: "d.results", Position: "m", PositionFormat: "rfc3339", MaxItems: 2,
+	}}}, "", http.DefaultClient)
+	if err != nil {
+		t.Fatal(err)
+	}
+	after := time.Date(2026, 9, 24, 10, 0, 0, 125_000_000, time.UTC).UnixMilli()
+	if _, err := c.Poll(context.Background(), "Changed", after, 100); err == nil || !strings.Contains(err.Error(), "share one m") {
+		t.Fatalf("a full page of one timestamp: %v", err)
+	}
+	if asked != "2026-09-24T10:00:00.125" {
+		t.Fatalf("asked since %q", asked)
+	}
+}

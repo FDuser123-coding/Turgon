@@ -689,7 +689,7 @@ Measured against a Temporal 1.28 dev server, Postgres, `fakeshop` and `fakexero`
   order as `ERP order INV-3761`.
 - **The undo:** when Shopify refused the next note, the saga voided its invoice, INV-3762.
 
-### Exact Online: OData, rotating refresh tokens and 60-row pages
+### Exact Online: OData, rotating refresh tokens and the sync API
 
 Exact Online (`examples/connections/exact-online.yaml`) also authorizes an app with a refresh
 token that rotates on every refresh, so it uses `oauth2-refresh` and the token vault as
@@ -711,22 +711,24 @@ QuickBooks and Xero do. Exact differs in a few ways:
   (`sales-order-to-shopify-note` 1.5).
 - **Undo:** `DELETE /salesorder/SalesOrders(guid'…')`, which Exact refuses once the order is
   delivered. That refusal is final, and an operator is told.
-- **Events:** changed orders are polled with `Modified gt datetime'{{positionTimeMillis}}'`,
-  ordered by `Modified`. Exact dates records as `/Date(ms)/` in the company's time and reads the
-  literal the same way, so the cursor's time is passed as it is, to the millisecond. A cursor cut
-  to the second would re-read the start of its second on every poll. More than 60 orders
-  changed within one second would then fill every page with orders already read, and the poll
-  would stop moving.
-  - **Known gap:** when the clocks go back in autumn, changes made in the repeated hour date
-    before the cursor and are not polled. Exact's sync API, which pages on a `Timestamp` that
-    only grows, would not have that gap.
-- **60 rows at most:** Exact answers at most 60 rows, whatever `$top` asks for. A new event
-  option, `maxItems: 60`, caps the poll's request, so a full page is known to be cut short and
-  the timestamp it ends in waits whole for the next poll. Without it, a page that ended inside a
-  timestamp would move the cursor past the rest of that timestamp's orders. The test with 61
-  orders loses the 61st without it. A page of 60 whose items all share one timestamp cannot be
-  passed without skipping some, since asking for more would get the same 60, so the poll reports
-  it as an error instead of moving on.
+- **Events:** changed orders come from Exact's sync API
+  (`/sync/SalesOrder/SalesOrderHeaders`, `$filter=Timestamp gt {{position}}`). `Timestamp` is a
+  row version that every change raises, not a date. Rows come in `Timestamp` order, 1000 a page
+  (`maxItems: 1000`), and the API takes no other parameter but `$select`.
+  - **No daylight-saving gap:** the cursor never goes back when the clocks do. The regular
+    endpoint dates records in the company's local time, so polling it on `Modified` would miss
+    changes made in the repeated autumn hour.
+  - **No 60-row pages:** the regular endpoints answer at most 60 rows. Polled on a timestamp
+    with 60 rows, more than 60 orders changed within one second would fill every page.
+- **Two general additions to `rest`** came out of the first version, which polled the regular
+  endpoint:
+  - `maxItems` caps a poll's request at what the API answers at once, so a full page is known to
+    be cut short and the timestamp it ends in waits whole for the next poll. A full page whose
+    items all share one timestamp is an error, since asking again would get the same page.
+  - `{{positionTimeMillis}}` renders the cursor with its milliseconds, for APIs that keep them.
+- **Token refresh:** Exact's access tokens live ten minutes, and Exact refuses a refresh in the
+  first 570 seconds. `rest` refreshes a token a minute before it expires, or a twentieth of its
+  life when that is shorter: for Exact, at 570 seconds.
 - **Peak:** 0.5 orders a second, since Exact allows 60 calls a minute per company.
 
 `shopify-store-orders-to-exact-online` is the Shopify saga with it. The fake is
