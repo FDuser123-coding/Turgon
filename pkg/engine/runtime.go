@@ -323,9 +323,9 @@ func (d *Dispatcher) reconcile(ctx context.Context, src connector.Source, wf com
 		if err := d.Cursors.SetCursor(ctx, cursor, events[len(events)-1].Position); err != nil {
 			return err
 		}
-		if len(events) < batch {
-			return nil
-		}
+		// A short batch does not mean the source is drained: an API that
+		// answers fewer rows than asked (maxItems), or a batch cut at a
+		// timestamp, has more. Only an empty one does.
 	}
 }
 

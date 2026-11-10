@@ -236,3 +236,91 @@ func TestAWaitingRunSendsItsRequest(t *testing.T) {
 		t.Fatalf("sent %+v", sent)
 	}
 }
+
+// A run's requests are closed once it has ended: a waiter woken while a
+// later step could still fail would find a write the run then undoes. The
+// newest waiter is woken first.
+func TestWaitersWakeAfterTheRunEndsNewestFirst(t *testing.T) {
+	f, sf := newSalesforceFixture(t)
+	sf.FailPatch = func(string, string, map[string]any) (int, string, string) {
+		return 400, "FIELD_CUSTOM_VALIDATION_EXCEPTION", "Opportunity is locked for finance review"
+	}
+	runs := f.dispatch()
+	key := "erp-db/create-sales-order/" + wonDeal
+
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestWorkflowEnvironment()
+	Register(env, f.rt.Activities)
+	var woken []string
+	cancelledWhenWoken := true
+	for _, w := range []string{"older-run", "newer-run"} {
+		w := w
+		env.OnSignalExternalWorkflow(mock.Anything, w, "", SignalApprovalClosed, key).Return(nil).Run(func(mock.Arguments) {
+			woken = append(woken, w)
+			cancelledWhenWoken = cancelledWhenWoken && f.orders(`external_id = '`+wonDeal+`' AND status = 'cancelled'`) == 1
+		})
+	}
+	env.RegisterDelayedCallback(func() {
+		for _, w := range []string{"older-run", "newer-run"} {
+			if holder, err := f.store.OpenApproval(key, w, time.Now().Add(time.Hour)); err != nil || holder != testRun {
+				t.Errorf("%s: holder %q, %v", w, holder, err)
+			}
+		}
+		var p *PendingApproval
+		if v, err := env.QueryWorkflow(QueryPending); err == nil {
+			_ = v.Get(&p)
+		}
+		sig := approve("03-write")
+		sig.Digest = p.Digest
+		env.SignalWorkflow(SignalApproval, sig)
+	}, time.Hour)
+	env.ExecuteWorkflow(IntegrationWorkflow, runs[0])
+	if !env.IsWorkflowCompleted() || errType(env.GetWorkflowError()) != ErrTypeInvalid {
+		t.Fatalf("completed %v, %v", env.IsWorkflowCompleted(), env.GetWorkflowError())
+	}
+	if len(woken) != 2 || woken[0] != "newer-run" || !cancelledWhenWoken {
+		t.Fatalf("woken %v, the order cancelled by then: %v", woken, cancelledWhenWoken)
+	}
+	if holder, _ := f.store.OpenApproval(key, "next-run", time.Now().Add(time.Hour)); holder != "" {
+		t.Fatalf("still held by %s", holder)
+	}
+}
+
+// A change announced for another write (an earlier step's, say) is not
+// listed on this request, nor told to its approvers.
+func TestANewerChangeForAnotherWriteIsIgnored(t *testing.T) {
+	f := newFixture(t)
+	rec := f.listen()
+	f.publish(1106, "ada@example.com", "100.00")
+	runs := f.dispatch()
+
+	var s testsuite.WorkflowTestSuite
+	env := s.NewTestWorkflowEnvironment()
+	Register(env, f.rt.Activities)
+	var seen *PendingApproval
+	env.RegisterDelayedCallback(func() {
+		var p *PendingApproval
+		if v, err := env.QueryWorkflow(QueryPending); err != nil || v.Get(&p) != nil || p == nil {
+			t.Error("nothing pending")
+			return
+		}
+		other := p.Request
+		other.Operation = "update-sales-order"
+		env.SignalWorkflow(SignalApprovalNewer, NewerChange{Run: "elsewhere", Request: other})
+	}, time.Hour)
+	env.RegisterDelayedCallback(func() {
+		if v, err := env.QueryWorkflow(QueryPending); err == nil {
+			_ = v.Get(&seen)
+		}
+		sig := approve("03-write")
+		sig.Digest = seen.Digest
+		env.SignalWorkflow(SignalApproval, sig)
+	}, 2*time.Hour)
+	env.ExecuteWorkflow(IntegrationWorkflow, runs[0])
+	if !env.IsWorkflowCompleted() || env.GetWorkflowError() != nil {
+		t.Fatalf("completed %v, %v", env.IsWorkflowCompleted(), env.GetWorkflowError())
+	}
+	if len(seen.Waiting) != 0 || rec.kinds() != notify.ApprovalPending {
+		t.Fatalf("waiting %v, sent %s", seen.Waiting, rec.kinds())
+	}
+}

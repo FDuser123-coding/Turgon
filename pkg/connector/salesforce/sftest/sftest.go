@@ -259,7 +259,24 @@ func (s *Server) query(w http.ResponseWriter, soql string) {
 		}
 	}
 	where := soql[strings.Index(soql, " WHERE ")+7:]
-	conds := soqlCondRE.FindAllStringSubmatch(where, -1)
+	if i := strings.Index(where, " ORDER BY "); i >= 0 {
+		where = where[:i]
+	}
+	// Every condition must be one the fake evaluates: one it skipped would
+	// return rows Salesforce filters out, and hide a wrong where clause.
+	var conds [][]string
+	for _, term := range strings.Split(strings.NewReplacer("(", "", ")", "").Replace(where), " AND ") {
+		term = strings.TrimSpace(term)
+		if strings.HasPrefix(term, "SystemModstamp > ") {
+			continue
+		}
+		c := soqlCondRE.FindStringSubmatch(term)
+		if c == nil || c[0] != term {
+			writeErr(w, http.StatusBadRequest, "MALFORMED_QUERY", "the fake does not evaluate the condition "+term)
+			return
+		}
+		conds = append(conds, c)
+	}
 	holds := func(rec map[string]any) bool {
 		for _, c := range conds {
 			v, set := rec[c[1]]

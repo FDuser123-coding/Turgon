@@ -28,9 +28,9 @@ func main() {
 	seen := map[string]bool{}
 	refreshes := 0
 	for range time.Tick(500 * time.Millisecond) {
-		if x.Refreshes != refreshes {
-			refreshes = x.Refreshes
-			fmt.Fprintf(os.Stderr, "token refreshed (%d so far, %d spent tokens refused); the refresh token rotated\n", x.Refreshes, x.Spent)
+		if n, spent := x.TokenCounts(); n != refreshes {
+			refreshes = n
+			fmt.Fprintf(os.Stderr, "token refreshed (%d so far, %d spent tokens refused); the refresh token rotated\n", n, spent)
 		}
 		now := map[string]bool{}
 		for _, id := range x.OrderIDs() {

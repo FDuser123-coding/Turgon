@@ -40,9 +40,12 @@ spec:
         path: /salesorder/SalesOrders
         # Exact dates records as /Date(ms)/ in the company's time and reads
         # a datetime literal the same way, so the cursor's time is passed
-        # as it is. It answers at most 60 rows at once.
+        # as it is, to the millisecond. It answers at most 60 rows at once.
+        # When the clocks go back in autumn, changes made in the repeated
+        # hour date before the cursor and are not polled; Exact's sync API
+        # (Timestamp) would not have that gap.
         params:
-          $filter: "Modified gt datetime'{{positionTime}}'"
+          $filter: "Modified gt datetime'{{positionTimeMillis}}'"
           $orderby: Modified asc
           $top: "{{limit}}"
           $select: OrderID,OrderNumber,OrderedBy,OrderDate,YourRef,Description,Status,DeliveryStatus,AmountDC,Currency,Modified
@@ -74,4 +77,6 @@ spec:
       get-customer:
         method: GET
         path: "/crm/Accounts?$filter=ID%20eq%20guid'{{id}}'&$select=Name,Email,Code,Blocked"
-        fields: { d.results.0.Name: name, d.results.0.Email: email, d.results.0.Code: code, d.results.0.Blocked: blocked }
+        # An empty list is an account that does not exist.
+        result: d.results.0
+        fields: { Name: name, Email: email, Code: code, Blocked: blocked }

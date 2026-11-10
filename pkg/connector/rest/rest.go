@@ -88,7 +88,10 @@ type Event struct {
 	// Xero answers). {{position}} renders in it; {{positionTime}} is always
 	// the UTC time without a zone ("2009-11-12T00:00:00"), for a request that
 	// takes a time where the answer holds another format (Xero's
-	// If-Modified-Since, which reads it as UTC).
+	// If-Modified-Since, which reads it as UTC). {{positionTimeMillis}} is
+	// the same with milliseconds ("2009-11-12T00:00:00.000"), for an API
+	// that keeps them (Exact Online): a cursor cut to the second would
+	// re-read the rest of its second on every poll.
 	PositionFormat string `json:"positionFormat,omitempty"`
 	// Order is the API's list order: "asc" (default, oldest first) or
 	// "desc" (newest first, as Stripe lists). A descending list is paged
@@ -624,8 +627,14 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 		for cut > 0 && events[cut-1].Position == events[len(events)-1].Position {
 			cut--
 		}
-		if cut > 0 {
+		switch {
+		case cut > 0:
 			events = events[:cut]
+		case e.MaxItems > 0 && limit == e.MaxItems:
+			// The API answers no more than this, so the next poll would
+			// read the same page: moving past a timestamp it fills would
+			// skip the rest of it, staying would never move.
+			return nil, fmt.Errorf("rest: %s: all %d items of a full answer share one %s; the cursor cannot pass it without skipping items", e.Path, len(events), posField)
 		}
 	}
 	return events, nil
@@ -658,6 +667,8 @@ func (e Event) listRequest(after int64, limit int) (string, url.Values, any) {
 				return strconv.FormatInt(after, 10)
 			case "positionTime":
 				return time.UnixMilli(after).UTC().Format("2006-01-02T15:04:05")
+			case "positionTimeMillis":
+				return time.UnixMilli(after).UTC().Format("2006-01-02T15:04:05.000")
 			case "limit":
 				return strconv.Itoa(limit)
 			}

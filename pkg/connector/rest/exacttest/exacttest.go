@@ -122,6 +122,14 @@ func (x *Exact) ExpireAccessTokens() {
 	x.access = map[string]time.Time{}
 }
 
+// TokenCounts returns Refreshes and Spent, read under the lock, for a
+// caller that runs while the server does.
+func (x *Exact) TokenCounts() (refreshes, spent int) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	return x.Refreshes, x.Spent
+}
+
 // Deliver marks an order delivered, after which Exact refuses to delete it.
 func (x *Exact) Deliver(id string) {
 	x.mu.Lock()
@@ -324,7 +332,7 @@ func (x *Exact) list(w http.ResponseWriter, r *http.Request, rows map[string]map
 	if f := q.Get("$filter"); f != "" {
 		switch {
 		case modifiedRE.MatchString(f):
-			t, err := time.Parse("2006-01-02T15:04:05", strings.SplitN(modifiedRE.FindStringSubmatch(f)[1], ".", 2)[0])
+			t, err := time.Parse("2006-01-02T15:04:05.999999999", modifiedRE.FindStringSubmatch(f)[1])
 			if err != nil {
 				fail(w, http.StatusBadRequest, "Invalid datetime literal")
 				return

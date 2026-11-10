@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -140,5 +141,68 @@ func TestExactTokensReadAndCheck(t *testing.T) {
 	}
 	if x.Refreshes != 2 || x.Spent != 0 {
 		t.Fatalf("refreshes %d, spent %d", x.Refreshes, x.Spent)
+	}
+}
+
+// More than 60 orders changed within one second are all read: the cursor
+// keeps its milliseconds, so a poll does not re-read the start of its
+// second and fill the 60 rows with orders it has passed.
+func TestExactReadsABurstWithinOneSecond(t *testing.T) {
+	x, seed := exacttest.New("exact-app", "s3cret")
+	t.Cleanup(x.Close)
+	clock := time.Date(2026, 11, 9, 9, 0, 0, 5_000_000, time.UTC)
+	x.StartAt(1, func() time.Time { return clock })
+	c := newExactConn(t, x, seed, &connector.MemoryTokens{})
+	ctx := context.Background()
+	for i := 0; i < 100; i++ {
+		clock = clock.Add(5 * time.Millisecond)
+		if _, err := c.Commit(ctx, "create-sales-order", fmt.Sprintf("SHOPIFY-%d", i), json.RawMessage(exactOrder)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	seen := map[string]bool{}
+	var after int64
+	for poll := 0; poll < 5; poll++ {
+		evs, err := c.Poll(ctx, "SalesOrder.Changed", after, 100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, ev := range evs {
+			seen[ev.ID] = true
+			after = ev.Position
+		}
+	}
+	if len(seen) != 100 {
+		t.Fatalf("seen %d of 100 orders", len(seen))
+	}
+}
+
+// A full page of orders sharing one timestamp cannot be passed without
+// skipping some: the poll says so instead of moving on.
+func TestExactFullPageOfOneTimestampIsAnError(t *testing.T) {
+	x, seed := exacttest.New("exact-app", "s3cret")
+	t.Cleanup(x.Close)
+	clock := time.Date(2026, 11, 9, 9, 0, 0, 0, time.UTC)
+	x.StartAt(1, func() time.Time { return clock })
+	c := newExactConn(t, x, seed, &connector.MemoryTokens{})
+	ctx := context.Background()
+	for i := 0; i < 61; i++ {
+		if _, err := c.Commit(ctx, "create-sales-order", fmt.Sprintf("SHOPIFY-%d", i), json.RawMessage(exactOrder)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if evs, err := c.Poll(ctx, "SalesOrder.Changed", 0, 100); err == nil || !strings.Contains(err.Error(), "share one Modified") {
+		t.Fatalf("%d events, %v", len(evs), err)
+	}
+}
+
+// A customer that does not exist is not found, rather than read as an
+// empty, unblocked one.
+func TestExactMissingCustomerIsNotFound(t *testing.T) {
+	x, seed := exacttest.New("exact-app", "s3cret")
+	t.Cleanup(x.Close)
+	c := newExactConn(t, x, seed, &connector.MemoryTokens{})
+	if got, err := c.Read(context.Background(), "get-customer", "00000000-0000-4000-8000-000000000000"); !errors.Is(err, writeguard.ErrNotFound) {
+		t.Fatalf("%s, %v", got, err)
 	}
 }
