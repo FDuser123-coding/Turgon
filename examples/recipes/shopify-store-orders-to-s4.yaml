@@ -7,7 +7,7 @@ apiVersion: turgon.dev/v1alpha1
 kind: Recipe
 metadata:
   name: shopify-store-orders-to-s4
-  version: 1.0.0
+  version: 1.1.0
   description: "A Shopify order becomes an S/4HANA sales order through SAP's released OData API."
 spec:
   trigger:
@@ -36,6 +36,8 @@ spec:
         # differs from the shop's by more than 1%, a person is asked.
         checkAmount: { preview: record.TotalNetAmount, tolerance: 0.01 }
         output: erpOrder
+        # The ERP's order, linked to its Shopify order.
+        link: { entity: model.SalesOrder, id: id, master: shopifyId }
     - map:
         from: model.SalesOrder
         to: model.Order
