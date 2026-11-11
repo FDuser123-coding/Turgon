@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/fduser123-coding/turgon/pkg/engine"
 	"github.com/fduser123-coding/turgon/pkg/writeguard"
@@ -51,10 +52,12 @@ func (s *Server) ledger(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]HeldRequest, 0, len(held))
 	for _, h := range held {
+		// One run Temporal cannot describe does not hide the others; it
+		// is not called orphaned, since it may still run.
 		status, err := s.holderStatus(r.Context(), h.Holder)
 		if err != nil {
-			writeError(w, http.StatusBadGateway, "workflow engine: "+err.Error())
-			return
+			out = append(out, HeldRequest{HeldApproval: h, HolderStatus: "unknown"})
+			continue
 		}
 		out = append(out, HeldRequest{HeldApproval: h, HolderStatus: status, Orphaned: status != "running"})
 	}
@@ -103,7 +106,7 @@ func (s *Server) releaseRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.Note = strings.TrimSpace(req.Note)
-	if req.Key == "" || req.Holder == "" || req.Note == "" || len(req.Note) > 500 {
+	if req.Key == "" || req.Holder == "" || req.Note == "" || utf8.RuneCountInString(req.Note) > 500 {
 		writeError(w, http.StatusBadRequest, "key, holder and a note (why, at most 500 characters) are required")
 		return
 	}
@@ -122,12 +125,16 @@ func (s *Server) releaseRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	waiters, released, err := s.cfg.Ledger.ReleaseApproval(req.Key, req.Holder)
-	switch {
-	case err != nil:
-		writeError(w, http.StatusBadGateway, "approval ledger: "+err.Error())
-		return
-	case !released:
-		writeError(w, http.StatusConflict, "that run no longer holds this request")
+	if err != nil || !released {
+		// The release was audited before it was tried: say it failed.
+		status, msg := http.StatusConflict, "that run no longer holds this request"
+		if err != nil {
+			status, msg = http.StatusBadGateway, "approval ledger: "+err.Error()
+		}
+		if _, aerr := s.record(user.ID, "approval.release-failed", map[string]any{"key": req.Key, "holder": req.Holder, "error": msg}); aerr != nil {
+			msg += "; audit log: " + aerr.Error()
+		}
+		writeError(w, status, msg)
 		return
 	}
 	writeJSON(w, http.StatusOK, ReleaseResult{Waiters: len(waiters), Woken: s.cfg.Waker.Wake(r.Context(), req.Key, waiters)})

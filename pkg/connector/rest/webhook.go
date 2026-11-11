@@ -80,9 +80,12 @@ type webhook struct {
 	versioned bool
 	posPath   string
 	posFormat string
-	cfg       WebhookConfig
-	secret    []byte
-	err       error // resolving the secret failed
+	// itemFilter is the event's own filter, which deliveries pass as
+	// polled items do (cfg.Filter picks the event among a hook's types).
+	itemFilter map[string]string
+	cfg        WebhookConfig
+	secret     []byte
+	err        error // resolving the secret failed
 }
 
 // resolveWebhookSecrets reads each webhook's signing secret. A missing
@@ -107,7 +110,7 @@ func (c *Conn) setWebhookSecret(event, secret string, err error) {
 	}
 	e := c.cfg.Events[event]
 	c.webhooks[event] = &webhook{event: event, idPath: or(e.ID, "id"), versioned: e.versioned(), posPath: or(e.Position, or(e.ID, "id")),
-		posFormat: e.PositionFormat, cfg: *e.Webhook, secret: []byte(secret), err: err}
+		posFormat: e.PositionFormat, itemFilter: e.Filter, cfg: *e.Webhook, secret: []byte(secret), err: err}
 }
 
 var _ connector.WebhookSource = (*Conn)(nil)
@@ -171,7 +174,7 @@ func (w *webhook) Receive(header http.Header, body []byte, now time.Time) ([]con
 }
 
 func (w *webhook) matches(item map[string]any) bool {
-	return matchFilter(item, w.cfg.Filter)
+	return matchFilter(item, w.cfg.Filter) && matchFilter(item, w.itemFilter)
 }
 
 func (w *webhook) mac(parts ...[]byte) []byte {

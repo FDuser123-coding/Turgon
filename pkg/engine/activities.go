@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"sync"
 	"unicode"
@@ -276,28 +275,16 @@ func (x *Activities) LinkWrite(ctx context.Context, in LinkInput) error {
 	if err := json.Unmarshal(in.Result, &result); err != nil {
 		return nonRetryable(ErrTypeInvalid, fmt.Errorf("write link: the result is not an object: %v", err))
 	}
+	// An ID is a string or a number: an object at the path is a wrong
+	// path, not an ID to link by.
 	id, _ := lookup(result, in.Link.ID)
 	master, _ := lookup(in.Doc, in.Link.Master)
-	sid, mid := scalarString(id), scalarString(master)
-	if sid == "" || mid == "" {
-		return nonRetryable(ErrTypeInvalid, fmt.Errorf("write link: the result has no %s or the document no %s", in.Link.ID, in.Link.Master))
+	sid, _ := scalarText(id)
+	mid, _ := scalarText(master)
+	if _, isBool := id.(bool); sid == "" || mid == "" || isBool {
+		return nonRetryable(ErrTypeInvalid, fmt.Errorf("write link: the result has no ID at %s or the document none at %s (a string or a number)", in.Link.ID, in.Link.Master))
 	}
 	return l.PutXref(ctx, strings.TrimPrefix(in.Link.Entity, "model."), in.System, sid, mid)
-}
-
-// scalarString renders an ID: a string, or a number without exponent.
-func scalarString(v any) string {
-	switch t := v.(type) {
-	case string:
-		return t
-	case float64:
-		return strconv.FormatFloat(t, 'f', -1, 64)
-	case json.Number:
-		return t.String()
-	case bool, nil:
-		return ""
-	}
-	return fmt.Sprint(v)
 }
 
 // CommitWrite runs the guard's second phase.

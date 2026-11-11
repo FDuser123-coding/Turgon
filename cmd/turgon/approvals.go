@@ -67,8 +67,11 @@ func approvalsCmd() *cobra.Command {
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 4, 2, ' ', 0)
 			fmt.Fprintln(w, "WRITE\tHELD BY\tSTATUS\tUNTIL\tWAITING")
 			for _, h := range held {
-				status := runStatus(cmd, c, h.Holder)
-				if status != "running" {
+				status, err := runStatus(cmd, c, h.Holder)
+				switch {
+				case err != nil:
+					status = "unknown (" + err.Error() + ")"
+				case status != "running":
 					status += " (orphaned)"
 				}
 				fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", h.Key, h.Holder, status, h.Until.UTC().Format(time.RFC3339), strings.Join(h.Waiters, ", "))
@@ -91,7 +94,10 @@ func approvalsCmd() *cobra.Command {
 			}
 			defer pool.Close()
 			defer c.Close()
-			status := runStatus(cmd, c, holder)
+			status, err := runStatus(cmd, c, holder)
+			if err != nil {
+				return fmt.Errorf("cannot tell whether %s still runs, so it is not released: %w", holder, err)
+			}
 			if status == "running" {
 				return fmt.Errorf("%s is still running: approve or reject its write instead (turgon approve %s)", holder, holder)
 			}
@@ -101,11 +107,16 @@ func approvalsCmd() *cobra.Command {
 				return fmt.Errorf("audit log: %w", err)
 			}
 			waiters, ok, err := pgstore.New(pool).ReleaseApproval(args[0], holder)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return fmt.Errorf("%s does not hold the request for %s", holder, args[0])
+			if err != nil || !ok {
+				// The release was audited before it was tried: say it failed.
+				why := fmt.Sprintf("%s does not hold the request for %s", holder, args[0])
+				if err != nil {
+					why = err.Error()
+				}
+				if _, aerr := pgstore.NewAuditLog(pool).Record(by, "approval.release-failed", map[string]any{"key": args[0], "holder": holder, "error": why}); aerr != nil {
+					return fmt.Errorf("%s; audit log: %w", why, aerr)
+				}
+				return errors.New(why)
 			}
 			woken := engine.WakeWaiters(cmd.Context(), c, args[0], waiters)
 			fmt.Fprintf(cmd.OutOrStdout(), "released %s (held by %s, %s); woke %d of %d waiting run(s)\n", args[0], holder, status, woken, len(waiters))
@@ -124,16 +135,17 @@ func approvalsCmd() *cobra.Command {
 }
 
 // runStatus is a run's status as Temporal reports it, lower-case, or
-// "missing" when Temporal no longer knows it.
-func runStatus(cmd *cobra.Command, c client.Client, id string) string {
+// "missing" when Temporal no longer knows it. Any other error leaves it
+// unknown: the run may still be running.
+func runStatus(cmd *cobra.Command, c client.Client, id string) (string, error) {
 	d, err := c.DescribeWorkflowExecution(cmd.Context(), id, "")
 	if err != nil {
 		var nf *serviceerror.NotFound
 		if errors.As(err, &nf) {
-			return "missing"
+			return "missing", nil
 		}
-		return "unknown (" + err.Error() + ")"
+		return "", err
 	}
 	s := d.GetWorkflowExecutionInfo().GetStatus().String()
-	return strings.ToLower(strings.TrimPrefix(s, "WORKFLOW_EXECUTION_STATUS_"))
+	return strings.ToLower(strings.TrimPrefix(s, "WORKFLOW_EXECUTION_STATUS_")), nil
 }
