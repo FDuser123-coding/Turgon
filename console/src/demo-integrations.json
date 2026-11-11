@@ -168,12 +168,19 @@
       "description": "Odoo 19 Sales, through the external JSON-2 API.",
       "connector": "odoo",
       "product": "Odoo 19+, external JSON-2 API",
-      "role": "target",
-      "events": [],
+      "role": "both",
+      "events": [
+        {
+          "name": "SalesOrder.Cancelled",
+          "entity": "SalesOrder",
+          "delivery": "polling"
+        }
+      ],
       "operations": [
         "create-sales-order"
       ],
       "flows": [
+        "odoo-erp-cancelled-orders-to-shopify-note",
         "shopify-store-orders-to-odoo"
       ]
     },
@@ -342,6 +349,7 @@
       ],
       "flows": [
         "exact-online-deleted-orders-to-shopify-note",
+        "odoo-erp-cancelled-orders-to-shopify-note",
         "shopify-store-orders-to-business-central",
         "shopify-store-orders-to-business-one",
         "shopify-store-orders-to-erp",
@@ -657,6 +665,53 @@
         "erp-db"
       ],
       "slo": "p95 2s"
+    },
+    {
+      "name": "odoo-erp-cancelled-orders-to-shopify-note",
+      "version": "1.0.0",
+      "description": "An Odoo sales order made for a Shopify order is cancelled; the Shopify order's note says so.",
+      "level": "L1",
+      "deployable": true,
+      "trigger": {
+        "system": "odoo-erp",
+        "event": "SalesOrder.Cancelled",
+        "delivery": "polling"
+      },
+      "steps": [
+        {
+          "kind": "map",
+          "mapping": "odoo-cancelled-order-to-sales-order@1.0.0",
+          "from": "odoo-erp.SalesOrder",
+          "to": "model.SalesOrder",
+          "fields": 3
+        },
+        {
+          "kind": "resolve",
+          "entity": "model.SalesOrder",
+          "strategy": "exact"
+        },
+        {
+          "kind": "map",
+          "mapping": "cancelled-sales-order-to-shopify-note@1.0.0",
+          "from": "model.SalesOrder",
+          "to": "model.Order",
+          "fields": 2
+        },
+        {
+          "kind": "write",
+          "entity": "Order",
+          "system": "shopify-store",
+          "operation": "update-order",
+          "risk": "low",
+          "approval": "policy",
+          "simulation": "preview",
+          "compensation": "restore-order"
+        }
+      ],
+      "targets": [
+        "shopify-store"
+      ],
+      "slo": "p95 10s"
     },
     {
       "name": "s4-sales-orders-to-dynamics",

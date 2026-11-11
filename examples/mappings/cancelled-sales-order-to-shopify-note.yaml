@@ -1,0 +1,13 @@
+# When the ERP's order for a Shopify order is cancelled, say so on the
+# Shopify order, in place of the note with its number.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: cancelled-sales-order-to-shopify-note
+  version: 1.0.0
+spec:
+  from: model.SalesOrder
+  to: model.Order
+  fields:
+    - { target: orderId, expression: "salesOrderId", origin: human, confidence: 1.0 }
+    - { target: note,    expression: "'ERP order ' & erpNumber & ' cancelled in Odoo on ' & cancelledOn", origin: human, confidence: 1.0 }

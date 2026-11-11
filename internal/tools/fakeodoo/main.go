@@ -1,7 +1,8 @@
 // Command fakeodoo runs the test fake of Odoo's external JSON-2 API for
 // local demos, and prints each quotation as it is created or cancelled.
 // "require <model> <field>" on stdin makes a field required, as a module
-// or Studio would, so the next discovery reports it.
+// or Studio would, so the next discovery reports it. "cancel <id>" cancels
+// a sales order, as a person would in Odoo.
 package main
 
 import (
@@ -11,6 +12,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,7 +38,15 @@ func main() {
 				fmt.Fprintf(os.Stderr, "%s.%s is now required\n", f[1], f[2])
 				continue
 			}
-			fmt.Fprintln(os.Stderr, "usage: require <model> <field>")
+			if len(f) == 2 && f[0] == "cancel" {
+				if id, err := strconv.ParseInt(f[1], 10, 64); err == nil && od.Order(id) != nil {
+					od.SetState(id, "cancel")
+					continue
+				}
+				fmt.Fprintf(os.Stderr, "no sales order %s\n", f[1])
+				continue
+			}
+			fmt.Fprintln(os.Stderr, "usage: require <model> <field> | cancel <order id>")
 		}
 	}()
 	seen := map[int64]string{}

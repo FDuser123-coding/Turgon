@@ -1,0 +1,41 @@
+# When a quotation that shopify-store-orders-to-odoo made is cancelled in
+# Odoo, the Shopify order it was made for says so. The saga links each
+# Odoo order to its Shopify order (write link), and a cancelled order
+# resolves back by that link. Orders made in Odoo by hand have none, and
+# their runs end without writing (ifUnknown: skip). An order changed again
+# once cancelled is a new event, whose write is a duplicate of the first.
+apiVersion: turgon.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: odoo-erp-cancelled-orders-to-shopify-note
+  version: 1.0.0
+  description: "An Odoo sales order made for a Shopify order is cancelled; the Shopify order's note says so."
+spec:
+  trigger:
+    source: odoo-erp
+    event: SalesOrder.Cancelled
+  steps:
+    - map:
+        from: odoo-erp.SalesOrder
+        to: model.SalesOrder
+        mapping: odoo-cancelled-order-to-sales-order@1
+    # salesOrderRef (the Odoo order's ID) -> salesOrderId (the Shopify order).
+    - resolve:
+        entity: model.SalesOrder
+        strategy: exact
+        autoMatchAbove: 1
+        ifUnknown: skip
+    - map:
+        from: model.SalesOrder
+        to: model.Order
+        mapping: cancelled-sales-order-to-shopify-note@1
+    - write:
+        target: shopify-store
+        operation: update-order
+        idempotencyKey: "ODOO-CANCELLED-{{ source.id }}"
+        simulate: true
+  policies: [writeback-default]
+  capacity:
+    peakPerSecond: 1
+  slo:
+    p95Latency: 10s

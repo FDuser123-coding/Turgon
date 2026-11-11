@@ -1,0 +1,15 @@
+# An Odoo sales order in state cancel: its ID, to resolve back to the order
+# it was made for, its number and the day it was cancelled.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: odoo-cancelled-order-to-sales-order
+  version: 1.0.0
+spec:
+  from: odoo-erp.SalesOrder
+  to: model.SalesOrder
+  fields:
+    - { target: salesOrderRef, expression: "$string(id)",                origin: human, confidence: 1.0 }
+    - { target: erpNumber,     expression: "name",                       origin: human, confidence: 1.0 }
+    # write_date is UTC, "2026-11-11 10:15:00".
+    - { target: cancelledOn,   expression: "$substring(write_date, 0, 10)", origin: human, confidence: 1.0 }

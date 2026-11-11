@@ -1090,22 +1090,99 @@ func TestShopifyRejectionDeletesTheBusinessCentralOrder(t *testing.T) {
 // newOdooFixture runs the shopify-store-orders-to-odoo recipe against the
 // fake Shopify store and the fake Odoo database.
 func newOdooFixture(t *testing.T) (*fixture, *shoptest.Shop, *odootest.Odoo) {
+	f, shop, od, _ := newOdooFixtures(t)
+	return f, shop, od
+}
+
+// newOdooFixtures also returns a fixture for the recipe on Odoo's cancelled
+// orders, on the same database and systems.
+func newOdooFixtures(t *testing.T) (*fixture, *shoptest.Shop, *odootest.Odoo, func() *fixture) {
 	t.Helper()
 	shop := shoptest.New("shpat_test")
 	t.Cleanup(shop.Close)
 	od := odootest.New("odoo-key")
 	t.Cleanup(od.Close)
-	f := newFixtureFor(t, "shopify-store-orders-to-odoo", connector.StaticSecrets{
+	secrets := connector.StaticSecrets{
 		"openbao://shopify-store/token": "shpat_test",
 		"openbao://odoo-erp/api-key":    "odoo-key",
-	}, func(cfg string) string {
+	}
+	rewrite := func(cfg string) string {
 		cfg = strings.ReplaceAll(cfg, "https://turgon-demo.myshopify.com/admin/api/"+shoptest.Version, shop.URL())
 		return strings.ReplaceAll(cfg, "https://acme.odoo.com", od.URL())
-	})
+	}
+	f := newFixtureFor(t, "shopify-store-orders-to-odoo", secrets, rewrite)
 	if err := f.store.PutXref(context.Background(), "Customer", "shopify-store", "ada@example.com", "7"); err != nil {
 		t.Fatal(err)
 	}
-	return f, shop, od
+	cancelled := func() *fixture { return f.also("odoo-erp-cancelled-orders-to-shopify-note", secrets, rewrite) }
+	return f, shop, od, cancelled
+}
+
+// The saga links each Odoo quotation to its Shopify order. When a person
+// cancels it in Odoo, the Shopify order's note says so, once however often
+// the cancelled order changes; a cancelled order Turgon never made ends its
+// run without writing, and an order still open starts none.
+func TestOdooCancelledOrderIsNotedOnShopify(t *testing.T) {
+	f, shop, od, cancelled := newOdooFixtures(t)
+	// Records settle a minute before they are read: stamp them earlier.
+	clock := time.Now().Add(-10 * time.Minute)
+	od.StartAt(1, func() time.Time { return clock })
+	id := shop.AddOrder(map[string]any{
+		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-11-05T09:30:00-04:00",
+		"subtotal_price": "420.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-1", "quantity": 2, "price": "210.00"}},
+	})
+	if _, err, _ := f.run(f.dispatch()[0], approve("04-write")); err != nil {
+		t.Fatal(err)
+	}
+	o := od.OrderByRef(fmt.Sprintf("SHOPIFY-%d", id))
+	sagaOrder := int64(o["id"].(float64))
+	// Another order, made in Odoo by hand, also cancelled.
+	other := shop.AddOrder(map[string]any{
+		"name": "#1002", "email": "Ada@Example.com", "created_at": "2026-11-05T10:30:00-04:00",
+		"subtotal_price": "100.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-1", "quantity": 1, "price": "100.00"}},
+	})
+	if _, err, _ := f.run(f.dispatch()[0], approve("04-write")); err != nil {
+		t.Fatal(err)
+	}
+	byHand := int64(od.OrderByRef(fmt.Sprintf("SHOPIFY-%d", other))["id"].(float64))
+	if _, err := f.pool.Exec(context.Background(), "DELETE FROM turgon_xref WHERE entity = 'SalesOrder' AND source_id = $1", fmt.Sprint(byHand)); err != nil {
+		t.Fatal(err)
+	}
+
+	g := cancelled()
+	if runs := g.dispatch(); len(runs) != 0 {
+		t.Fatalf("open orders started %d run(s)", len(runs))
+	}
+	clock = clock.Add(time.Minute)
+	od.SetState(byHand, "cancel")
+	clock = clock.Add(time.Minute)
+	od.SetState(sagaOrder, "cancel")
+	runs := g.dispatch()
+	if len(runs) != 2 {
+		t.Fatalf("runs = %d", len(runs))
+	}
+	res, err, _ := g.run(runs[0])
+	if err != nil || len(res.Writes) != 0 || !strings.Contains(res.Skipped, "without a cross-reference") {
+		t.Fatalf("an order made by hand: %+v, %v", res, err)
+	}
+	res, err, _ = g.run(runs[1])
+	if err != nil || len(res.Writes) != 1 || res.Writes[0].Status != writeguard.StatusCommitted {
+		t.Fatalf("the saga's order: %+v, %v", res, err)
+	}
+	want := "ERP order " + o["name"].(string) + " cancelled in Odoo on " + clock.UTC().Format("2006-01-02")
+	if got := shop.Order(id)["note"]; got != want {
+		t.Fatalf("Shopify note = %v, want %q", got, want)
+	}
+	// Changed again once cancelled: a new event, whose write is a duplicate.
+	clock = clock.Add(time.Minute)
+	od.SetState(sagaOrder, "cancel")
+	runs = g.dispatch()
+	if len(runs) != 1 {
+		t.Fatalf("after another change: %d runs", len(runs))
+	}
+	if res, err, _ := g.run(runs[0]); err != nil || len(res.Writes) != 1 || res.Writes[0].Status != writeguard.StatusDuplicate {
+		t.Fatalf("again: %+v, %v", res, err)
+	}
 }
 
 // A shop order becomes an Odoo quotation at the shop's prices, and its

@@ -5,7 +5,8 @@
 # quotation by it. A create is dry-run with onchange, so Odoo prices it
 # (pricelists, lines without a price) and the preview shows its untaxed
 # total. A saga's undo cancels the quotation, which stays visible as
-# cancelled. Changed orders are polled on write_date.
+# cancelled. Changed orders are polled on write_date, and so are cancelled
+# ones (state cancel).
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
 metadata:
@@ -18,6 +19,7 @@ spec:
   limits: { maxConcurrentCalls: 2, requestsPerSecond: 5 }
   events:
     - { name: SalesOrder.Changed, entity: SalesOrder, interface: json-2-poll }
+    - { name: SalesOrder.Cancelled, entity: SalesOrder, interface: json-2-poll }
   operations:
     - { name: create-sales-order, entity: SalesOrder, direction: write, interface: json-2, risk: high, compensation: cancel-sales-order }
     - { name: cancel-sales-order, entity: SalesOrder, direction: write, interface: json-2, risk: high }
@@ -28,6 +30,13 @@ spec:
       SalesOrder.Changed:
         model: sale.order
         fields: [name, client_order_ref, partner_id, amount_untaxed, state]
+      # An order cancelled in Odoo stays, in state cancel. Each change of
+      # it after that is a new version of the event; a recipe's
+      # idempotency key keeps them to one write.
+      SalesOrder.Cancelled:
+        model: sale.order
+        domain: [[state, "=", cancel]]
+        fields: [name, client_order_ref, state]
     operations:
       create-sales-order:
         action: create
