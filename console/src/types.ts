@@ -60,6 +60,9 @@ export interface RunSummary {
   started: string;
   closed?: string;
   pending?: PendingApproval;
+  /** Why a completed run wrote nothing: its record has no cross-reference
+   * (a resolve step with ifUnknown: skip, as for an order made by hand). */
+  skipped?: string;
 }
 
 export interface WriteRecord {
@@ -74,7 +77,7 @@ export interface RunDetail extends RunSummary {
   specDigest?: string;
   event?: { id: string; position: number; name: string; payload: unknown };
   request?: WriteRequest;
-  result?: { writes: WriteRecord[] | null };
+  result?: { writes: WriteRecord[] | null; skipped?: string };
   failure?: string;
   failureType?: string;
   /** Fields a refused write's system said were missing. */

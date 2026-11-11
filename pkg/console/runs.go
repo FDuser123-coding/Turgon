@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	commonpb "go.temporal.io/api/common/v1"
 	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/api/serviceerror"
 	"go.temporal.io/api/workflowservice/v1"
@@ -30,6 +31,10 @@ type RunSummary struct {
 	Started  time.Time               `json:"started"`
 	Closed   *time.Time              `json:"closed,omitempty"`
 	Pending  *engine.PendingApproval `json:"pending,omitempty"`
+	// Skipped says why a completed run ended without writing: a resolve
+	// step with ifUnknown: skip found no cross-reference (a record made in
+	// the system by hand).
+	Skipped string `json:"skipped,omitempty"`
 }
 
 // RunDetail adds what a run was started with and how it ended.
@@ -95,6 +100,7 @@ func (t TemporalRuns) List(ctx context.Context, limit int) ([]RunSummary, error)
 			c := ct.AsTime()
 			r.Closed = &c
 		}
+		r.Skipped = skippedMemo(e.GetMemo().GetFields())
 		runs = append(runs, r)
 	}
 	sort.SliceStable(runs, func(i, j int) bool { return runs[i].Started.After(runs[j].Started) })
@@ -118,6 +124,19 @@ func (t TemporalRuns) List(ctx context.Context, limit int) ([]RunSummary, error)
 	}
 	wg.Wait()
 	return runs, nil
+}
+
+// skippedMemo reads why a run was skipped from its memo, if it was.
+func skippedMemo(fields map[string]*commonpb.Payload) string {
+	p, ok := fields[engine.MemoSkipped]
+	if !ok {
+		return ""
+	}
+	var s string
+	if engine.DataConverter().FromPayload(p, &s) != nil {
+		return ""
+	}
+	return s
 }
 
 func (t TemporalRuns) Pending(ctx context.Context, id string) (*engine.PendingApproval, error) {
@@ -170,6 +189,7 @@ func (t TemporalRuns) Get(ctx context.Context, id string) (RunDetail, error) {
 			var res engine.RunResult
 			if dc.FromPayloads(a.GetResult(), &res) == nil {
 				d.Result = &res
+				d.Skipped = res.Skipped
 			}
 		}
 		if a := ev.GetWorkflowExecutionFailedEventAttributes(); a != nil {
