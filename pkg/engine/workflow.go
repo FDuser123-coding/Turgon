@@ -55,6 +55,10 @@ const approvalNoticeVersion = "approval-newer-notice"
 // (MemoSkipped), which runs skipped before it replay without.
 const skippedMemoVersion = "skipped-memo"
 
+// unlinkVersion gates removing a write's link when a saga undoes the
+// write, which runs that compensated before it replay without.
+const unlinkVersion = "unlink-on-undo"
+
 // MemoSkipped is the memo field holding why a run was skipped, so a list
 // of runs shows it without reading each run's result.
 const MemoSkipped = "turgon.skipped"
@@ -73,6 +77,9 @@ type committedWrite struct {
 	step    string
 	request writeguard.Request
 	result  json.RawMessage
+	// link is the cross-reference the write made, removed when the write
+	// is undone.
+	link *LinkInput
 }
 
 // IntegrationWorkflow interprets one compiled workflow for one event.
@@ -176,6 +183,15 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 			if cerr != nil {
 				errs = append(errs, fmt.Errorf("compensate %s: %w", w.step, cerr))
 				causes = append(causes, fmt.Sprintf("undo %s: %s", w.step, cause(cerr)))
+				continue
+			}
+			// The record the write made is gone or cancelled: its link
+			// would lead the target's event about the undo back to the
+			// source, which the run just failed to update.
+			if w.link != nil && workflow.GetVersion(ctx, unlinkVersion, workflow.DefaultVersion, 1) == 1 {
+				if uerr := workflow.ExecuteActivity(ctx, a.UnlinkWrite, *w.link).Get(ctx, nil); uerr != nil {
+					logger.Warn("removing the link of an undone write", "step", w.step, "error", uerr)
+				}
 			}
 		}
 		if len(errs) == 0 {
@@ -218,12 +234,12 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 
 	// link records a written record as a cross-reference, when the step
 	// asks (only new specs do, so runs from before replay as they ran).
-	link := func(w *compiler.WriteConfig, res json.RawMessage) error {
+	link := func(w *compiler.WriteConfig, res json.RawMessage) (*LinkInput, error) {
 		if w.Link == nil {
-			return nil
+			return nil, nil
 		}
 		lin := LinkInput{Link: *w.Link, System: w.Endpoint, Result: res, Doc: doc}
-		return workflow.ExecuteActivity(ctx, a.LinkWrite, lin).Get(ctx, nil)
+		return &lin, workflow.ExecuteActivity(ctx, a.LinkWrite, lin).Get(ctx, nil)
 	}
 
 	for _, st := range in.Workflow.Steps {
@@ -299,7 +315,7 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 				// Written before this run: not ours to compensate.
 				result.Writes = append(result.Writes, rec)
 				doc = withOutput(doc, st.Write.Output, d.Result)
-				if err := link(st.Write, d.Result); err != nil {
+				if _, err := link(st.Write, d.Result); err != nil {
 					return fail(err)
 				}
 				continue
@@ -346,9 +362,11 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 			result.Writes = append(result.Writes, rec)
 			done = append(done, committedWrite{step: st.Name, request: prep.Request, result: out.Result})
 			doc = withOutput(doc, st.Write.Output, out.Result)
-			if err := link(st.Write, out.Result); err != nil {
+			lin, err := link(st.Write, out.Result)
+			if err != nil {
 				return fail(err)
 			}
+			done[len(done)-1].link = lin
 			if len(st.Write.Plugins) > 0 && out.Status == writeguard.StatusCommitted && pluginsOn() {
 				runPlugins(ctx, in.Workflow.Name, st.Name, st.Write, modelRecord(prep.Request.Payload, out.Result))
 			}

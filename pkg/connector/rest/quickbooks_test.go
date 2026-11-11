@@ -1,9 +1,11 @@
 package rest_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"strings"
 	"testing"
@@ -204,5 +206,28 @@ func TestQuickBooksDeletedReceipts(t *testing.T) {
 	c.SetClock(func() time.Time { return time.Now().Add(-31 * 24 * time.Hour) })
 	if _, err := c.Poll(ctx, "SalesReceipt.Deleted", 0, 100); err == nil || !strings.Contains(err.Error(), "30 days") {
 		t.Fatalf("a changedSince 61 days back: %v", err)
+	}
+}
+
+// A stored cursor older than the lookback is moved up to it with a
+// warning: the changes between them are beyond what the API answers. The
+// first poll's cursor (0) moves silently.
+func TestLookbackWarnsWhenItSkipsAStoredCursor(t *testing.T) {
+	q, seed := qbotest.New("qb-app", "s3cret")
+	t.Cleanup(q.Close)
+	c := newQuickBooksConn(t, q, qboSecret(seed), &connector.MemoryTokens{})
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+	if _, err := c.Poll(context.Background(), "SalesReceipt.Deleted", 0, 10); err != nil || logs.Len() != 0 {
+		t.Fatalf("first poll: %v, logged %q", err, logs.String())
+	}
+	old := time.Now().Add(-45 * 24 * time.Hour).UnixMilli()
+	if _, err := c.Poll(context.Background(), "SalesReceipt.Deleted", old, 10); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(logs.String(), "older than the event's lookback") || !strings.Contains(logs.String(), "lookback=720h") {
+		t.Fatalf("logged %q", logs.String())
 	}
 }
