@@ -861,6 +861,29 @@ Measured against a Temporal 1.28 dev server, `fakeshop` and `fakeodoo`:
 - **Drift:** after `require sale.order note` on the fake, the next `turgon discover` reported
   `BREAKING became-required sale.order.note; used by operation create-sales-order (writes)`.
 
+#### Orders cancelled in Odoo: back to the Shopify order
+
+`odoo-erp-cancelled-orders-to-shopify-note` reacts to `SalesOrder.Cancelled`: the orders in state
+`cancel`, polled on `write_date` like `SalesOrder.Changed` (a domain, `[[state, "=", cancel]]`).
+When a person cancels in Odoo a quotation the saga made, the Shopify order's note says so: `ERP
+order S54210 cancelled in Odoo on 2026-11-11`. It works as the Exact Online recipe does:
+
+- **The saga's write link** leads the cancelled order's ID back to its Shopify order.
+- **`ifUnknown: skip`** ends the run without writing for an order made in Odoo by hand.
+- **An order changed again once cancelled** is a new version of the event, and its run's write
+  is a duplicate of the first (`ODOO-CANCELLED-{{ source.id }}`), so the note is written once.
+- **The saga's own undo cancels the quotation too.** Its Shopify order is then told that the
+  ERP order was cancelled, which is what happened.
+
+`cancel <id>` on `fakeodoo`'s standard input cancels an order, as a person in Odoo would.
+
+Measured against a Temporal 1.28 dev server, Postgres, `fakeshop` and `fakeodoo`, with both
+recipes running:
+- **The link:** a 420.00 Shopify order became quotation S54210 (id 1), noted as `ERP order
+  S54210`, and the saga linked it (`odoo-erp`, `1`) to the Shopify order.
+- **The cancellation:** after `cancel 1`, one run started 65 seconds later, once the record had
+  settled for its minute. It set the note to `ERP order S54210 cancelled in Odoo on 2026-11-11`.
+
 The JSON-2 calls follow Odoo 19's documentation and are tested against the fake, not yet against
 a real database. `onchange` is the method the web client uses, called with the order's values.
 
