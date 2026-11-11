@@ -2574,6 +2574,24 @@ run can be retried; writes it already committed are recognized by their idempote
 Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 (`make test-integration`); workflow tests use Temporal's in-process test server.
 
+## Continuous integration
+
+`ci` runs on every pull request and on main. Its jobs are `test`, `console`, `chart`,
+`connectors`, `splink`, `appliance`, `licenses` and `plugins`. The `test` job runs Go tests with
+Postgres, envtest and the race detector, `govulncheck`, and a restore drill.
+
+- **`ci-ok`** passes only when every other job passed. Make it the one required check on main,
+  so a pull request cannot be merged while a job fails or still runs. A new job is covered once
+  it is added to `ci-ok`'s `needs`, with no settings change. On GitHub: Settings → Rules →
+  Rulesets → New branch ruleset, target the default branch, enable *Require status checks to
+  pass*, add `ci-ok`, and enable *Require branches to be up to date before merging*. The classic
+  branch protection under Settings → Branches does the same.
+- **`vulncheck`** runs `govulncheck` on main every night (03:17 UTC) and on demand. When it finds
+  a vulnerability, it opens an issue titled `govulncheck: known vulnerabilities in reachable code`,
+  or comments on the one already open, with the advisory, where it was found and the fixed
+  version. A new Go advisory (GO-2026-6859, fixed in Go 1.26.11) otherwise first showed as a
+  failing pull request that had not caused it.
+
 ## Layout
 
 | Path | Architecture | What it is |
