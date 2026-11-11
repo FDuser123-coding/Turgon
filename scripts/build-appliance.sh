@@ -19,12 +19,27 @@ export CGO_ENABLED=0 GOOS=linux GOARCH=$arch
 go build -trimpath -ldflags "-s -w -X main.version=$version" -o "$out/bin/turgon" ./cmd/turgon
 # The Temporal CLI, from source at a pinned version (a throwaway module, so
 # it builds for any architecture and never touches turgon's go.mod).
+# Fetching its modules is the step that touches the network: it is tried
+# three times, and its output is shown when it fails, so a failure in CI
+# says why.
 tmp=$(mktemp -d) && trap 'rm -rf "$tmp"' EXIT
-(cd "$tmp" && go mod init appliance-temporal >/dev/null 2>&1 && go get "github.com/temporalio/cli/cmd/temporal@$temporal_version" >/dev/null 2>&1 \
-  && go build -trimpath -ldflags "-s -w -X github.com/temporalio/cli/temporalcli.Version=${temporal_version#v}" \
-     -o "$OLDPWD/$out/bin/temporal" github.com/temporalio/cli/cmd/temporal \
-  && mkdir -p "$OLDPWD/$out/licenses" \
-  && cp "$(go list -m -f '{{.Dir}}' github.com/temporalio/cli)/LICENSE" "$OLDPWD/$out/licenses/temporal-cli.txt")
+root=$PWD
+cd "$tmp"
+go mod init appliance-temporal >/dev/null 2>&1
+for attempt in 1 2 3; do
+  if log=$(go get "github.com/temporalio/cli/cmd/temporal@$temporal_version" 2>&1); then
+    break
+  fi
+  echo "fetching the Temporal CLI $temporal_version failed (attempt $attempt of 3):" >&2
+  echo "$log" | tail -20 >&2
+  if [ "$attempt" = 3 ]; then exit 1; fi
+  sleep $((attempt * 10))
+done
+go build -trimpath -ldflags "-s -w -X github.com/temporalio/cli/temporalcli.Version=${temporal_version#v}" \
+  -o "$root/$out/bin/temporal" github.com/temporalio/cli/cmd/temporal
+mkdir -p "$root/$out/licenses"
+cp "$(go list -m -f '{{.Dir}}' github.com/temporalio/cli)/LICENSE" "$root/$out/licenses/temporal-cli.txt"
+cd "$root"
 test -x "$out/bin/temporal" || { echo "building the Temporal CLI failed" >&2; exit 1; }
 
 cp deploy/appliance/turgon-*.service "$out/systemd/"
