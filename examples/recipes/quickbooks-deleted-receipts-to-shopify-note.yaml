@@ -1,0 +1,41 @@
+# When a sales receipt that shopify-store-orders-to-quickbooks made is
+# deleted in QuickBooks Online, the Shopify order it was made for says so.
+# The saga links each receipt to its Shopify order (write link), and a
+# deleted receipt resolves back by that link. Receipts made in QuickBooks
+# by hand have none, and their runs end without writing (ifUnknown: skip).
+# The saga's own undo voids a receipt, which is not a deletion.
+apiVersion: turgon.dev/v1alpha1
+kind: Recipe
+metadata:
+  name: quickbooks-deleted-receipts-to-shopify-note
+  version: 1.0.0
+  description: "A QuickBooks Online sales receipt made for a Shopify order is deleted; the Shopify order's note says so."
+spec:
+  trigger:
+    source: quickbooks
+    event: SalesReceipt.Deleted
+  steps:
+    - map:
+        from: quickbooks.SalesOrder
+        to: model.SalesOrder
+        mapping: quickbooks-deleted-receipt-to-sales-order@1
+    # salesOrderRef (the receipt's Id) -> salesOrderId (the Shopify order).
+    - resolve:
+        entity: model.SalesOrder
+        strategy: exact
+        autoMatchAbove: 1
+        ifUnknown: skip
+    - map:
+        from: model.SalesOrder
+        to: model.Order
+        mapping: deleted-sales-order-to-shopify-note@1
+    - write:
+        target: shopify-store
+        operation: update-order
+        idempotencyKey: "QBO-DELETED-{{ source.Id }}"
+        simulate: true
+  policies: [writeback-default]
+  capacity:
+    peakPerSecond: 1
+  slo:
+    p95Latency: 10s

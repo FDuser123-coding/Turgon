@@ -8,7 +8,7 @@
 # sales receipt; the write's idempotency key is QuickBooks' requestid, so a
 # retried create answers the first one's receipt instead of making a second.
 # A saga's undo voids the receipt. Changed receipts are queried on
-# MetaData.LastUpdatedTime.
+# MetaData.LastUpdatedTime; deleted ones come from change data capture.
 apiVersion: turgon.dev/v1alpha1
 kind: Connection
 metadata:
@@ -22,6 +22,7 @@ spec:
   limits: { maxConcurrentCalls: 4, requestsPerSecond: 8 }
   events:
     - { name: SalesReceipt.Changed, entity: SalesOrder, interface: polling }
+    - { name: SalesReceipt.Deleted, entity: SalesOrder, interface: polling }
   operations:
     - { name: create-sales-receipt, entity: SalesOrder, direction: write, interface: rest-api, risk: high, compensation: void-sales-receipt }
     - { name: void-sales-receipt, entity: SalesOrder, direction: write, interface: rest-api, risk: high }
@@ -42,6 +43,26 @@ spec:
         id: Id
         position: MetaData.LastUpdatedTime
         positionFormat: rfc3339
+      # A query never returns a deleted receipt: change data capture does,
+      # as {"status": "Deleted", "Id", "MetaData": {"LastUpdatedTime"}},
+      # among the receipts changed since a time, at most 30 days back
+      # (lookback), 1000 at most. The filter keeps the deleted ones; the
+      # cursor moves past the rest. A receipt is deleted once: its Id alone
+      # names the event.
+      SalesReceipt.Deleted:
+        path: /cdc
+        params:
+          entities: SalesReceipt
+          changedSince: "{{position}}"
+          minorversion: "75"
+        items: CDCResponse.0.QueryResponse.0.SalesReceipt
+        id: Id
+        position: MetaData.LastUpdatedTime
+        positionFormat: rfc3339
+        versioned: false
+        filter: { status: Deleted }
+        lookback: 720h
+        maxItems: 1000
     operations:
       create-sales-receipt:
         method: POST

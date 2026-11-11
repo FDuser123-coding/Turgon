@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/fduser123-coding/turgon/pkg/connector"
 	"github.com/fduser123-coding/turgon/pkg/connector/rest"
@@ -155,5 +156,53 @@ func TestQuickBooksReceiptRetryVoidAndQuery(t *testing.T) {
 		if !r.OK {
 			t.Errorf("check %s: %s", r.Name, r.Detail)
 		}
+	}
+}
+
+// Deleted receipts come from change data capture, which answers every
+// receipt changed since a time: the filter keeps the deleted ones, and the
+// cursor moves past the rest with a skip marker. The first poll starts
+// within the 30 days QuickBooks looks back (lookback), not at the epoch,
+// which it would refuse.
+func TestQuickBooksDeletedReceipts(t *testing.T) {
+	q, seed := qbotest.New("qb-app", "s3cret")
+	t.Cleanup(q.Close)
+	// QuickBooks stamps changes to the second; each change here is a
+	// second later than the one before.
+	clock := time.Now().Add(-time.Hour).Truncate(time.Second)
+	q.StartAt(1001, func() time.Time { clock = clock.Add(time.Second); return clock })
+	c := newQuickBooksConn(t, q, qboSecret(seed), &connector.MemoryTokens{})
+	ctx := context.Background()
+	var ids []string
+	for _, key := range []string{"SHOPIFY-1", "SHOPIFY-2"} {
+		res, err := c.Commit(ctx, "create-sales-receipt", key, json.RawMessage(strings.Replace(qboReceipt, "SHOP1001", key, 1)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var r struct{ Id string }
+		_ = json.Unmarshal(res, &r)
+		ids = append(ids, r.Id)
+	}
+	// Two receipts changed, none deleted: one skip marker, past both.
+	evs, err := c.Poll(ctx, "SalesReceipt.Deleted", 0, 100)
+	if err != nil || len(evs) != 1 || !evs[0].Skip {
+		t.Fatalf("before deleting: %+v, %v", evs, err)
+	}
+	after := evs[0].Position
+	if !q.Delete(ids[1]) {
+		t.Fatal("delete")
+	}
+	evs, err = c.Poll(ctx, "SalesReceipt.Deleted", after, 100)
+	if err != nil || len(evs) != 1 || evs[0].Skip || evs[0].ID != ids[1] || !strings.Contains(string(evs[0].Payload), `"status":"Deleted"`) {
+		t.Fatalf("after deleting: %+v, %v", evs, err)
+	}
+	if q.Requests["GET cdc"] != 2 {
+		t.Fatalf("cdc requests %d", q.Requests["GET cdc"])
+	}
+	// A cursor older than 30 days is refused by QuickBooks; without the
+	// lookback, the first poll would fail.
+	c.SetClock(func() time.Time { return time.Now().Add(-31 * 24 * time.Hour) })
+	if _, err := c.Poll(ctx, "SalesReceipt.Deleted", 0, 100); err == nil || !strings.Contains(err.Error(), "30 days") {
+		t.Fatalf("a changedSince 61 days back: %v", err)
 	}
 }

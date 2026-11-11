@@ -657,6 +657,41 @@ Measured against a Temporal 1.28 dev server, Postgres, `fakeshop` and `fakeqbo`:
   `pkg/mapping`. The first mapping of `docNumber` with `~>` worked, and the second failed with
   "substring takes 3 arguments, got 4".
 
+#### Receipts deleted in QuickBooks: back to the Shopify order
+
+`quickbooks-deleted-receipts-to-shopify-note` works as the Exact Online and Odoo recipes do. When
+a person deletes in QuickBooks a sales receipt the saga made, the Shopify order's note says so:
+`ERP order deleted in QuickBooks Online on 2026-11-11`. The saga's own undo voids a receipt,
+which is not a deletion.
+
+- **Where deletions come from:** a query never returns a deleted receipt. The event
+  `SalesReceipt.Deleted` reads QuickBooks' change data capture instead
+  (`/cdc?entities=SalesReceipt&changedSince=…`). It answers every receipt changed since a time,
+  a deleted one as `{"status": "Deleted", "Id", "MetaData": {"LastUpdatedTime"}}`.
+  - The event's `filter: {status: Deleted}` keeps the deleted ones, and the cursor moves past the
+    rest.
+  - The receipt's `Id` alone names the event, since a receipt is deleted once.
+- **`lookback`, a new `rest` event setting:** change data capture refuses a `changedSince` more
+  than 30 days back. With `lookback: 720h`, a cursor older than that is moved up to it, starting
+  with the first poll's, which would otherwise ask from 1970. The API has nothing older to give.
+  It works only with a time position.
+- **The shared note mapping:** `deleted-sales-order-to-shopify-note` (1.1) names the ERP from the
+  document's `erpSystem`. It falls back to Exact Online, whose mapping (1.1) now sets it too.
+
+`delete <document number>` on `fakeqbo`'s standard input deletes a receipt, as a person in
+QuickBooks would.
+
+Measured against a Temporal 1.28 dev server, Postgres, `fakeshop` and `fakeqbo`, with both
+recipes running:
+- **The link:** a 420.00 Shopify order became sales receipt SHOP1794413678001 (id 37780), noted
+  as `ERP order SHOP1794413678001`, and the saga linked it (`quickbooks`, `37780`) to the Shopify
+  order.
+- **The deletion:** the deletion worker polled change data capture every second, with no error.
+  After `delete SHOP1794413678001`, one run set the note to `ERP order deleted in QuickBooks
+  Online on 2026-11-11`.
+- **The token:** the two workers shared one token through the vault, and Intuit counted one
+  refresh in all.
+
 ### Xero: the same refresh tokens, and Xero's own conventions
 
 Xero (`examples/connections/xero.yaml`) authorizes an app with the same kind of rotating refresh

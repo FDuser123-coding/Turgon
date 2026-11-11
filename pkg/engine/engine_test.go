@@ -1309,23 +1309,87 @@ func TestShopifyRejectionCancelsTheBusinessOneOrder(t *testing.T) {
 // against the fake Shopify store and the fake QuickBooks Online company,
 // whose refresh token rotates on every use.
 func newQuickBooksFixture(t *testing.T) (*fixture, *shoptest.Shop, *qbotest.QBO) {
+	f, shop, q, _ := newQuickBooksFixtures(t)
+	return f, shop, q
+}
+
+// newQuickBooksFixtures also returns a fixture for the recipe on deleted
+// QuickBooks receipts, on the same database, systems and tokens.
+func newQuickBooksFixtures(t *testing.T) (*fixture, *shoptest.Shop, *qbotest.QBO, func() *fixture) {
 	t.Helper()
 	shop := shoptest.New("shpat_test")
 	t.Cleanup(shop.Close)
 	q, seed := qbotest.New("qb-app", "s3cret")
 	t.Cleanup(q.Close)
-	f := newFixtureFor(t, "shopify-store-orders-to-quickbooks", connector.StaticSecrets{
+	secrets := connector.StaticSecrets{
 		"openbao://shopify-store/token": "shpat_test",
 		"openbao://quickbooks/oauth":    `{"clientId": "qb-app", "clientSecret": "s3cret", "refreshToken": "` + seed + `"}`,
-	}, func(cfg string) string {
+	}
+	rewrite := func(cfg string) string {
 		cfg = strings.ReplaceAll(cfg, "https://turgon-demo.myshopify.com/admin/api/"+shoptest.Version, shop.URL())
 		cfg = strings.ReplaceAll(cfg, "https://oauth.platform.intuit.com", q.URL())
 		return strings.ReplaceAll(cfg, "https://quickbooks.api.intuit.com", q.URL())
-	})
+	}
+	f := newFixtureFor(t, "shopify-store-orders-to-quickbooks", secrets, rewrite)
 	if err := f.store.PutXref(context.Background(), "Customer", "shopify-store", "ada@example.com", qbotest.Amy); err != nil {
 		t.Fatal(err)
 	}
-	return f, shop, q
+	deleted := func() *fixture { return f.also("quickbooks-deleted-receipts-to-shopify-note", secrets, rewrite) }
+	return f, shop, q, deleted
+}
+
+// The saga links each QuickBooks receipt to its Shopify order. When a
+// person deletes it in QuickBooks, change data capture reports it and the
+// Shopify order's note says so; a deleted receipt Turgon never linked ends
+// its run without writing, and receipts only changed start none.
+func TestQuickBooksDeletedReceiptIsNotedOnShopify(t *testing.T) {
+	f, shop, q, deleted := newQuickBooksFixtures(t)
+	// QuickBooks stamps changes to the second: each change here is later.
+	clock := time.Now().Add(-time.Hour).Truncate(time.Second)
+	q.StartAt(1001, func() time.Time { clock = clock.Add(time.Second); return clock })
+	var ids []int64
+	for _, name := range []string{"#1001", "#1002"} {
+		id := shop.AddOrder(map[string]any{
+			"name": name, "email": "Ada@Example.com", "created_at": "2026-11-05T09:30:00-04:00",
+			"subtotal_price": "420.00", "currency": "usd", "line_items": []any{map[string]any{"sku": "M-1", "quantity": 2, "price": "210.00"}},
+		})
+		if _, err, _ := f.run(f.dispatch()[0], approve("04-write")); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	sagaReceipt := q.ReceiptByDocNumber(fmt.Sprintf("SHOP%d", ids[0]))["Id"].(string)
+	byHand := q.ReceiptByDocNumber(fmt.Sprintf("SHOP%d", ids[1]))["Id"].(string)
+	// As if the second receipt had been made in QuickBooks by hand.
+	if _, err := f.pool.Exec(context.Background(), "DELETE FROM turgon_xref WHERE entity = 'SalesOrder' AND system = 'quickbooks' AND source_id = $1", byHand); err != nil {
+		t.Fatal(err)
+	}
+
+	g := deleted()
+	if runs := g.dispatch(); len(runs) != 0 {
+		t.Fatalf("receipts only changed started %d run(s)", len(runs))
+	}
+	q.Delete(byHand)
+	q.Delete(sagaReceipt)
+	runs := g.dispatch()
+	if len(runs) != 2 {
+		t.Fatalf("runs = %d", len(runs))
+	}
+	res, err, _ := g.run(runs[0])
+	if err != nil || len(res.Writes) != 0 || !strings.Contains(res.Skipped, "without a cross-reference") {
+		t.Fatalf("a receipt made by hand: %+v, %v", res, err)
+	}
+	res, err, _ = g.run(runs[1])
+	if err != nil || len(res.Writes) != 1 || res.Writes[0].Status != writeguard.StatusCommitted {
+		t.Fatalf("the saga's receipt: %+v, %v", res, err)
+	}
+	want := "ERP order deleted in QuickBooks Online on " + clock.UTC().Format("2006-01-02")
+	if got := shop.Order(ids[0])["note"]; got != want {
+		t.Fatalf("Shopify note = %v, want %q", got, want)
+	}
+	if again := g.dispatch(); len(again) != 0 {
+		t.Fatalf("read again: %d runs", len(again))
+	}
 }
 
 // A paid shop order becomes a QuickBooks sales receipt, and its document

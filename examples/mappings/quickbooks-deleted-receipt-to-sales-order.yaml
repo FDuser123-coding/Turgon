@@ -1,0 +1,17 @@
+# A sales receipt deleted in QuickBooks Online, as change data capture
+# reports it ({"status": "Deleted", "Id", "MetaData": {"LastUpdatedTime"}}):
+# its ID, to resolve back to the order it was made for, and the day.
+apiVersion: turgon.dev/v1alpha1
+kind: Mapping
+metadata:
+  name: quickbooks-deleted-receipt-to-sales-order
+  version: 1.0.0
+spec:
+  from: quickbooks.SalesOrder
+  to: model.SalesOrder
+  fields:
+    - { target: salesOrderRef, expression: "Id",                                     origin: human, confidence: 1.0 }
+    - { target: erpSystem,     expression: "'QuickBooks Online'",                    origin: human, confidence: 1.0 }
+    # LastUpdatedTime is the company's local time with its offset; its date
+    # is the day there.
+    - { target: deletedOn,     expression: "$substring(MetaData.LastUpdatedTime, 0, 10)", origin: human, confidence: 1.0 }
