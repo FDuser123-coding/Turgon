@@ -1775,6 +1775,11 @@ The other pages are:
 - the data-steward queue;
 - runs, with their writes and failures. A write the system refused names the fields it said were
   missing (`The system requires tags, which the write did not send`), with what to do next;
+- **skipped runs**, marked on that list with why they wrote nothing (`02-resolve: a SalesOrder
+  from odoo-erp without a cross-reference`):
+  - the page counts them among the runs it shows and can list only those (`?skipped=1`);
+  - `turgon runs` prints the same list in a terminal, and `turgon runs --skipped` only the skipped
+    runs, with their count;
 - the audit logs, with live chain verification;
 - verifier reports for the catalog, including the mapping review queue;
 - the metadata graph, with what each system holds and what changed (see `turgon discover`).
@@ -2695,6 +2700,12 @@ Postgres, envtest and the race detector, `govulncheck`, and a restore drill.
 - **Unknown references can end a run.** A resolve step with `ifUnknown: skip` (exact strategy)
   ends the run without writing when the reference has no cross-reference, instead of asking a
   data steward. Use it for events about records Turgon never linked.
+  - **Where the reason goes:** into the run's result (`skipped`) and its Temporal memo
+    (`turgon.skipped`). The console's list of runs and `turgon runs` read the memo, so they need
+    no request per run.
+  - **Measured live:** an order made in Odoo by hand, then cancelled, was listed by
+    `turgon runs --skipped` as `skipped … 02-resolve: a SalesOrder from odoo-erp without a
+    cross-reference` (`1 of the last 1 run(s) were skipped`).
 - **Document fields, by convention or by name.**
   - **Resolve steps:** by default they read `<entity>Ref` and set `<entity>Id` (`customerRef` →
     `customerId`). `ref` and `into` name other fields (`ref: buyerEmail`, `into: soldTo`).

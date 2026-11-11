@@ -179,6 +179,10 @@ export function createDemoApi() {
         { step: "05-write", endpoint: "salesforce-prod", operation: "update-opportunity", status: "committed", result: { sobject: "Opportunity", id: "006000000000001AAA", previous: { ERP_Order_Number__c: null }, applied: { ERP_Order_Number__c: "6" } } },
       ] },
       event: { id: "006000000000001AAA@1790259000000", position: 1790259000000, name: "Opportunity.ClosedWon", payload: { Id: "006000000000001AAA", Amount: 7800 } } },
+    { id: "exact-online-deleted-orders-to-shopify-note/0d9c8b7a-1111-4e3a-8b2c-6f1e0d9c8b7a", runId: "r12", workflow: "exact-online-deleted-orders-to-shopify-note",
+      status: "completed", started: at(17), closed: at(16.9), skipped: "02-resolve: a SalesOrder from exact-online without a cross-reference",
+      result: { writes: [], skipped: "02-resolve: a SalesOrder from exact-online without a cross-reference" },
+      event: { id: "0d9c8b7a-1111-4e3a-8b2c-6f1e0d9c8b7a", position: 1820, name: "SalesOrder.Deleted", payload: { EntityKey: "0d9c8b7a-1111-4e3a-8b2c-6f1e0d9c8b7a", EntityType: 32, DeletedDate: "/Date(1794322945192)/" } } },
     { id: "shop-orders-to-erp/2", runId: "r2", workflow: "shop-orders-to-erp", status: "failed", started: at(95), closed: at(94.9),
       failure: "writeguard: simulation: write payload invalid: null value in column \"lines\" violates not-null constraint", failureType: "TurgonInvalid",
       result: undefined, event: { id: "2", position: 2, name: "Order.Created", payload: { order_number: 2002, total: "99000", items: [] } } },
@@ -236,7 +240,7 @@ export function createDemoApi() {
   // Approvals a person rejected, so a retry can ask again.
   const rejected = new Map<string, NonNullable<RunDetail["pending"]>>();
   const delay = <T,>(v: T) => new Promise<T>((r) => setTimeout(() => r(structuredClone(v)), 120));
-  const summary = ({ id, runId, workflow, status, started, closed, pending }: RunDetail): RunSummary => ({ id, runId, workflow, status, started, closed, pending });
+  const summary = ({ id, runId, workflow, status, started, closed, pending, skipped }: RunDetail): RunSummary => ({ id, runId, workflow, status, started, closed, pending, skipped });
 
   const linkOf = (r: RunDetail): Link | null => (r.failureType === "TurgonUnresolved" ? links.get(r.id) ?? null : null);
   // What the matcher would suggest: the demo store's company domain is known.

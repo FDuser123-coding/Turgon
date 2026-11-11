@@ -11,7 +11,11 @@ export const retryable = (status: string) => ["failed", "timed_out", "terminated
 export function Runs() {
   const { data: all, error } = usePoll(api.runs);
   const flow = useSearch("flow");
-  const data = flow && all ? all.filter((r) => r.workflow === flow) : all;
+  const onlySkipped = useSearch("skipped") === "1";
+  const inFlow = flow && all ? all.filter((r) => r.workflow === flow) : all;
+  const skippedCount = (inFlow ?? []).filter((r) => r.skipped).length;
+  const data = onlySkipped && inFlow ? inFlow.filter((r) => r.skipped) : inFlow;
+  const here = flow ? `/runs?flow=${encodeURIComponent(flow)}` : "/runs";
   return (
     <section>
       <header className="page-head">
@@ -20,6 +24,17 @@ export function Runs() {
         {flow && (
           <p className="small">
             Flow <span className="mono">{flow}</span> only · <Link to="/runs">all runs</Link>
+          </p>
+        )}
+        {skippedCount > 0 && (
+          <p className="small">
+            {skippedCount} of the last {inFlow?.length} run(s) were skipped: their record has no cross-reference, as for
+            an order made in the ERP by hand.{" "}
+            {onlySkipped ? (
+              <Link to={here}>Show all</Link>
+            ) : (
+              <Link to={`${here}${flow ? "&" : "?"}skipped=1`}>Show only those</Link>
+            )}
           </p>
         )}
       </header>
@@ -41,11 +56,13 @@ export function Runs() {
               <tr key={r.id + r.runId}>
                 <td>
                   <Status status={r.status} /> {r.pending && <Pill tone="info">awaiting approval</Pill>}
+                  {r.skipped && <Pill tone="neutral">skipped</Pill>}
                 </td>
                 <td>
                   <Link to={`/runs/${r.id}`} className="mono">
                     {r.id}
                   </Link>
+                  {r.skipped && <div className="muted small">{r.skipped}</div>}
                 </td>
                 <td title={r.started}>{ago(r.started)}</td>
                 <td className="hide-sm">{duration(r.started, r.closed)}</td>
@@ -77,6 +94,7 @@ export function RunDetail({ id, user }: { id: string; user: User }) {
             <dt>Status</dt>
             <dd>
               <Status status={run.status} /> {run.pending && <Link to="/">awaiting approval of {run.pending.step}</Link>}
+              {run.skipped && <Pill tone="neutral">skipped</Pill>}
             </dd>
             <dt>Started</dt>
             <dd>
@@ -127,6 +145,11 @@ export function RunDetail({ id, user }: { id: string; user: User }) {
               </tbody>
             </table>
           </div>
+          ) : run.skipped ? (
+            <p className="muted">
+              No writes: the run was skipped ({run.skipped}). The record was not made through Turgon, so there is
+              nothing of it to update.
+            </p>
           ) : (
             <p className="muted">{run.status === "running" ? "Writes appear when the run completes." : "No writes were committed."}</p>
           )}

@@ -51,6 +51,14 @@ const ledgerReleaseVersion = "ledger-release-at-end"
 // notice existed replay without.
 const approvalNoticeVersion = "approval-newer-notice"
 
+// skippedMemoVersion gates recording a skipped run's reason in its memo
+// (MemoSkipped), which runs skipped before it replay without.
+const skippedMemoVersion = "skipped-memo"
+
+// MemoSkipped is the memo field holding why a run was skipped, so a list
+// of runs shows it without reading each run's result.
+const MemoSkipped = "turgon.skipped"
+
 // ledgerMargin keeps a request in the ledger a little past its run's
 // timeout, after which another run may take it over.
 const ledgerMargin = time.Hour
@@ -241,6 +249,11 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 				entity := strings.TrimPrefix(st.Resolve.Entity, "model.")
 				result.Skipped = fmt.Sprintf("%s: a %s from %s without a cross-reference", st.Name, entity, in.Workflow.Trigger.Endpoint)
 				logger.Info("run skipped", "reason", result.Skipped)
+				if workflow.GetVersion(ctx, skippedMemoVersion, workflow.DefaultVersion, 1) == 1 {
+					if err := workflow.UpsertMemo(ctx, map[string]any{MemoSkipped: result.Skipped}); err != nil {
+						logger.Warn("recording the skip in the run's memo", "error", err)
+					}
+				}
 				return result, nil
 			}
 		case st.Write != nil:
