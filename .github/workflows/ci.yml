@@ -407,3 +407,19 @@ jobs:
       - name: The committed Wasm modules are what their sources build
         # rust-toolchain.toml in each crate pins the compiler; rustup installs it.
         run: scripts/build-plugins.sh --check
+
+  # One check for branch protection to require: it passes only when every
+  # job above passed, so a pull request cannot be merged while one fails
+  # or still runs, and a job added later is covered without a settings
+  # change (only by adding it to needs).
+  ci-ok:
+    if: always()
+    needs: [test, console, chart, connectors, splink, appliance, licenses, plugins]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every CI job passed
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          test "$(echo "$RESULTS" | jq '[.[] | select(.result != "success")] | length')" -eq 0
