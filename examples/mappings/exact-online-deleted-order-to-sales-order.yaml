@@ -5,12 +5,13 @@ apiVersion: turgon.dev/v1alpha1
 kind: Mapping
 metadata:
   name: exact-online-deleted-order-to-sales-order
-  version: 1.0.0
+  version: 1.1.0
 spec:
   from: exact-online.SalesOrder
   to: model.SalesOrder
   fields:
-    - { target: salesOrderRef, expression: "EntityKey", origin: human, confidence: 1.0 }
+    - { target: salesOrderRef, expression: "EntityKey",     origin: human, confidence: 1.0 }
+    - { target: erpSystem,     expression: "'Exact Online'", origin: human, confidence: 1.0 }
     # DeletedDate is a Microsoft JSON date ("/Date(1794322945192)/").
     - target: deletedOn
       expression: "$substring($fromMillis($number($substringBefore($substringAfter(DeletedDate, '/Date('), ')'))), 0, 10)"

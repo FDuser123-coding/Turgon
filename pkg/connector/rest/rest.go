@@ -104,6 +104,13 @@ type Event struct {
 	// cannot be asked for one (Exact Online's sync/Deleted, of every
 	// entity). The cursor still moves past the items it leaves out.
 	Filter map[string]string `json:"filter,omitempty"`
+	// Lookback is how far back the API answers changes, as a Go duration
+	// ("720h" for QuickBooks' change data capture, which refuses a
+	// changedSince older than 30 days). A cursor older than that, such as
+	// the first poll's, is moved up to it: the API has nothing older to
+	// give. Only with a time position (positionFormat rfc3339, unix or
+	// msjson).
+	Lookback string `json:"lookback,omitempty"`
 	// MaxItems is the most items the API answers at once, whatever it is
 	// asked for (Exact Online: 60). A poll asks for no more, so that a full
 	// answer is known to be cut short, and a timestamp it ends in is never
@@ -271,6 +278,15 @@ func (c Config) validate() error {
 				return fmt.Errorf("event %s: invalid filter field %q", name, k)
 			}
 		}
+		if e.Lookback != "" {
+			d, err := time.ParseDuration(e.Lookback)
+			if err != nil || d <= 0 {
+				return fmt.Errorf("event %s: lookback must be a positive duration such as 720h, not %q", name, e.Lookback)
+			}
+			if e.PositionFormat == "" || e.PositionFormat == "number" {
+				return fmt.Errorf("event %s: lookback needs a time position (positionFormat rfc3339, unix or msjson)", name)
+			}
+		}
 		switch e.Method {
 		case "", http.MethodGet:
 			if e.Body != nil {
@@ -427,7 +443,19 @@ type Conn struct {
 	http     *http.Client
 	endpoint string
 	webhooks map[string]*webhook
+	// clock is time.Now unless a test sets it (SetClock).
+	clock func() time.Time
 }
+
+func (c *Conn) now() time.Time {
+	if c.clock != nil {
+		return c.clock()
+	}
+	return time.Now()
+}
+
+// SetClock sets the time an event's lookback counts back from, for tests.
+func (c *Conn) SetClock(now func() time.Time) { c.clock = now }
 
 var (
 	_ connector.Instance   = (*Conn)(nil)
@@ -565,6 +593,14 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 	posField := or(e.Position, idField)
 	if e.MaxItems > 0 && limit > e.MaxItems {
 		limit = e.MaxItems
+	}
+	if e.Lookback != "" {
+		// Validated: a positive duration. A minute's margin keeps the
+		// request inside the API's window as it travels.
+		d, _ := time.ParseDuration(e.Lookback)
+		if floor := c.now().Add(-d + time.Minute).UnixMilli(); after < floor {
+			after = floor
+		}
 	}
 	method, q, body := e.listRequest(after, limit)
 	desc := e.Order == "desc"

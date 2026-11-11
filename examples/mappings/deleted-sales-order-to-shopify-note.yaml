@@ -1,13 +1,17 @@
 # When the ERP's order for a Shopify order is deleted, say so on the
-# Shopify order, in place of the note with its number.
+# Shopify order, in place of the note with its number. erpSystem names the
+# ERP (Exact Online when the source mapping does not say).
 apiVersion: turgon.dev/v1alpha1
 kind: Mapping
 metadata:
   name: deleted-sales-order-to-shopify-note
-  version: 1.0.0
+  version: 1.1.0
 spec:
   from: model.SalesOrder
   to: model.Order
   fields:
     - { target: orderId, expression: "salesOrderId",                                  origin: human, confidence: 1.0 }
-    - { target: note,    expression: "'ERP order deleted in Exact Online on ' & deletedOn", origin: human, confidence: 1.0 }
+    - target: note
+      expression: "'ERP order deleted in ' & ($exists(erpSystem) ? erpSystem : 'Exact Online') & ' on ' & deletedOn"
+      origin: human
+      confidence: 1.0

@@ -9,7 +9,13 @@
 // is how QuickBooks makes a retried request idempotent. A void sets a
 // receipt's amounts to zero and needs its current SyncToken. Queries take
 // "select * from SalesReceipt where MetaData.LastUpdatedTime > '<time>'
-// orderby MetaData.LastUpdatedTime maxresults <n>". Errors are
+// orderby MetaData.LastUpdatedTime maxresults <n>", which, as in
+// QuickBooks, never return a deleted receipt. A delete (operation=delete,
+// with the receipt's SyncToken) removes one; change data capture (GET
+// /cdc?entities=SalesReceipt&changedSince=<time>) answers the receipts
+// changed since then, a deleted one as {"status": "Deleted", "Id",
+// "MetaData": {"LastUpdatedTime"}}, and refuses a changedSince more than
+// 30 days back. Errors are
 // {"Fault": {"Error": [{"Message", "Detail", "code"}], "type"}}.
 package qbotest
 
@@ -55,6 +61,7 @@ type QBO struct {
 	customers map[string]map[string]any
 	items     map[string]map[string]any
 	receipts  map[string]map[string]any
+	deleted   map[string]map[string]any // what change data capture says of deleted receipts
 	requests  map[string]map[string]any // requestid -> the first answer
 	next      int
 	now       func() time.Time
@@ -77,7 +84,7 @@ func New(clientID, clientSecret string) (*QBO, string) {
 // NewQBO returns a company to serve yourself, and its first refresh token.
 func NewQBO(clientID, clientSecret string) (*QBO, string) {
 	q := &QBO{ClientID: clientID, ClientSecret: clientSecret, refresh: map[string]bool{}, access: map[string]time.Time{},
-		customers: map[string]map[string]any{}, items: map[string]map[string]any{}, receipts: map[string]map[string]any{},
+		customers: map[string]map[string]any{}, items: map[string]map[string]any{}, receipts: map[string]map[string]any{}, deleted: map[string]map[string]any{},
 		requests: map[string]map[string]any{}, next: 1001, now: time.Now, Requests: map[string]int{}}
 	q.customers[Amy] = map[string]any{"Id": Amy, "DisplayName": "Amy's Bird Sanctuary", "PrimaryEmailAddr": map[string]any{"Address": "ada@example.com"}, "Active": true, "SyncToken": "0"}
 	q.customers[Bill] = map[string]any{"Id": Bill, "DisplayName": "Bill's Windsurf Shop", "PrimaryEmailAddr": map[string]any{"Address": "grace@example.com"}, "Active": true, "SyncToken": "0"}
@@ -214,12 +221,16 @@ func (q *QBO) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		reply(w, http.StatusOK, map[string]any{"Customer": c})
 	case res == "query" && r.Method == http.MethodGet:
 		q.query(w, r.URL.Query().Get("query"))
+	case res == "cdc" && r.Method == http.MethodGet:
+		q.cdc(w, r.URL.Query())
 	case res == "salesreceipt" && r.Method == http.MethodPost:
 		switch r.URL.Query().Get("operation") {
 		case "":
 			q.create(w, r)
 		case "void":
 			q.void(w, r)
+		case "delete":
+			q.deleteReceipt(w, r)
 		default:
 			q.fault(w, http.StatusBadRequest, "ValidationFault", "2010", "Request has invalid or unsupported property", "operation "+r.URL.Query().Get("operation"))
 		}
@@ -372,6 +383,77 @@ func (q *QBO) void(w http.ResponseWriter, r *http.Request) {
 		l.(map[string]any)["Amount"] = 0.0
 	}
 	reply(w, http.StatusOK, map[string]any{"SalesReceipt": clone(rec), "time": q.now().Format("2006-01-02T15:04:05.000-07:00")})
+}
+
+func (q *QBO) deleteReceipt(w http.ResponseWriter, r *http.Request) {
+	var in struct{ Id, SyncToken string }
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		q.fault(w, http.StatusBadRequest, "ValidationFault", "2500", "Invalid Reference Id", "Request body is not valid JSON")
+		return
+	}
+	rec := q.receipts[in.Id]
+	if rec == nil {
+		q.fault(w, http.StatusBadRequest, "ValidationFault", "610", "Object Not Found", "Object Not Found : Something you're trying to use has been made inactive.")
+		return
+	}
+	if rec["SyncToken"] != in.SyncToken {
+		q.fault(w, http.StatusBadRequest, "ValidationFault", "5010", "Stale Object Error", "Stale Object Error : You and someone else are both editing the same transaction. Refresh and try again.")
+		return
+	}
+	q.remove(in.Id)
+	reply(w, http.StatusOK, map[string]any{"SalesReceipt": map[string]any{"domain": "QBO", "status": "Deleted", "Id": in.Id}, "time": q.now().Format("2006-01-02T15:04:05.000-07:00")})
+}
+
+// Delete deletes a receipt, as a person deleting it in QuickBooks would.
+func (q *QBO) Delete(id string) bool {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	if q.receipts[id] == nil {
+		return false
+	}
+	q.remove(id)
+	return true
+}
+
+func (q *QBO) remove(id string) {
+	delete(q.receipts, id)
+	q.deleted[id] = map[string]any{"domain": "QBO", "status": "Deleted", "Id": id, "MetaData": map[string]any{"LastUpdatedTime": q.stamp()}}
+}
+
+// cdc answers the receipts changed since changedSince, deleted ones
+// included, as change data capture does (at most 30 days back).
+func (q *QBO) cdc(w http.ResponseWriter, params url.Values) {
+	if params.Get("entities") != "SalesReceipt" {
+		q.fault(w, http.StatusBadRequest, "ValidationFault", "4000", "Invalid entities", "the fake answers change data capture for SalesReceipt only")
+		return
+	}
+	since, err := time.Parse(time.RFC3339, params.Get("changedSince"))
+	if err != nil {
+		q.fault(w, http.StatusBadRequest, "ValidationFault", "4000", "Invalid changedSince", "changedSince must be a date and time, not "+params.Get("changedSince"))
+		return
+	}
+	if q.now().Sub(since) > 30*24*time.Hour {
+		q.fault(w, http.StatusBadRequest, "ValidationFault", "4000", "Invalid changedSince", "changedSince is more than 30 days in the past")
+		return
+	}
+	var list []any
+	add := func(rec map[string]any) {
+		t, _ := time.Parse(time.RFC3339, rec["MetaData"].(map[string]any)["LastUpdatedTime"].(string))
+		if !t.Before(since) {
+			list = append(list, clone(rec))
+		}
+	}
+	for _, rec := range q.receipts {
+		add(rec)
+	}
+	for _, rec := range q.deleted {
+		add(rec)
+	}
+	qr := map[string]any{"startPosition": 1, "maxResults": len(list)}
+	if len(list) > 0 {
+		qr["SalesReceipt"] = list
+	}
+	reply(w, http.StatusOK, map[string]any{"CDCResponse": []any{map[string]any{"QueryResponse": []any{qr}}}, "time": q.now().Format("2006-01-02T15:04:05.000-07:00")})
 }
 
 var queryRE = regexp.MustCompile(`(?i)^select \* from SalesReceipt where MetaData\.LastUpdatedTime > '([^']+)' orderby MetaData\.LastUpdatedTime(?: maxresults (\d+))?$`)
