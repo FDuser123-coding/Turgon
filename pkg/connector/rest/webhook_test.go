@@ -180,3 +180,24 @@ func TestWebhookConfiguration(t *testing.T) {
 		}
 	}
 }
+
+// An event's own filter applies to its deliveries as to its polled items,
+// so an item a poll would skip starts no run when pushed.
+func TestWebhookDeliveriesPassTheEventFilter(t *testing.T) {
+	cfg := Config{BaseURL: "https://api.example.com", Auth: Auth{Type: "header", Header: "X-Key"}, Events: map[string]Event{
+		"Order.Deleted": {Path: "/deleted", Items: "d", ID: "EntityKey", Filter: map[string]string{"EntityType": "32"},
+			Webhook: &WebhookConfig{Signature: "hmac-sha256", SecretRef: "openbao://x/hook", Header: "X-Signature", Items: "rows"}},
+	}}
+	c := factory(t, cfg, connector.StaticSecrets{"openbao://stripe-billing/key": "k", "openbao://x/hook": "s3cret"})
+	hook, err := c.Webhook("Order.Deleted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body := []byte(`{"rows":[{"EntityKey":"order-1","EntityType":32},{"EntityKey":"account-1","EntityType":2}]}`)
+	mac := hmac.New(sha256.New, []byte("s3cret"))
+	mac.Write(body)
+	got, err := hook.Receive(http.Header{"X-Signature": {hex.EncodeToString(mac.Sum(nil))}}, body, time.Now())
+	if err != nil || len(got) != 1 || got[0].ID != "order-1" {
+		t.Fatalf("received %+v %v", got, err)
+	}
+}

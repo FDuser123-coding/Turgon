@@ -25,17 +25,11 @@ func Render(tmpl string, source, doc map[string]any) (string, error) {
 			errs = append(errs, parts[1]+"."+parts[2])
 			return ""
 		}
-		switch x := v.(type) {
-		case string:
-			return x
-		case float64:
-			return strconv.FormatFloat(x, 'f', -1, 64)
-		case bool:
-			return strconv.FormatBool(x)
-		default:
+		s, ok := scalarText(v)
+		if !ok {
 			errs = append(errs, parts[1]+"."+parts[2]+" (not a scalar)")
-			return ""
 		}
+		return s
 	})
 	if len(errs) > 0 {
 		return "", fmt.Errorf("template %q: unresolved %s", tmpl, strings.Join(errs, ", "))
@@ -44,6 +38,20 @@ func Render(tmpl string, source, doc map[string]any) (string, error) {
 		return "", fmt.Errorf("template %q rendered empty", tmpl)
 	}
 	return out, nil
+}
+
+// scalarText renders a JSON scalar as text: a string as it is, a number
+// without an exponent. Objects, arrays and null are not scalars.
+func scalarText(v any) (string, bool) {
+	switch x := v.(type) {
+	case string:
+		return x, true
+	case float64:
+		return strconv.FormatFloat(x, 'f', -1, 64), true
+	case bool:
+		return strconv.FormatBool(x), true
+	}
+	return "", false
 }
 
 func lookup(root map[string]any, path string) (any, bool) {

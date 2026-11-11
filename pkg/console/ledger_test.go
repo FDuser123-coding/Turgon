@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 	"testing"
@@ -63,6 +64,11 @@ func TestOperatorsReleaseOrphanedRequests(t *testing.T) {
 	if len(waker.woken) != 0 {
 		t.Fatalf("refused releases woke %v", waker.woken)
 	}
+	// The release by a run that did not hold it was audited, then its
+	// failure too, so the log never shows a release that did not happen.
+	if !strings.Contains(log.String(), `"action":"approval.release-failed"`) || !strings.Contains(log.String(), `"holder":"deals/006A@9"`) {
+		t.Fatalf("audit of the failed release:\n%s", log.String())
+	}
 
 	rec = do(t, s, "POST", "/api/ledger/release", body, as("olga@example.com", "turgon-operators"))
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"woken":1`) || len(waker.woken) != 1 || waker.woken[0] != "deals/006A@2" {
@@ -73,5 +79,48 @@ func TestOperatorsReleaseOrphanedRequests(t *testing.T) {
 	}
 	if left, _ := ledger.OpenApprovals(); len(left) != 1 || left[0].Key != "erp/create/006B" {
 		t.Fatalf("left %+v", left)
+	}
+}
+
+// shakyRuns cannot describe one run.
+type shakyRuns struct{ *failedRuns }
+
+func (s shakyRuns) Get(ctx context.Context, id string) (RunDetail, error) {
+	if id == "deals/006C@1" {
+		return RunDetail{}, errors.New("deadline exceeded")
+	}
+	return s.failedRuns.Get(ctx, id)
+}
+
+// A run Temporal cannot describe may still run: its request is listed as
+// unknown, not orphaned, and is not released. The other requests are
+// listed all the same. A note is counted in characters, not bytes.
+func TestReleaseNeedsAKnownEndedHolder(t *testing.T) {
+	runs := shakyRuns{&failedRuns{fakeRuns: newRuns(), status: map[string]string{"deals/006A@1": "terminated"}}}
+	ledger := writeguard.NewMemoryStore()
+	soon := time.Now().Add(time.Hour)
+	_, _ = ledger.OpenApproval("erp/create/006A", "deals/006A@1", soon)
+	_, _ = ledger.OpenApproval("erp/create/006C", "deals/006C@1", soon)
+	var log bytes.Buffer
+	s := New(Config{Runs: runs, Auth: operatorAuth(), Ledger: ledger, Waker: &wakeRec{}, Recorder: audit.New(&log)})
+
+	rec := do(t, s, "GET", "/api/ledger", "", as("vera@example.com", ""))
+	var held []HeldRequest
+	if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &held) != nil || len(held) != 2 {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if !held[0].Orphaned || held[1].Orphaned || held[1].HolderStatus != "unknown" {
+		t.Fatalf("%+v", held)
+	}
+	if rec := do(t, s, "POST", "/api/ledger/release", `{"key":"erp/create/006C","holder":"deals/006C@1","note":"x"}`, as("olga@example.com", "turgon-operators")); rec.Code != http.StatusBadGateway {
+		t.Fatalf("unknown holder: %d %s", rec.Code, rec.Body)
+	}
+	note := strings.Repeat("è", 500) // 1000 bytes
+	rec = do(t, s, "POST", "/api/ledger/release", `{"key":"erp/create/006A","holder":"deals/006A@1","note":"`+note+`"}`, as("olga@example.com", "turgon-operators"))
+	if rec.Code != 200 {
+		t.Fatalf("500 accented characters: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(t, s, "POST", "/api/ledger/release", `{"key":"x","holder":"deals/006A@1","note":"`+note+`è"}`, as("olga@example.com", "turgon-operators")); rec.Code != http.StatusBadRequest {
+		t.Fatalf("501 characters: %d", rec.Code)
 	}
 }

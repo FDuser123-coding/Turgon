@@ -730,7 +730,8 @@ QuickBooks and Xero do. Exact differs in a few ways:
     webhook inbox. Without it, a thousand deleted accounts would fill every page.
   - **A deletion happens once,** so its key alone names the event (`versioned: false`).
   - **`filter` is general:** any `rest` event can keep the items whose dotted fields have given
-    values, as a webhook's `filter` does.
+    values, as a webhook's `filter` does. It applies to the event's webhook deliveries too, so
+    an item a poll would skip starts no run when it is pushed.
 - **Two general additions to `rest`** came out of the first version, which polled the regular
   endpoint:
   - `maxItems` caps a poll's request at what the API answers at once, so a full page is known to
@@ -1462,8 +1463,12 @@ and `stripe` take a `webhook` block in their config too (`shopify-admin.yaml`,
       - `turgon approvals release WRITE --holder RUN --note WHY` releases one and wakes its
         waiters, newest first. The console's Approvals page lists the orphaned ones and does the
         same for operators.
-      - A release is recorded in the audit log (`approval.released`) before it happens. It is
-        refused while the holding run still runs, since its approver decides it.
+      - A release is recorded in the audit log (`approval.released`) before it happens. If it
+        then fails (another run took the request over meanwhile), `approval.release-failed`
+        follows, so the log never shows a release that did not happen.
+      - It is refused while the holding run still runs, since its approver decides it, and when
+        Temporal cannot say whether it runs. Such a request is listed as `unknown`, not
+        orphaned.
       - Measured live: a deal's request was held by a run terminated from Temporal, with its
         correction waiting on it. Releasing it woke the correction, which asked at 7500; once
         approved there was one order of 7500 and no request left.
@@ -2640,7 +2645,12 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 
   - **A link that cannot be made fails the run, and its writes are undone,** so a wrong `id` path
     shows in the first test rather than as missing links later. That happens when the result
-    lacks the ID or the document lacks the master. Each saga's engine test checks its link.
+    lacks the ID or the document lacks the master, or either is not a string or a number (an
+    object at the path is a wrong path). Each saga's engine test checks its link.
+  - **Links are kept by endpoint name,** as resolve steps look them up. Within a blueprint
+    that is the slot's name. Run a recipe that resolves a link (the deletion recipe) with the
+    same endpoint names as the saga that made it: both in the same blueprint, or both on their
+    own.
 - **Unknown references can end a run.** A resolve step with `ifUnknown: skip` (exact strategy)
   ends the run without writing when the reference has no cross-reference, instead of asking a
   data steward. Use it for events about records Turgon never linked.

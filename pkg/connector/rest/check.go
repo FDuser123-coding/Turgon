@@ -47,7 +47,13 @@ func (c *Conn) Check(ctx context.Context) []connector.CheckResult {
 			continue
 		}
 		e := c.cfg.Events[n]
-		out = append(out, connector.Pass("event "+n, fmt.Sprintf("%s %s answers (%d item(s) in a first page of 1)", or(e.Method, http.MethodGet), e.Path, len(events))))
+		items := 0
+		for _, ev := range events {
+			if !ev.Skip { // an item the event's filter leaves out
+				items++
+			}
+		}
+		out = append(out, connector.Pass("event "+n, fmt.Sprintf("%s %s answers (%d item(s) in a first page of 1)", or(e.Method, http.MethodGet), e.Path, items)))
 	}
 	for _, n := range names {
 		w := c.cfg.Events[n].Webhook

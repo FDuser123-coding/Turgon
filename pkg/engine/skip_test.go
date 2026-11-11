@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/fduser123-coding/turgon/apis/v1alpha1"
 	"github.com/fduser123-coding/turgon/pkg/compiler"
 	"github.com/fduser123-coding/turgon/pkg/connector"
 )
@@ -81,5 +82,38 @@ func TestSkipMarkersMoveTheCursorOnly(t *testing.T) {
 	// Each poll read from past the last marker; the third found nothing.
 	if len(src.afters) != 3 || src.afters[1] != 5 || src.afters[2] != 12 {
 		t.Fatalf("polled after %v", src.afters)
+	}
+}
+
+type xrefs struct{ put []string }
+
+func (x *xrefs) Xref(context.Context, string, string, string) (string, bool, error) {
+	return "", false, nil
+}
+func (x *xrefs) PutXref(_ context.Context, entity, system, sourceID, masterID string) error {
+	x.put = append(x.put, entity+"/"+system+"/"+sourceID+"->"+masterID)
+	return nil
+}
+
+// A link records a string or a number. An object at the ID path is a
+// wrong path, which fails instead of linking by its printout.
+func TestLinkWriteNeedsScalarIDs(t *testing.T) {
+	store := &xrefs{}
+	x := &Activities{Resolver: store}
+	link := v1alpha1.WriteLink{Entity: "model.SalesOrder", ID: "d.OrderID", Master: "shopifyId"}
+	doc := map[string]any{"shopifyId": float64(1794323503001)}
+	if err := x.LinkWrite(context.Background(), LinkInput{Link: link, System: "exact-online", Result: json.RawMessage(`{"d":{"OrderID":"b8d0"}}`), Doc: doc}); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.put) != 1 || store.put[0] != "SalesOrder/exact-online/b8d0->1794323503001" {
+		t.Fatalf("put %v", store.put)
+	}
+	for name, res := range map[string]string{"object": `{"d":{"OrderID":{"a":1}}}`, "array": `{"d":{"OrderID":[1]}}`, "bool": `{"d":{"OrderID":true}}`, "missing": `{"d":{}}`} {
+		if err := x.LinkWrite(context.Background(), LinkInput{Link: link, System: "exact-online", Result: json.RawMessage(res), Doc: doc}); err == nil {
+			t.Errorf("%s: linked", name)
+		}
+	}
+	if len(store.put) != 1 {
+		t.Fatalf("put %v", store.put)
 	}
 }
