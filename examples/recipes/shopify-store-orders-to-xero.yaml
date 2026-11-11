@@ -7,7 +7,7 @@ apiVersion: turgon.dev/v1alpha1
 kind: Recipe
 metadata:
   name: shopify-store-orders-to-xero
-  version: 1.0.0
+  version: 1.1.0
   description: "A paid Shopify order becomes an authorised Xero invoice; its number is added to the Shopify order as a note."
 spec:
   trigger:
@@ -36,6 +36,8 @@ spec:
         idempotencyKey: "SHOPIFY-{{ source.id }}"
         simulate: true
         output: erpOrder
+        # The ERP's order, linked to its Shopify order.
+        link: { entity: model.SalesOrder, id: InvoiceID, master: shopifyId }
     - map:
         from: model.SalesOrder
         to: model.Order

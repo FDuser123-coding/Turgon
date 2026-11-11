@@ -62,6 +62,18 @@ type fixture struct {
 	tokens   *connector.MemoryTokens
 }
 
+// linked checks that the saga linked its ERP order to the Shopify order,
+// so the ERP's later events about it resolve back.
+func (f *fixture) linked(system string, shopifyID any) {
+	f.t.Helper()
+	var n int
+	err := f.pool.QueryRow(context.Background(), "SELECT count(*) FROM turgon_xref WHERE entity = 'SalesOrder' AND system = $1 AND master_id = $2 AND source_id <> ''",
+		system, fmt.Sprint(shopifyID)).Scan(&n)
+	if err != nil || n != 1 {
+		f.t.Fatalf("links of the %s order to Shopify order %v: %d, %v", system, shopifyID, n, err)
+	}
+}
+
 // localize rewrites the example's schema names so parallel tests do not collide.
 func localize(s, schema string) string {
 	s = strings.ReplaceAll(s, "shop.", schema+"_shop.")
@@ -630,6 +642,7 @@ func TestShopifyOrderBecomesERPOrderAndIsNotedBack(t *testing.T) {
 	if again := f.dispatch(); len(again) != 0 {
 		t.Fatalf("re-dispatched %+v", again)
 	}
+	f.linked("erp-db", id)
 }
 
 func TestShopifyRejectionCancelsTheERPOrder(t *testing.T) {
@@ -693,6 +706,7 @@ func TestShopifyOrderBecomesS4Order(t *testing.T) {
 	if got := shop.Order(id)["note"]; got != "ERP order "+orders[0] {
 		t.Fatalf("Shopify note = %v", got)
 	}
+	f.linked("s4-prod", id)
 }
 
 func TestShopifyRejectionDeletesTheS4Order(t *testing.T) {
@@ -992,6 +1006,7 @@ func TestShopifyOrderBecomesNetSuiteOrder(t *testing.T) {
 	if got := shop.Order(id)["note"]; got != "ERP order "+o["id"].(string) {
 		t.Fatalf("Shopify note = %v", got)
 	}
+	f.linked("netsuite-erp", id)
 }
 
 func TestShopifyRejectionDeletesTheNetSuiteOrder(t *testing.T) {
@@ -1053,6 +1068,7 @@ func TestShopifyOrderBecomesBusinessCentralOrder(t *testing.T) {
 	if got := shop.Order(id)["note"]; got != "ERP order "+o["number"].(string) {
 		t.Fatalf("Shopify note = %v", got)
 	}
+	f.linked("business-central", id)
 }
 
 func TestShopifyRejectionDeletesTheBusinessCentralOrder(t *testing.T) {
@@ -1115,6 +1131,7 @@ func TestShopifyOrderBecomesOdooQuotation(t *testing.T) {
 	if got := shop.Order(id)["note"]; got != "ERP order "+o["name"].(string) {
 		t.Fatalf("Shopify note = %v", got)
 	}
+	f.linked("odoo-erp", id)
 }
 
 // A line the shop sold without a price is priced by Odoo's list in the dry
@@ -1192,6 +1209,7 @@ func TestShopifyOrderBecomesBusinessOneOrder(t *testing.T) {
 	if got := shop.Order(id)["note"]; got != fmt.Sprintf("ERP order %v", o["DocNum"]) {
 		t.Fatalf("Shopify note = %v", got)
 	}
+	f.linked("business-one", id)
 }
 
 func TestShopifyRejectionCancelsTheBusinessOneOrder(t *testing.T) {
@@ -1257,6 +1275,7 @@ func TestShopifyOrderBecomesQuickBooksReceipt(t *testing.T) {
 	if q.Refreshes != 1 || q.Spent != 0 {
 		t.Fatalf("refreshes %d, spent %d", q.Refreshes, q.Spent)
 	}
+	f.linked("quickbooks", id)
 }
 
 func TestShopifyRejectionVoidsTheQuickBooksReceipt(t *testing.T) {
@@ -1315,6 +1334,7 @@ func TestShopifyOrderBecomesXeroInvoice(t *testing.T) {
 	if got := shop.Order(id)["note"]; got != "ERP order "+inv["InvoiceNumber"].(string) {
 		t.Fatalf("Shopify note = %v", got)
 	}
+	f.linked("xero", id)
 }
 
 func TestShopifyRejectionVoidsTheXeroInvoice(t *testing.T) {
@@ -1425,6 +1445,7 @@ func TestShopifyOrderBecomesExactSalesOrder(t *testing.T) {
 	if got := shop.Order(id)["note"]; got != fmt.Sprintf("ERP order %v", o["OrderNumber"]) {
 		t.Fatalf("Shopify note = %v", got)
 	}
+	f.linked("exact-online", id)
 }
 
 func TestShopifyRejectionDeletesTheExactSalesOrder(t *testing.T) {

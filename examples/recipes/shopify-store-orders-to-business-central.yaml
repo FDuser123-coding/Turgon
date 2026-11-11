@@ -6,7 +6,7 @@ apiVersion: turgon.dev/v1alpha1
 kind: Recipe
 metadata:
   name: shopify-store-orders-to-business-central
-  version: 1.0.0
+  version: 1.1.0
   description: "A Shopify order becomes a Business Central sales order; its number is added to the Shopify order as a note."
 spec:
   trigger:
@@ -35,6 +35,8 @@ spec:
         idempotencyKey: "SHOPIFY-{{ source.id }}"
         simulate: true
         output: erpOrder
+        # The ERP's order, linked to its Shopify order.
+        link: { entity: model.SalesOrder, id: id, master: shopifyId }
     - map:
         from: model.SalesOrder
         to: model.Order

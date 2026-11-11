@@ -1176,7 +1176,7 @@
     },
     {
       "name": "shopify-store-orders-to-business-central",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "A Shopify order becomes a Business Central sales order; its number is added to the Shopify order as a note.",
       "level": "L1",
       "deployable": true,
@@ -1241,7 +1241,7 @@
     },
     {
       "name": "shopify-store-orders-to-business-one",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "A Shopify order becomes an SAP Business One sales order; its document number is added to the Shopify order as a note.",
       "level": "L1",
       "deployable": true,
@@ -1306,7 +1306,7 @@
     },
     {
       "name": "shopify-store-orders-to-erp",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "A Shopify order becomes an ERP sales order; the ERP number is added to the Shopify order as a note.",
       "level": "L1",
       "deployable": true,
@@ -1429,7 +1429,7 @@
     },
     {
       "name": "shopify-store-orders-to-netsuite",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "A Shopify order becomes a NetSuite sales order; the NetSuite number is added to the Shopify order as a note.",
       "level": "L1",
       "deployable": true,
@@ -1494,7 +1494,7 @@
     },
     {
       "name": "shopify-store-orders-to-odoo",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "A Shopify order becomes an Odoo quotation, checked against Odoo's own pricing; its number is added to the Shopify order as a note.",
       "level": "L1",
       "deployable": true,
@@ -1559,7 +1559,7 @@
     },
     {
       "name": "shopify-store-orders-to-quickbooks",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "A paid Shopify order becomes a QuickBooks Online sales receipt; its number is added to the Shopify order as a note.",
       "level": "L1",
       "deployable": true,
@@ -1624,7 +1624,7 @@
     },
     {
       "name": "shopify-store-orders-to-s4",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "A Shopify order becomes an S/4HANA sales order through SAP's released OData API.",
       "level": "L1",
       "deployable": true,
@@ -1682,7 +1682,7 @@
     },
     {
       "name": "shopify-store-orders-to-xero",
-      "version": "1.0.0",
+      "version": "1.1.0",
       "description": "A paid Shopify order becomes an authorised Xero invoice; its number is added to the Shopify order as a note.",
       "level": "L1",
       "deployable": true,

@@ -6,7 +6,7 @@ apiVersion: turgon.dev/v1alpha1
 kind: Recipe
 metadata:
   name: shopify-store-orders-to-odoo
-  version: 1.0.0
+  version: 1.1.0
   description: "A Shopify order becomes an Odoo quotation, checked against Odoo's own pricing; its number is added to the Shopify order as a note."
 spec:
   trigger:
@@ -38,6 +38,8 @@ spec:
         # untaxed total differs from the shop's by more than 1%, a person is asked.
         checkAmount: { preview: record.amount_untaxed, tolerance: 0.01 }
         output: erpOrder
+        # The ERP's order, linked to its Shopify order.
+        link: { entity: model.SalesOrder, id: id, master: shopifyId }
     - map:
         from: model.SalesOrder
         to: model.Order

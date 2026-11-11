@@ -2623,6 +2623,24 @@ Integration tests use a real Postgres when `TURGON_TEST_DATABASE_URL` is set
 - **Write links.** A write step's `link: {entity, id, master}` records the record it made as a
   cross-reference to a document field. A later event from the target about that record then
   resolves back to it (an order deleted in Exact Online, back to its Shopify order).
+  - **Every Shopify saga links its ERP order** (version 1.1) to the Shopify order's ID
+    (`shopifyId`), by the ERP's own ID:
+
+    | Saga to | ID in the result |
+    |---|---|
+    | `erp-db` | `id` |
+    | SAP S/4HANA | `id` (the sales order number) |
+    | NetSuite | `id` (from `Location`) |
+    | Business Central | `id` |
+    | SAP Business One | `DocEntry` |
+    | Odoo | `id` |
+    | QuickBooks Online | `Id` |
+    | Xero | `InvoiceID` |
+    | Exact Online | `OrderID` |
+
+  - **A link that cannot be made fails the run, and its writes are undone,** so a wrong `id` path
+    shows in the first test rather than as missing links later. That happens when the result
+    lacks the ID or the document lacks the master. Each saga's engine test checks its link.
 - **Unknown references can end a run.** A resolve step with `ifUnknown: skip` (exact strategy)
   ends the run without writing when the reference has no cross-reference, instead of asking a
   data steward. Use it for events about records Turgon never linked.
