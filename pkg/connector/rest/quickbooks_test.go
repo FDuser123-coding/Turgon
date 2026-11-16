@@ -132,6 +132,8 @@ func TestQuickBooksReceiptRetryVoidAndQuery(t *testing.T) {
 	if err != nil || q.Receipts() != 1 || !strings.Contains(string(again), `"Id":"`+r.Id+`"`) {
 		t.Fatalf("retry: %s, %v, receipts %d", again, err, q.Receipts())
 	}
+	// Receipts are read once they have settled for a minute.
+	c.SetClock(func() time.Time { return time.Now().Add(2 * time.Minute) })
 	evs, err := c.Poll(ctx, "SalesReceipt.Changed", 0, 10)
 	if err != nil || len(evs) != 1 || connector.RecordID(evs[0].ID) != r.Id {
 		t.Fatalf("changed receipts = %+v, %v", evs, err)
@@ -229,5 +231,80 @@ func TestLookbackWarnsWhenItSkipsAStoredCursor(t *testing.T) {
 	}
 	if !strings.Contains(logs.String(), "older than the event's lookback") || !strings.Contains(logs.String(), "lookback=720h") {
 		t.Fatalf("logged %q", logs.String())
+	}
+}
+
+// QuickBooks stamps changes to the second, and the cursor reads after its
+// position. Without settle, a receipt stamped in the second last read but
+// made after the poll is skipped; with it (60s), a second is read once
+// every receipt stamped in it is there.
+func TestQuickBooksSameSecondReceipts(t *testing.T) {
+	for _, settle := range []bool{false, true} {
+		q, seed := qbotest.New("qb-app", "s3cret")
+		t.Cleanup(q.Close)
+		second := time.Now().Add(-time.Hour).Truncate(time.Second)
+		q.StartAt(1001, func() time.Time { return second }) // every change in that second
+		cfg := exampleConfig(t, "quickbooks", func(s string) string {
+			s = strings.ReplaceAll(s, "https://oauth.platform.intuit.com", q.URL())
+			s = strings.ReplaceAll(s, "https://quickbooks.api.intuit.com", q.URL())
+			if !settle {
+				s = strings.ReplaceAll(s, `"settle":"60s"`, `"settle":""`)
+			}
+			return s
+		})
+		c, err := rest.New(cfg, qboSecret(seed), http.DefaultClient)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c.UseTokens(&connector.MemoryTokens{})
+		ctx := context.Background()
+		poll := func(at time.Time, after int64) []connector.Event {
+			c.SetClock(func() time.Time { return at })
+			evs, err := c.Poll(ctx, "SalesReceipt.Changed", after, 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return evs
+		}
+		if _, err := c.Commit(ctx, "create-sales-receipt", "SHOPIFY-1", json.RawMessage(qboReceipt)); err != nil {
+			t.Fatal(err)
+		}
+		var after int64
+		seen := 0
+		take := func(evs []connector.Event) {
+			for _, ev := range evs {
+				seen++
+				after = ev.Position
+			}
+		}
+		take(poll(second.Add(500*time.Millisecond), after)) // within the receipt's second
+		if _, err := c.Commit(ctx, "create-sales-receipt", "SHOPIFY-2", json.RawMessage(strings.Replace(qboReceipt, "SHOP1001", "SHOP1002", 1))); err != nil {
+			t.Fatal(err)
+		}
+		take(poll(second.Add(2*time.Minute), after))
+		switch {
+		case settle && seen != 2:
+			t.Fatalf("with settle: %d of 2 receipts read", seen)
+		case !settle && seen != 1:
+			t.Fatalf("without settle, the second receipt was expected to be missed (the limit settle removes): %d read", seen)
+		}
+	}
+}
+
+// settle is a positive duration on an event with a time position.
+func TestSettleValidation(t *testing.T) {
+	for name, c := range map[string]struct {
+		settle, format, want string
+	}{
+		"not a duration":   {"a minute", "rfc3339", "positive duration"},
+		"negative":         {"-1s", "rfc3339", "positive duration"},
+		"number positions": {"60s", "number", "time position"},
+	} {
+		cfg := rest.Config{BaseURL: "https://api.example.com", Auth: rest.Auth{Type: "header", Header: "X-Key"}, Events: map[string]rest.Event{
+			"Thing.Changed": {Path: "/things", Position: "updated", PositionFormat: c.format, Settle: c.settle},
+		}}
+		if _, err := rest.New(cfg, "k", http.DefaultClient); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }

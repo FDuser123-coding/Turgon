@@ -112,6 +112,13 @@ type Event struct {
 	// give. Only with a time position (positionFormat rfc3339, unix or
 	// msjson).
 	Lookback string `json:"lookback,omitempty"`
+	// Settle is how old an item must be before it is read, as a Go
+	// duration ("60s"). The cursor reads strictly after its position, so
+	// with positions to the second (QuickBooks' LastUpdatedTime) an item
+	// stamped in the second last read, but committed after the poll, would
+	// be skipped. Reading only items older than this, a second is read once
+	// every item stamped in it is there. Only with a time position.
+	Settle string `json:"settle,omitempty"`
 	// MaxItems is the most items the API answers at once, whatever it is
 	// asked for (Exact Online: 60). A poll asks for no more, so that a full
 	// answer is known to be cut short, and a timestamp it ends in is never
@@ -277,6 +284,15 @@ func (c Config) validate() error {
 		for k := range e.Filter {
 			if !fieldRE.MatchString(k) {
 				return fmt.Errorf("event %s: invalid filter field %q", name, k)
+			}
+		}
+		if e.Settle != "" {
+			d, err := time.ParseDuration(e.Settle)
+			if err != nil || d <= 0 {
+				return fmt.Errorf("event %s: settle must be a positive duration such as 60s, not %q", name, e.Settle)
+			}
+			if e.PositionFormat == "" || e.PositionFormat == "number" {
+				return fmt.Errorf("event %s: settle needs a time position (positionFormat rfc3339, unix or msjson)", name)
 			}
 		}
 		if e.Lookback != "" {
@@ -673,6 +689,16 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 		q.Set(e.Pagination.Param, scalar(lookup(last, or(e.Pagination.Cursor, idField))))
 	}
 	sort.SliceStable(events, func(i, j int) bool { return events[i].Position < events[j].Position })
+	if e.Settle != "" {
+		// Validated: a positive duration. Items newer than the cutoff wait
+		// for the next poll; the answer, in position order, holds every
+		// item of the settled seconds before them, so it is not cut short.
+		d, _ := time.ParseDuration(e.Settle)
+		cutoff := c.now().Add(-d).UnixMilli()
+		if i := sort.Search(len(events), func(i int) bool { return events[i].Position > cutoff }); i < len(events) {
+			events, truncated = events[:i], false
+		}
+	}
 	if len(events) > limit {
 		events, truncated = events[:limit], true
 	}
