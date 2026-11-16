@@ -4,7 +4,9 @@
 // sales receipt as it is created or voided on stderr. Each refresh rotates
 // the refresh token, so only Turgon's token vault can keep using it.
 // "delete <document number>" on stdin deletes a receipt, as a person in
-// QuickBooks would; change data capture then reports it.
+// QuickBooks would; change data capture then reports it. "bulk <n>" makes n
+// receipts at once, as another app might, to fill change data capture's
+// 1000 objects.
 package main
 
 import (
@@ -14,6 +16,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -33,8 +36,13 @@ func main() {
 		in := bufio.NewScanner(os.Stdin)
 		for in.Scan() {
 			cmd, doc, _ := strings.Cut(strings.TrimSpace(in.Text()), " ")
+			if n, err := strconv.Atoi(doc); cmd == "bulk" && err == nil && n > 0 {
+				ids := q.AddReceipts(n)
+				fmt.Fprintf(os.Stderr, "%d sales receipts made (ids %s to %s)\n", n, ids[0], ids[len(ids)-1])
+				continue
+			}
 			if cmd != "delete" || doc == "" {
-				fmt.Fprintln(os.Stderr, "usage: delete <document number>")
+				fmt.Fprintln(os.Stderr, "usage: delete <document number> | bulk <n>")
 				continue
 			}
 			r := q.ReceiptByDocNumber(doc)
@@ -59,6 +67,10 @@ func main() {
 			}
 			state := fmt.Sprint(r["SyncToken"])
 			if seen[id] == state {
+				continue
+			}
+			if strings.HasPrefix(fmt.Sprint(r["DocNumber"]), "BULK") {
+				seen[id] = state // reported by the bulk command
 				continue
 			}
 			if seen[id] == "" {

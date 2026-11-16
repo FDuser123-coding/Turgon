@@ -67,7 +67,11 @@ spec:
         filter: { status: Deleted }
         lookback: 720h
         settle: 60s
+        # Change data capture answers 1000 objects at most, deleted ones
+        # last, with no paging: a full answer is narrowed to the newest
+        # window that fits.
         maxItems: 1000
+        unordered: true
     operations:
       create-sales-receipt:
         method: POST
