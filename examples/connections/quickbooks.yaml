@@ -43,6 +43,10 @@ spec:
         id: Id
         position: MetaData.LastUpdatedTime
         positionFormat: rfc3339
+        # LastUpdatedTime is to the second, and the cursor reads after it:
+        # a receipt is read once its second is a minute old, when every
+        # receipt stamped in it is there.
+        settle: 60s
       # A query never returns a deleted receipt: change data capture does,
       # as {"status": "Deleted", "Id", "MetaData": {"LastUpdatedTime"}},
       # among the receipts changed since a time, at most 30 days back
@@ -62,6 +66,7 @@ spec:
         versioned: false
         filter: { status: Deleted }
         lookback: 720h
+        settle: 60s
         maxItems: 1000
     operations:
       create-sales-receipt:

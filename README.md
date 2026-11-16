@@ -680,9 +680,14 @@ which is not a deletion.
 - **Known limits:**
   - Change data capture answers at most 1000 objects, in no stated order. More than 1000
     receipts changed since the cursor could leave older ones unread.
-  - QuickBooks stamps changes to the second, and the cursor reads strictly after its position.
-    A change in the same second as the last one read can be missed. `SalesReceipt.Changed`
-    shares this limit.
+- **Changes in the same second (`settle`, a new `rest` event setting):** QuickBooks stamps
+  changes to the second, and the cursor reads strictly after its position. A receipt stamped in
+  the second last read, but made after that poll, used to be skipped.
+  - With `settle: 60s` on both QuickBooks events, an item is read only once it is a minute old.
+    By then every receipt stamped in its second is there.
+  - The cost is a minute's delay. Measured live, the deletion note came 62 seconds after
+    `delete`.
+  - `settle` works with any event that has a time position.
 - **The shared note mapping:** `deleted-sales-order-to-shopify-note` (1.1) names the ERP from the
   document's `erpSystem`. It falls back to Exact Online, whose mapping (1.1) now sets it too.
 
