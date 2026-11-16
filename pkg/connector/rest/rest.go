@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"reflect"
@@ -443,7 +444,7 @@ type Conn struct {
 	http     *http.Client
 	endpoint string
 	webhooks map[string]*webhook
-	// clock is time.Now unless a test sets it (SetClock).
+	// clock is time.Now unless a test sets it (export_test.go).
 	clock func() time.Time
 }
 
@@ -453,9 +454,6 @@ func (c *Conn) now() time.Time {
 	}
 	return time.Now()
 }
-
-// SetClock sets the time an event's lookback counts back from, for tests.
-func (c *Conn) SetClock(now func() time.Time) { c.clock = now }
 
 var (
 	_ connector.Instance   = (*Conn)(nil)
@@ -599,6 +597,12 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 		// request inside the API's window as it travels.
 		d, _ := time.ParseDuration(e.Lookback)
 		if floor := c.now().Add(-d + time.Minute).UnixMilli(); after < floor {
+			if after > 0 {
+				// A cursor kept from before the window: the changes in
+				// between are beyond what the API answers.
+				slog.Warn("rest: the cursor is older than the event's lookback; changes between them cannot be read",
+					"endpoint", c.endpoint, "event", event, "cursor", formatPosition(after, e.PositionFormat), "lookback", e.Lookback)
+			}
 			after = floor
 		}
 	}

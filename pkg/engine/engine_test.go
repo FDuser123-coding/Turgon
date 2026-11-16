@@ -74,6 +74,15 @@ func (f *fixture) linked(system string, shopifyID any) {
 	}
 }
 
+// unlinked checks that a saga's undo removed the link its write made.
+func (f *fixture) unlinked(system string) {
+	f.t.Helper()
+	var n int
+	if err := f.pool.QueryRow(context.Background(), "SELECT count(*) FROM turgon_xref WHERE entity = 'SalesOrder' AND system = $1", system).Scan(&n); err != nil || n != 0 {
+		f.t.Fatalf("links of undone %s writes: %d, %v", system, n, err)
+	}
+}
+
 // localize rewrites the example's schema names so parallel tests do not collide.
 func localize(s, schema string) string {
 	s = strings.ReplaceAll(s, "shop.", schema+"_shop.")
@@ -1230,7 +1239,9 @@ func TestOdooPricingDifferentFromTheShopAsksAPerson(t *testing.T) {
 }
 
 func TestShopifyRejectionCancelsTheOdooQuotation(t *testing.T) {
-	f, shop, od := newOdooFixture(t)
+	f, shop, od, cancelled := newOdooFixtures(t)
+	clock := time.Now().Add(-10 * time.Minute)
+	od.StartAt(1, func() time.Time { return clock })
 	id := shop.AddOrder(map[string]any{
 		"name": "#1001", "email": "Ada@Example.com", "created_at": "2026-11-05T09:30:00-04:00",
 		"subtotal_price": "100.00", "currency": "eur", "line_items": []any{map[string]any{"sku": "M-1", "quantity": 1, "price": "100.00"}},
@@ -1242,6 +1253,17 @@ func TestShopifyRejectionCancelsTheOdooQuotation(t *testing.T) {
 	}
 	if o := od.OrderByRef(fmt.Sprintf("SHOPIFY-%d", id)); o == nil || o["state"] != "cancel" {
 		t.Fatalf("the Odoo quotation was not cancelled after Shopify rejected the note: %v", o)
+	}
+	// The undo removed the quotation's link: its cancellation, which the
+	// undo made, ends without writing to the Shopify order that refused.
+	f.unlinked("odoo-erp")
+	g := cancelled()
+	runs := g.dispatch()
+	if len(runs) != 1 {
+		t.Fatalf("runs = %d", len(runs))
+	}
+	if res, err, _ := g.run(runs[0]); err != nil || len(res.Writes) != 0 || res.Skipped == "" {
+		t.Fatalf("the undo's cancellation: %+v, %v", res, err)
 	}
 }
 
@@ -1433,6 +1455,7 @@ func TestShopifyRejectionVoidsTheQuickBooksReceipt(t *testing.T) {
 	if r := q.ReceiptByDocNumber(fmt.Sprintf("SHOP%d", id)); r == nil || r["TotalAmt"] != 0.0 || r["PrivateNote"] != "Voided" {
 		t.Fatalf("the QuickBooks receipt was not voided after Shopify rejected the note: %v", r)
 	}
+	f.unlinked("quickbooks")
 }
 
 // newXeroFixture runs the shopify-store-orders-to-xero recipe against the
@@ -1603,6 +1626,7 @@ func TestShopifyRejectionDeletesTheExactSalesOrder(t *testing.T) {
 	if x.Orders() != 0 || x.Requests["DELETE salesorder/SalesOrders"] != 1 {
 		t.Fatalf("the Exact order was not deleted after Shopify rejected the note: %d orders", x.Orders())
 	}
+	f.unlinked("exact-online")
 }
 
 func hubspotDeal(email, amount string) map[string]string {

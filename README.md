@@ -675,6 +675,14 @@ which is not a deletion.
   than 30 days back. With `lookback: 720h`, a cursor older than that is moved up to it, starting
   with the first poll's, which would otherwise ask from 1970. The API has nothing older to give.
   It works only with a time position.
+  - **A stored cursor older than the window** is moved up too, with a warning in the worker's log
+    (`the cursor is older than the event's lookback`): the changes between them cannot be read.
+- **Known limits:**
+  - Change data capture answers at most 1000 objects, in no stated order. More than 1000
+    receipts changed since the cursor could leave older ones unread.
+  - QuickBooks stamps changes to the second, and the cursor reads strictly after its position.
+    A change in the same second as the last one read can be missed. `SalesReceipt.Changed`
+    shares this limit.
 - **The shared note mapping:** `deleted-sales-order-to-shopify-note` (1.1) names the ERP from the
   document's `erpSystem`. It falls back to Exact Online, whose mapping (1.1) now sets it too.
 
@@ -907,8 +915,9 @@ order S54210 cancelled in Odoo on 2026-11-11`. It works as the Exact Online reci
 - **`ifUnknown: skip`** ends the run without writing for an order made in Odoo by hand.
 - **An order changed again once cancelled** is a new version of the event, and its run's write
   is a duplicate of the first (`ODOO-CANCELLED-{{ source.id }}`), so the note is written once.
-- **The saga's own undo cancels the quotation too.** Its Shopify order is then told that the
-  ERP order was cancelled, which is what happened.
+- **The saga's own undo cancels the quotation too, and removes its link.** Its cancellation then
+  ends without writing, rather than writing a note to the Shopify order whose refusal caused the
+  undo.
 
 `cancel <id>` on `fakeodoo`'s standard input cancels an order, as a person in Odoo would.
 
@@ -2728,6 +2737,9 @@ Postgres, envtest and the race detector, `govulncheck`, and a restore drill.
     shows in the first test rather than as missing links later. That happens when the result
     lacks the ID or the document lacks the master, or either is not a string or a number (an
     object at the path is a wrong path). Each saga's engine test checks its link.
+  - **An undone write loses its link.** When a saga compensates a linked write, it also removes
+    the link, if it still leads to the same record. The target's event about the undo (the order
+    deleted or cancelled) then finds no link, and its run ends without writing.
   - **Links are kept by endpoint name,** as resolve steps look them up. Within a blueprint
     that is the slot's name. Run a recipe that resolves a link (the deletion recipe) with the
     same endpoint names as the saga that made it: both in the same blueprint, or both on their

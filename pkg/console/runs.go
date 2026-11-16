@@ -126,17 +126,26 @@ func (t TemporalRuns) List(ctx context.Context, limit int) ([]RunSummary, error)
 	return runs, nil
 }
 
-// skippedMemo reads why a run was skipped from its memo, if it was.
+// skippedMemo reads why a run was skipped from its memo, if it was. The
+// field alone says it was: a reason this process cannot decrypt (it lacks
+// TURGON_PAYLOAD_KEYS) still marks the run skipped.
 func skippedMemo(fields map[string]*commonpb.Payload) string {
 	p, ok := fields[engine.MemoSkipped]
 	if !ok {
 		return ""
 	}
 	var s string
-	if engine.DataConverter().FromPayload(p, &s) != nil {
-		return ""
+	if err := engine.DataConverter().FromPayload(p, &s); err != nil || s == "" {
+		return "skipped; the reason is unreadable here (" + errText(err) + ")"
 	}
 	return s
+}
+
+func errText(err error) string {
+	if err == nil {
+		return "empty"
+	}
+	return err.Error()
 }
 
 func (t TemporalRuns) Pending(ctx context.Context, id string) (*engine.PendingApproval, error) {

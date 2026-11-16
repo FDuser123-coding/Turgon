@@ -324,6 +324,14 @@ func (s *Store) PutXref(ctx context.Context, entity, system, sourceID, masterID 
 	return s.Link(ctx, entity, system, sourceID, masterID, nil)
 }
 
+// DeleteXref removes a source record's link if it still leads to masterID
+// (a link another write made since is kept).
+func (s *Store) DeleteXref(ctx context.Context, entity, system, sourceID, masterID string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM turgon_xref WHERE entity = $1 AND system = $2 AND source_id = $3 AND master_id = $4`,
+		entity, system, sourceID, masterID)
+	return err
+}
+
 // Link links a source record to a master ID and keeps its identifying
 // attributes for matching later records. Attributes already known for the
 // record are kept unless new ones are given.

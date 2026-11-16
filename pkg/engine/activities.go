@@ -271,9 +271,39 @@ func (x *Activities) LinkWrite(ctx context.Context, in LinkInput) error {
 	if !ok {
 		return nonRetryable(ErrTypeInvalid, errors.New("write link: no cross-reference store configured"))
 	}
+	entity, sid, mid, err := linkIDs(in)
+	if err != nil {
+		return err
+	}
+	return l.PutXref(ctx, entity, in.System, sid, mid)
+}
+
+// Unlinker removes cross-references (pgstore.Store).
+type Unlinker interface {
+	DeleteXref(ctx context.Context, entity, system, sourceID, masterID string) error
+}
+
+// UnlinkWrite removes the link a write made once the write is undone, so
+// the target's later event about the record (the undo deleting or
+// cancelling it) finds no link and ends its run without writing.
+func (x *Activities) UnlinkWrite(ctx context.Context, in LinkInput) error {
+	u, ok := x.Resolver.(Unlinker)
+	if !ok {
+		return nil
+	}
+	entity, sid, mid, err := linkIDs(in)
+	if err != nil {
+		return err
+	}
+	return u.DeleteXref(ctx, entity, in.System, sid, mid)
+}
+
+// linkIDs reads a link's entity, the record's ID in the result and the
+// master ID in the document.
+func linkIDs(in LinkInput) (entity, sourceID, masterID string, err error) {
 	var result map[string]any
 	if err := json.Unmarshal(in.Result, &result); err != nil {
-		return nonRetryable(ErrTypeInvalid, fmt.Errorf("write link: the result is not an object: %v", err))
+		return "", "", "", nonRetryable(ErrTypeInvalid, fmt.Errorf("write link: the result is not an object: %v", err))
 	}
 	// An ID is a string or a number: an object at the path is a wrong
 	// path, not an ID to link by.
@@ -282,9 +312,9 @@ func (x *Activities) LinkWrite(ctx context.Context, in LinkInput) error {
 	sid, _ := scalarText(id)
 	mid, _ := scalarText(master)
 	if _, isBool := id.(bool); sid == "" || mid == "" || isBool {
-		return nonRetryable(ErrTypeInvalid, fmt.Errorf("write link: the result has no ID at %s or the document none at %s (a string or a number)", in.Link.ID, in.Link.Master))
+		return "", "", "", nonRetryable(ErrTypeInvalid, fmt.Errorf("write link: the result has no ID at %s or the document none at %s (a string or a number)", in.Link.ID, in.Link.Master))
 	}
-	return l.PutXref(ctx, strings.TrimPrefix(in.Link.Entity, "model."), in.System, sid, mid)
+	return strings.TrimPrefix(in.Link.Entity, "model."), sid, mid, nil
 }
 
 // CommitWrite runs the guard's second phase.

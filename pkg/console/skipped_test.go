@@ -1,6 +1,7 @@
 package console
 
 import (
+	"strings"
 	"testing"
 
 	commonpb "go.temporal.io/api/common/v1"
@@ -21,5 +22,10 @@ func TestSkippedReasonFromMemo(t *testing.T) {
 	}
 	if skippedMemo(nil) != "" || skippedMemo(map[string]*commonpb.Payload{"other": p}) != "" {
 		t.Fatal("a run without the memo field is not skipped")
+	}
+	// Encrypted with a key this process lacks: still skipped.
+	sealed := &commonpb.Payload{Metadata: map[string][]byte{"encoding": []byte("binary/encrypted")}, Data: []byte{1, 2, 3}}
+	if got := skippedMemo(map[string]*commonpb.Payload{engine.MemoSkipped: sealed}); !strings.HasPrefix(got, "skipped; the reason is unreadable here") {
+		t.Fatalf("an unreadable reason: %q", got)
 	}
 }
