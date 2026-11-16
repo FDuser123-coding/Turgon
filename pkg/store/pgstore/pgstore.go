@@ -332,6 +332,27 @@ func (s *Store) DeleteXref(ctx context.Context, entity, system, sourceID, master
 	return err
 }
 
+// MoveXref moves a source record's link, with its attributes, from one
+// system name to another. A link the other name already has is kept.
+func (s *Store) MoveXref(ctx context.Context, entity, from, to, sourceID string) error {
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // a no-op after Commit
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO turgon_xref (entity, system, source_id, master_id, attributes)
+		SELECT entity, $3, source_id, master_id, attributes FROM turgon_xref
+		WHERE entity = $1 AND system = $2 AND source_id = $4
+		ON CONFLICT (entity, system, source_id) DO NOTHING`, entity, from, to, sourceID); err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM turgon_xref WHERE entity = $1 AND system = $2 AND source_id = $3`, entity, from, sourceID); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
+}
+
 // Link links a source record to a master ID and keeps its identifying
 // attributes for matching later records. Attributes already known for the
 // record are kept unless new ones are given.

@@ -60,6 +60,8 @@ type fixture struct {
 	store    *pgstore.Store
 	auditLog *bytes.Buffer
 	tokens   *connector.MemoryTokens
+	// edit changes the compiled spec before the runtime starts.
+	edit func(*compiler.RuntimeSpec)
 }
 
 // linked checks that the saga linked its ERP order to the Shopify order,
@@ -163,6 +165,9 @@ func (f *fixture) runtime(recipe string, extra connector.StaticSecrets, webhooks
 			cfg = rw(cfg)
 		}
 		c.Config = json.RawMessage(cfg)
+	}
+	if f.edit != nil {
+		f.edit(spec)
 	}
 
 	url := pgtest.URL(t, schema)
@@ -1339,6 +1344,14 @@ func newQuickBooksFixture(t *testing.T) (*fixture, *shoptest.Shop, *qbotest.QBO)
 // QuickBooks receipts, on the same database, systems and tokens.
 func newQuickBooksFixtures(t *testing.T) (*fixture, *shoptest.Shop, *qbotest.QBO, func() *fixture) {
 	t.Helper()
+	f, shop, q, deleted, _ := newQuickBooksFixturesRW(t)
+	return f, shop, q, deleted
+}
+
+// newQuickBooksFixturesRW also returns a fixture for any recipe on the
+// same systems, with its spec edited by edit.
+func newQuickBooksFixturesRW(t *testing.T) (*fixture, *shoptest.Shop, *qbotest.QBO, func() *fixture, func(string, func(*compiler.RuntimeSpec)) *fixture) {
+	t.Helper()
 	shop := shoptest.New("shpat_test")
 	t.Cleanup(shop.Close)
 	q, seed := qbotest.New("qb-app", "s3cret")
@@ -1357,7 +1370,13 @@ func newQuickBooksFixtures(t *testing.T) (*fixture, *shoptest.Shop, *qbotest.QBO
 		t.Fatal(err)
 	}
 	deleted := func() *fixture { return f.also("quickbooks-deleted-receipts-to-shopify-note", secrets, rewrite) }
-	return f, shop, q, deleted
+	edited := func(recipe string, edit func(*compiler.RuntimeSpec)) *fixture {
+		g := *f
+		g.edit = edit
+		g.rt, g.auditLog = g.runtime(recipe, secrets, false, nil, rewrite)
+		return &g
+	}
+	return f, shop, q, deleted, edited
 }
 
 // The saga links each QuickBooks receipt to its Shopify order. When a

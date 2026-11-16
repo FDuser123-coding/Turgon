@@ -137,6 +137,50 @@ func TestBlueprintSlotsCarryTheirConnections(t *testing.T) {
 	}
 }
 
+// Records are linked by the system they live in: in a stack, a slot's
+// triggers and writes name their Connection, so links made through a slot
+// are found by recipes that name the connection itself. On its own, a
+// recipe's endpoint is the connection, and no system is named.
+func TestBlueprintNamesSystemsByConnection(t *testing.T) {
+	cat, _ := catalog.Load("../../examples")
+	rt := compileNamed(t, cat, "eu-distributor-core")
+	got := map[string]string{}
+	for _, wf := range rt.Spec.Workflows {
+		got[wf.Name+" trigger "+wf.Trigger.Endpoint] = wf.Trigger.System
+		for _, st := range wf.Steps {
+			if st.Write != nil {
+				got[wf.Name+" write "+st.Write.Endpoint] = st.Write.System
+			}
+		}
+	}
+	want := map[string]string{
+		"shopify-orders-to-sap trigger commerce":         "shopify-admin",
+		"shopify-orders-to-sap write erp":                "ecc-prod",
+		"salesforce-won-deals-to-sap-orders trigger crm": "salesforce-prod",
+		"salesforce-won-deals-to-sap-orders write erp":   "ecc-prod",
+	}
+	for k, v := range want {
+		if got[k] != v {
+			t.Errorf("%s: system %q, want %q (all: %v)", k, got[k], v, got)
+		}
+	}
+
+	alone := compileNamed(t, cat, "shopify-store-orders-to-quickbooks")
+	for _, wf := range alone.Spec.Workflows {
+		if wf.Trigger.System != "" {
+			t.Errorf("%s: trigger system %q", wf.Name, wf.Trigger.System)
+		}
+		for _, st := range wf.Steps {
+			if st.Write != nil && st.Write.System != "" {
+				t.Errorf("%s: write system %q", wf.Name, st.Write.System)
+			}
+		}
+	}
+	if SystemOf("", "quickbooks") != "quickbooks" || SystemOf("ecc-prod", "erp") != "ecc-prod" {
+		t.Error("SystemOf")
+	}
+}
+
 // In a stack whose CRM, ERP, commerce and billing slots all hold
 // customers, credit-check reads them from the ERP its orders are created
 // in, not from the first slot by name (billing).

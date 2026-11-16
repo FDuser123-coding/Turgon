@@ -212,6 +212,40 @@ func TestLinksKeepAttributesForMatching(t *testing.T) {
 	}
 }
 
+// A link moved to another system name keeps its attributes; a link the
+// other name already has is kept, and the old name's goes either way.
+func TestMoveXrefKeepsAttributesAndAnExistingLink(t *testing.T) {
+	ctx := context.Background()
+	s := newStore(t)
+	if err := s.Link(ctx, "SalesOrder", "erp", "130", "1001", identity.Attributes{"exact:doc": "SHOP1001"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.MoveXref(ctx, "SalesOrder", "erp", "quickbooks", "130"); err != nil {
+		t.Fatal(err)
+	}
+	if id, ok, _ := s.Xref(ctx, "SalesOrder", "quickbooks", "130"); !ok || id != "1001" {
+		t.Fatalf("moved: %q %v", id, ok)
+	}
+	if _, ok, _ := s.Xref(ctx, "SalesOrder", "erp", "130"); ok {
+		t.Fatal("the old name kept its link")
+	}
+	if got, _ := s.Candidates(ctx, "SalesOrder", identity.Attributes{"exact:doc": "SHOP1001"}); len(got) != 1 {
+		t.Fatalf("attributes after the move: %+v", got)
+	}
+
+	_ = s.PutXref(ctx, "SalesOrder", "erp", "131", "1002")
+	_ = s.PutXref(ctx, "SalesOrder", "quickbooks", "131", "1003")
+	if err := s.MoveXref(ctx, "SalesOrder", "erp", "quickbooks", "131"); err != nil {
+		t.Fatal(err)
+	}
+	if id, _, _ := s.Xref(ctx, "SalesOrder", "quickbooks", "131"); id != "1003" {
+		t.Fatalf("the connection's own link was replaced: %q", id)
+	}
+	if _, ok, _ := s.Xref(ctx, "SalesOrder", "erp", "131"); ok {
+		t.Fatal("the old name kept its link")
+	}
+}
+
 func TestInboxKeepsEachDeliveryOnceInOrder(t *testing.T) {
 	s := newStore(t)
 	ctx := context.Background()
