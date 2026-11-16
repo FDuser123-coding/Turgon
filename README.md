@@ -604,10 +604,14 @@ working. Xero does the same.
   - The refresh and the storing run to the end even when the caller gives up. If the store
     still fails, the worker keeps the rotated token in memory and stores it on its next call,
     rather than lose it and spend the old one.
-- **Each authorization has its own row,** keyed by the endpoint, the app and the seed.
-  Authorizing the app again puts a new refresh token in the secret, which starts a new row.
-  Two connections of one endpoint (one app, two companies) never share a token. Going back to
-  an earlier seed finds the token it rotated to.
+- **Each authorization has its own row,** keyed by the connection, the app and the seed.
+  - Authorizing the app again puts a new refresh token in the secret, which starts a new row.
+  - Going back to an earlier seed finds the token it rotated to.
+  - A stack's slot and a recipe on its own that use one connection share its row. QuickBooks
+    keeps only the last refresh token it handed out, so a row per endpoint would spend the seed
+    twice.
+  - Rows that earlier releases kept by endpoint name are read once, when the connection has no
+    row yet.
 - **Token and login requests don't follow redirects,** since their bodies carry credentials. A
   `session` login must share the API's scheme and host, because its cookies go to the API.
 - **Commands that open connections** (`run`, `check`, `discover`, `mcp` with a Postgres audit
@@ -2745,10 +2749,19 @@ Postgres, envtest and the race detector, `govulncheck`, and a restore drill.
   - **An undone write loses its link.** When a saga compensates a linked write, it also removes
     the link, if it still leads to the same record. The target's event about the undo (the order
     deleted or cancelled) then finds no link, and its run ends without writing.
-  - **Links are kept by endpoint name,** as resolve steps look them up. Within a blueprint
-    that is the slot's name. Run a recipe that resolves a link (the deletion recipe) with the
-    same endpoint names as the saga that made it: both in the same blueprint, or both on their
-    own.
+  - **Links are kept by connection name.** In a stack, a write through the `erp` slot links
+    its order under the slot's Connection (`quickbooks`), not under `erp`. A recipe that names
+    the connection itself, such as the deletion recipe on its own, then resolves it, and so do
+    links that `turgon xref load` made by connection.
+    - The compiled spec says which: a trigger's and a write's `system` is the Connection when
+      the endpoint is a slot bound to one. On its own, a recipe's endpoint is the connection,
+      and `system` is left out.
+    - Links that earlier releases kept under a slot's name are still found. A resolve that
+      misses under the connection's name reads the slot's, and moves the link, with the
+      attributes kept for matching, to the connection's name. If the connection already has a
+      link for that record, that link is kept.
+    - Runs started before the upgrade finish on the names they started with, because their
+      spec travels with them.
 - **Unknown references can end a run.** A resolve step with `ifUnknown: skip` (exact strategy)
   ends the run without writing when the reference has no cross-reference, instead of asking a
   data steward. Use it for events about records Turgon never linked.

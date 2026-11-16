@@ -141,7 +141,11 @@ type MapInput struct {
 type ResolveInput struct {
 	Config compiler.ResolveConfig `json:"config"`
 	System string                 `json:"system"`
-	Doc    map[string]any         `json:"doc"`
+	// Endpoint is the trigger's endpoint when System is its Connection:
+	// cross-references made before systems were named by connection are
+	// kept under it, and are moved to System when read.
+	Endpoint string         `json:"endpoint,omitempty"`
+	Doc      map[string]any `json:"doc"`
 }
 
 type PrepareInput struct {

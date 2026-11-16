@@ -238,7 +238,7 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 		if w.Link == nil {
 			return nil, nil
 		}
-		lin := LinkInput{Link: *w.Link, System: w.Endpoint, Result: res, Doc: doc}
+		lin := LinkInput{Link: *w.Link, System: compiler.SystemOf(w.System, w.Endpoint), Result: res, Doc: doc}
 		return &lin, workflow.ExecuteActivity(ctx, a.LinkWrite, lin).Get(ctx, nil)
 	}
 
@@ -255,7 +255,11 @@ func IntegrationWorkflow(ctx workflow.Context, in RunInput) (res RunResult, err 
 			doc = next
 		case st.Resolve != nil:
 			var next map[string]any
-			rin := ResolveInput{Config: *st.Resolve, System: in.Workflow.Trigger.Endpoint, Doc: doc}
+			tr := in.Workflow.Trigger
+			rin := ResolveInput{Config: *st.Resolve, System: compiler.SystemOf(tr.System, tr.Endpoint), Doc: doc}
+			if rin.System != tr.Endpoint {
+				rin.Endpoint = tr.Endpoint
+			}
 			if err := step("Resolve", rin, &next); err != nil {
 				return fail(err)
 			}

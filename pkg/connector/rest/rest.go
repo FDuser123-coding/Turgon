@@ -435,7 +435,7 @@ func Factory(ctx context.Context, cfg compiler.ConnectorConfig, secrets connecto
 	if err != nil {
 		return nil, fmt.Errorf("rest %s: %w", cfg.Endpoint, err)
 	}
-	conn.endpoint = cfg.Endpoint
+	conn.endpoint, conn.connection = cfg.Endpoint, cfg.Connection
 	if ts, ok := connector.Tokens(secrets); ok {
 		conn.UseTokens(ts)
 	}
@@ -444,13 +444,23 @@ func Factory(ctx context.Context, cfg compiler.ConnectorConfig, secrets connecto
 }
 
 // UseTokens gives an oauth2-refresh connection the store for the refresh
-// tokens its server rotates (Turgon's database), keyed by the endpoint.
+// tokens its server rotates (Turgon's database), keyed by the connection:
+// a stack's slot and a recipe on its own that use one connection share its
+// token, as the server keeps only the last one it handed out. Tokens kept
+// by the endpoint, as before, are read once when the connection has none.
 func (c *Conn) UseTokens(store connector.TokenStore) {
-	key := c.endpoint
+	key := c.connection
+	if key == "" {
+		key = c.endpoint
+	}
 	if key == "" {
 		key = c.cfg.BaseURL
 	}
-	c.auth.useTokens(store, "rest/"+key)
+	var previous []string
+	if c.endpoint != "" && c.endpoint != key {
+		previous = append(previous, "rest/"+c.endpoint)
+	}
+	c.auth.useTokens(store, "rest/"+key, previous...)
 }
 
 // Conn is a connector instance.
@@ -462,6 +472,8 @@ type Conn struct {
 	webhooks map[string]*webhook
 	// clock is time.Now unless a test sets it (export_test.go).
 	clock func() time.Time
+	// connection names the Connection the endpoint is bound through.
+	connection string
 }
 
 func (c *Conn) now() time.Time {

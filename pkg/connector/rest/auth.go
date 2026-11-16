@@ -126,7 +126,7 @@ type authenticator struct {
 	refreshToken string
 	tokens       connector.TokenStore
 	tokenKey     string
-	legacyKey    string    // where releases before the seed was in the key kept it
+	legacyKeys   []string  // where earlier releases kept it, read once
 	rejected     string    // an access token the API refused, not to be reused
 	pending      *rotation // a rotation the store has not taken yet
 }
@@ -445,8 +445,11 @@ func (a *authenticator) refreshed(ctx context.Context) (string, error) {
 	sum := sha256.Sum256([]byte(a.refreshToken))
 	seed := hex.EncodeToString(sum[:8])
 	var legacy *tokenState
-	if a.legacyKey != "" {
-		err := a.tokens.UpdateToken(ctx, a.legacyKey, func(cur []byte) ([]byte, error) {
+	for _, k := range a.legacyKeys {
+		if legacy != nil {
+			break
+		}
+		err := a.tokens.UpdateToken(ctx, k, func(cur []byte) ([]byte, error) {
 			var st tokenState
 			if cur != nil && json.Unmarshal(cur, &st) == nil && st.Seed == seed && st.RefreshToken != "" {
 				legacy = &st
@@ -506,7 +509,7 @@ func (a *authenticator) refreshed(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	a.pending, a.legacyKey = nil, ""
+	a.pending, a.legacyKeys = nil, nil
 	a.token, a.expires = token, expires
 	return a.token, nil
 }
@@ -633,18 +636,29 @@ func (x *Authenticator) Refreshable() bool { return x.a.refreshable() }
 func (x *Authenticator) Invalidate(req *http.Request) { x.a.invalidate(req) }
 
 // UseTokens gives an oauth2-refresh authenticator the store for the
-// tokens the server rotates, under key (the endpoint).
-func (x *Authenticator) UseTokens(store connector.TokenStore, key string) { x.a.useTokens(store, key) }
+// tokens the server rotates, under key (the connection). A token kept
+// under one of the previous keys is read when key has none.
+func (x *Authenticator) UseTokens(store connector.TokenStore, key string, previous ...string) {
+	x.a.useTokens(store, key, previous...)
+}
 
-// useTokens keys the stored token by the endpoint, the token URL, the
+// useTokens keys the stored token by the connection, the token URL, the
 // client and the seed: another app, or another authorization, starts from
 // its own seed, and going back to an earlier seed finds where it led.
-func (a *authenticator) useTokens(store connector.TokenStore, key string) {
+// Earlier releases kept it by the endpoint, and before that without the
+// seed; those keys are read once, when the new one has no token.
+func (a *authenticator) useTokens(store connector.TokenStore, key string, previous ...string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	legacy := sha256.Sum256([]byte(a.cfg.TokenURL + "\x00" + a.clientID))
 	sum := sha256.Sum256([]byte(a.cfg.TokenURL + "\x00" + a.clientID + "\x00" + a.refreshToken))
 	a.tokens = store
-	a.legacyKey = key + "@" + hex.EncodeToString(legacy[:8])
 	a.tokenKey = key + "@" + hex.EncodeToString(sum[:12])
+	a.legacyKeys = nil
+	for _, k := range previous {
+		a.legacyKeys = append(a.legacyKeys, k+"@"+hex.EncodeToString(sum[:12]))
+	}
+	for _, k := range append([]string{key}, previous...) {
+		a.legacyKeys = append(a.legacyKeys, k+"@"+hex.EncodeToString(legacy[:8]))
+	}
 }

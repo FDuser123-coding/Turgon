@@ -100,7 +100,12 @@ type Workflow struct {
 }
 
 type WorkflowSource struct {
-	Endpoint  string `json:"endpoint"`
+	Endpoint string `json:"endpoint"`
+	// System names the system the events come from in cross-references:
+	// the endpoint's Connection, when it is bound to one, so a record
+	// resolves the same in a blueprint (endpoint = slot) and on its own
+	// (endpoint = connection). Empty means the endpoint (see SystemOf).
+	System    string `json:"system,omitempty"`
 	Connector string `json:"connector"`
 	Event     string `json:"event"`
 	Interface string `json:"interface"`
@@ -151,7 +156,9 @@ func (r ResolveConfig) Fields() (ref, into string) {
 }
 
 type WriteConfig struct {
-	Endpoint       string `json:"endpoint"`
+	Endpoint string `json:"endpoint"`
+	// System names the target in cross-references, as WorkflowSource.System.
+	System         string `json:"system,omitempty"`
 	Connector      string `json:"connector"`
 	Operation      string `json:"operation"`
 	Interface      string `json:"interface"`
@@ -630,6 +637,7 @@ func lowerFirst(s string) string {
 
 func (b *builder) finish(name, source, level string) *RuntimeSpec {
 	b.wirePlugins()
+	b.systems()
 	for _, c := range b.connectors {
 		b.body.Connectors = append(b.body.Connectors, *c)
 	}
@@ -665,6 +673,36 @@ func (b *builder) finish(name, source, level string) *RuntimeSpec {
 		Metadata:   RuntimeMeta{Name: name, Source: source, Level: level, Digest: Digest(b.body)},
 		Spec:       b.body,
 	}
+}
+
+// systems names each trigger's and write's system after the Connection
+// its endpoint is bound to. Connections are known only once every recipe
+// is built, so this runs last.
+func (b *builder) systems() {
+	system := func(endpoint string) string {
+		if c := b.connectors[endpoint]; c != nil && c.Connection != endpoint {
+			return c.Connection
+		}
+		return ""
+	}
+	for i := range b.body.Workflows {
+		wf := &b.body.Workflows[i]
+		wf.Trigger.System = system(wf.Trigger.Endpoint)
+		for _, st := range wf.Steps {
+			if st.Write != nil {
+				st.Write.System = system(st.Write.Endpoint)
+			}
+		}
+	}
+}
+
+// SystemOf names a system in cross-references: its Connection, or the
+// endpoint when it has none (and in specs compiled before systems were).
+func SystemOf(system, endpoint string) string {
+	if system != "" {
+		return system
+	}
+	return endpoint
 }
 
 // Digest returns "sha256:<hex>" over the canonical JSON of a runtime body.

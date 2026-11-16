@@ -135,6 +135,11 @@ func (x *Activities) Resolve(ctx context.Context, in ResolveInput) (map[string]a
 	if err != nil {
 		return nil, err // transient: retry
 	}
+	if !found && in.Endpoint != "" && in.Endpoint != in.System {
+		if id, found, err = x.legacyXref(ctx, entity, in.System, in.Endpoint, ref); err != nil {
+			return nil, err
+		}
+	}
 	if !found && in.Config.IfUnknown == v1alpha1.IfUnknownSkip {
 		// No master to set: the workflow ends the run.
 		out := make(map[string]any, len(in.Doc))
@@ -256,6 +261,30 @@ func (x *Activities) CloseApproval(_ context.Context, in LedgerInput) ([]string,
 		return nil, nil
 	}
 	return l.CloseApproval(in.Key, in.Run)
+}
+
+// XrefMover moves a cross-reference to another system name (pgstore.Store).
+type XrefMover interface {
+	MoveXref(ctx context.Context, entity, from, to, sourceID string) error
+}
+
+// legacyXref reads a cross-reference kept under the endpoint's name, as
+// they were before systems were named by connection, and moves it, with
+// the attributes kept for matching, to the connection's name, so the next
+// read finds it there.
+func (x *Activities) legacyXref(ctx context.Context, entity, system, endpoint, ref string) (string, bool, error) {
+	id, found, err := x.Resolver.Xref(ctx, entity, endpoint, ref)
+	if err != nil || !found {
+		return id, found, err
+	}
+	if m, ok := x.Resolver.(XrefMover); ok {
+		if err := m.MoveXref(ctx, entity, endpoint, system, ref); err != nil {
+			return "", false, err
+		}
+		// Moved, or the connection's name already had a link: read it there.
+		return x.Resolver.Xref(ctx, entity, system, ref)
+	}
+	return id, true, nil
 }
 
 // Linker records cross-references (pgstore.Store).
