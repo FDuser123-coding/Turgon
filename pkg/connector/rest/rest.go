@@ -124,6 +124,16 @@ type Event struct {
 	// answer is known to be cut short, and a timestamp it ends in is never
 	// split.
 	MaxItems int `json:"maxItems,omitempty"`
+	// Unordered says a full answer (maxItems) is not the oldest items
+	// after the position: which items it leaves out is unknown, and the
+	// API cannot be asked for the rest (QuickBooks' change data capture,
+	// which answers 1000 objects, deleted ones last, with no paging). A
+	// full answer is then not used: the poll asks again from later
+	// positions, halving the window, until an answer is complete, and the
+	// cursor moves to where that answer starts. What changed in the window
+	// it passes cannot be read; the worker's log says which window that
+	// was. Only with maxItems and a time position.
+	Unordered bool `json:"unordered,omitempty"`
 	// Headers are sent with this event's requests only, e.g. NetSuite's
 	// "Prefer: transient" for SuiteQL.
 	Headers map[string]string `json:"headers,omitempty"`
@@ -277,6 +287,9 @@ func (c Config) validate() error {
 	for name, e := range c.Events {
 		if !strings.HasPrefix(e.Path, "/") {
 			return fmt.Errorf("event %s: path must start with /", name)
+		}
+		if e.Unordered && (e.MaxItems <= 0 || (e.PositionFormat == "" || e.PositionFormat == "number") || e.Order == "desc") {
+			return fmt.Errorf("event %s: unordered needs maxItems and a time positionFormat (rfc3339, unix or msjson), and an ascending list", name)
 		}
 		if e.MaxItems < 0 {
 			return fmt.Errorf("event %s: maxItems must not be negative", name)
@@ -645,27 +658,19 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 	}
 	var events []connector.Event
 	truncated := false
-	for page := 1; ; page++ {
-		var resp any
-		if err := c.do(ctx, method, e.Path, q, e.headers(after, limit), body, &resp); err != nil {
-			return nil, err
-		}
-		list, ok := lookup(resp, e.Items).([]any)
-		if !ok && !emptyList(resp, e.Items) {
-			return nil, fmt.Errorf("rest: %s: response has no item array at %q", e.Path, e.Items)
-		}
-		reached := false
-		var last map[string]any
+	// take turns a page's items after the position into events, and
+	// reports whether it reached the position and its last item.
+	take := func(list []any, after int64) (reached bool, last map[string]any, err error) {
 		for _, it := range list {
 			item, ok := it.(map[string]any)
 			if !ok {
-				return nil, fmt.Errorf("rest: %s: items must be objects", e.Path)
+				return false, nil, fmt.Errorf("rest: %s: items must be objects", e.Path)
 			}
 			last = item
 			id := scalar(lookup(item, idField))
 			pos, err := parsePosition(lookup(item, posField), e.PositionFormat)
 			if id == "" || err != nil {
-				return nil, fmt.Errorf("rest: %s: item without a usable %s/%s: %v", e.Path, idField, posField, err)
+				return false, nil, fmt.Errorf("rest: %s: item without a usable %s/%s: %v", e.Path, idField, posField, err)
 			}
 			if pos <= after {
 				reached = true
@@ -677,12 +682,36 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 			}
 			payload, err := json.Marshal(item)
 			if err != nil {
-				return nil, err
+				return false, nil, err
 			}
 			if e.versioned() {
 				id = connector.VersionID(id, pos)
 			}
 			events = append(events, connector.Event{ID: id, Position: pos, Name: event, Payload: payload})
+		}
+		return reached, last, nil
+	}
+	for page := 1; ; page++ {
+		var resp any
+		if err := c.do(ctx, method, e.Path, q, e.headers(after, limit), body, &resp); err != nil {
+			return nil, err
+		}
+		list, ok := lookup(resp, e.Items).([]any)
+		if !ok && !emptyList(resp, e.Items) {
+			return nil, fmt.Errorf("rest: %s: response has no item array at %q", e.Path, e.Items)
+		}
+		if e.Unordered && len(list) >= e.MaxItems {
+			from, complete, err := c.narrow(ctx, e, event, after, limit)
+			if err != nil {
+				return nil, err
+			}
+			// The cursor passes the window that cannot be read.
+			events = append(events, connector.Event{Position: from, Name: event, Skip: true})
+			after, list = from, complete
+		}
+		reached, last, err := take(list, after)
+		if err != nil {
+			return nil, err
 		}
 		if !desc {
 			truncated = len(list) >= limit
@@ -730,6 +759,66 @@ func (c *Conn) Poll(ctx context.Context, event string, after int64, limit int) (
 		}
 	}
 	return lastSkip(events), nil
+}
+
+// narrowingSteps bounds the requests a full unordered answer costs: the
+// window halves each time, so 24 steps narrow 30 days to well under a
+// second.
+const narrowingSteps = 24
+
+// narrow finds, for an unordered event whose answer after the position is
+// full, the earliest later position whose answer is complete (shorter than
+// maxItems), by halving the window between them, and returns that position
+// and answer. The changes between the two positions cannot be read: the
+// worker's log says which.
+func (c *Conn) narrow(ctx context.Context, e Event, event string, after int64, limit int) (int64, []any, error) {
+	fetch := func(from int64) ([]any, error) {
+		method, q, body := e.listRequest(from, limit)
+		var resp any
+		if err := c.do(ctx, method, e.Path, q, e.headers(from, limit), body, &resp); err != nil {
+			return nil, err
+		}
+		list, ok := lookup(resp, e.Items).([]any)
+		if !ok && !emptyList(resp, e.Items) {
+			return nil, fmt.Errorf("rest: %s: response has no item array at %q", e.Path, e.Items)
+		}
+		return list, nil
+	}
+	// lo's answer is full. Items newer than settle allows are not read
+	// yet, so the window that fits ends no later than that.
+	lo, hi := after, c.now().UnixMilli()
+	if e.Settle != "" {
+		d, _ := time.ParseDuration(e.Settle)
+		hi = c.now().Add(-d).UnixMilli()
+	}
+	var complete []any
+	found := false
+	for step := 0; step < narrowingSteps && hi-lo > 1000; step++ {
+		mid := lo + (hi-lo)/2
+		list, err := fetch(mid)
+		if err != nil {
+			return 0, nil, err
+		}
+		if len(list) >= e.MaxItems {
+			lo = mid
+		} else {
+			hi, complete, found = mid, list, true
+		}
+	}
+	if !found {
+		list, err := fetch(hi)
+		if err != nil {
+			return 0, nil, err
+		}
+		if len(list) >= e.MaxItems {
+			return 0, nil, fmt.Errorf("rest: %s: more than %d items changed since %s; the answer cannot be read whole", e.Path, e.MaxItems, formatPosition(hi, e.PositionFormat))
+		}
+		complete = list
+	}
+	slog.Warn("rest: a full answer leaves out items it does not name; the newest window that fits was read, and changes between the cursor and it cannot be read",
+		"endpoint", c.endpoint, "event", event, "maxItems", e.MaxItems,
+		"unread_from", formatPosition(after, e.PositionFormat), "unread_to", formatPosition(hi, e.PositionFormat))
+	return hi, complete, nil
 }
 
 // lastSkip keeps only a trailing skip marker: an event after a skipped

@@ -681,9 +681,26 @@ which is not a deletion.
   It works only with a time position.
   - **A stored cursor older than the window** is moved up too, with a warning in the worker's log
     (`the cursor is older than the event's lookback`): the changes between them cannot be read.
-- **Known limits:**
-  - Change data capture answers at most 1000 objects, in no stated order. More than 1000
-    receipts changed since the cursor could leave older ones unread.
+- **More than 1000 changes between two polls (`unordered`, a new `rest` event setting):**
+  - **What QuickBooks does:**
+    - Change data capture answers 1000 objects at most, with no paging.
+    - Deleted objects come after active ones.
+    - Nothing in the answer says what it left out.
+    - So a busy company's ordinary changes crowd out the deletions. The cursor then moved past
+      deletions it had never seen, whichever end of the list QuickBooks kept.
+  - **With `unordered: true` (and `maxItems: 1000`) on `SalesReceipt.Deleted`:**
+    - A full answer is not used.
+    - The poll asks again from later positions, halving the window, until an answer is
+      complete. That is at most 24 more requests, and the window then ends within a second.
+    - Every deletion in that newest window is read.
+    - The worker's log names the window before it (`unread_from`, `unread_to`).
+  - **What still cannot be read:** a deletion followed by more than 999 other changes before
+    the next poll. Change data capture shows it only with an earlier `changedSince`, and that
+    answer is always full. Polling every few seconds, as the worker does, keeps the window
+    small.
+  - **Measured live:** `bulk 1200` on `fakeqbo` made 1200 receipts. The saga's receipt was
+    deleted 3 seconds later, and the Shopify note came 65 seconds after that: the minute of
+    `settle`, plus the poll.
 - **Changes in the same second (`settle`, a new `rest` event setting):** QuickBooks stamps
   changes to the second, and the cursor reads strictly after its position. A receipt stamped in
   the second last read, but made after that poll, used to be skipped.
@@ -696,7 +713,7 @@ which is not a deletion.
   document's `erpSystem`. It falls back to Exact Online, whose mapping (1.1) now sets it too.
 
 `delete <document number>` on `fakeqbo`'s standard input deletes a receipt, as a person in
-QuickBooks would.
+QuickBooks would. `bulk <n>` makes n receipts at once, as another app might.
 
 Measured against a Temporal 1.28 dev server, Postgres, `fakeshop` and `fakeqbo`, with both
 recipes running:

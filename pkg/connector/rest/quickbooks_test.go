@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -305,6 +306,90 @@ func TestSettleValidation(t *testing.T) {
 		}}
 		if _, err := rest.New(cfg, "k", http.DefaultClient); err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+func TestUnorderedValidation(t *testing.T) {
+	for name, e := range map[string]rest.Event{
+		"no maxItems":      {Path: "/things", Position: "updated", PositionFormat: "rfc3339", Unordered: true},
+		"number positions": {Path: "/things", Position: "updated", PositionFormat: "number", MaxItems: 100, Unordered: true},
+	} {
+		cfg := rest.Config{BaseURL: "https://api.example.com", Auth: rest.Auth{Type: "header", Header: "X-Key"}, Events: map[string]rest.Event{"Thing.Changed": e}}
+		if _, err := rest.New(cfg, "k", http.DefaultClient); err == nil || !strings.Contains(err.Error(), "unordered needs") {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// Change data capture answers 1000 objects at most, active ones before
+// deleted ones, and names none it leaves out. More than 1000 changes since
+// the cursor used to hide deletions: the answer filled with active
+// receipts, and the cursor moved past the deletions it left out, whichever
+// end QuickBooks keeps. With unordered, the poll narrows the window to the
+// newest one whose answer is complete, so every deletion in it is read,
+// and logs the window it cannot read: a deletion older than the newest
+// 999 changes is beyond what the API answers.
+func TestQuickBooksDeletionsBeyondAFullAnswer(t *testing.T) {
+	for _, newestFirst := range []bool{false, true} {
+		for _, unordered := range []bool{false, true} {
+			q, seed := qbotest.New("qb-app", "s3cret")
+			t.Cleanup(q.Close)
+			q.CDCNewestFirst = newestFirst
+			start := time.Now().Add(-2 * time.Hour).Truncate(time.Second)
+			clock := start
+			q.StartAt(1001, func() time.Time { clock = clock.Add(time.Second); return clock })
+			cfg := exampleConfig(t, "quickbooks", func(s string) string {
+				s = strings.ReplaceAll(s, "https://oauth.platform.intuit.com", q.URL())
+				s = strings.ReplaceAll(s, "https://quickbooks.api.intuit.com", q.URL())
+				if !unordered {
+					s = strings.ReplaceAll(s, `"unordered":true`, `"unordered":false`)
+				}
+				return s
+			})
+			c, err := rest.New(cfg, qboSecret(seed), http.DefaultClient)
+			if err != nil {
+				t.Fatal(err)
+			}
+			c.UseTokens(&connector.MemoryTokens{})
+
+			early := q.AddReceipts(5)
+			q.Delete(early[0]) // buried under the 1200 changes after it
+			mid := q.AddReceipts(795)
+			q.Delete(mid[0]) // the newest 999 changes include it
+			q.AddReceipts(405)
+			c.SetClock(func() time.Time { return clock.Add(time.Hour) }) // all settled
+
+			var logs bytes.Buffer
+			prev := slog.Default()
+			slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+			found := map[string]bool{}
+			after := start.UnixMilli()
+			for i := 0; i < 5; i++ {
+				evs, err := c.Poll(context.Background(), "SalesReceipt.Deleted", after, 1000)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(evs) == 0 {
+					break
+				}
+				for _, ev := range evs {
+					if !ev.Skip {
+						found[ev.ID] = true
+					}
+					after = ev.Position
+				}
+			}
+			slog.SetDefault(prev)
+			name := fmt.Sprintf("newestFirst=%v unordered=%v", newestFirst, unordered)
+			switch {
+			case unordered && (!found[mid[0]] || found[early[0]] || !strings.Contains(logs.String(), "unread_from")):
+				t.Errorf("%s: found %v; log %q", name, found, logs.String())
+			case !unordered && found[mid[0]]:
+				t.Errorf("%s: the deletion was expected to be missed without unordered (the limit it removes): %v", name, found)
+			case q.Requests["GET cdc"] > 30:
+				t.Errorf("%s: %d change data capture requests", name, q.Requests["GET cdc"])
+			}
 		}
 	}
 }

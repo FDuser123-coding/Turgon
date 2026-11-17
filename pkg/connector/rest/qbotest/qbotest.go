@@ -15,7 +15,10 @@
 // /cdc?entities=SalesReceipt&changedSince=<time>) answers the receipts
 // changed since then, a deleted one as {"status": "Deleted", "Id",
 // "MetaData": {"LastUpdatedTime"}}, and refuses a changedSince more than
-// 30 days back. Errors are
+// 30 days back. Like QuickBooks, it answers at most CDCMax (1000) objects,
+// the active ones before the deleted ones, each group in order of last
+// update (oldest first, or newest first with CDCNewestFirst), and says
+// nothing of those it leaves out. Errors are
 // {"Fault": {"Error": [{"Message", "Detail", "code"}], "type"}}.
 package qbotest
 
@@ -71,6 +74,10 @@ type QBO struct {
 	Refreshes, Spent int
 	// Requests counts API calls by "METHOD resource".
 	Requests map[string]int
+	// CDCMax is the most objects change data capture answers (0: 1000);
+	// CDCNewestFirst orders each group newest first.
+	CDCMax         int
+	CDCNewestFirst bool
 }
 
 // New returns a company served by an httptest server, and the refresh token
@@ -415,6 +422,23 @@ func (q *QBO) Delete(id string) bool {
 	return true
 }
 
+// AddReceipts makes n receipts for Amy at once, as another app might,
+// each stamped by the company's clock, and returns their IDs.
+func (q *QBO) AddReceipts(n int) []string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	ids := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		id := strconv.Itoa(q.next + 100000)
+		doc := fmt.Sprintf("BULK%d", q.next)
+		q.next++
+		q.receipts[id] = map[string]any{"Id": id, "DocNumber": doc, "TotalAmt": 1.0, "SyncToken": "0",
+			"CustomerRef": map[string]any{"value": Amy}, "MetaData": map[string]any{"CreateTime": q.stamp(), "LastUpdatedTime": q.stamp()}}
+		ids = append(ids, id)
+	}
+	return ids
+}
+
 func (q *QBO) remove(id string) {
 	delete(q.receipts, id)
 	q.deleted[id] = map[string]any{"domain": "QBO", "status": "Deleted", "Id": id, "MetaData": map[string]any{"LastUpdatedTime": q.stamp()}}
@@ -436,18 +460,39 @@ func (q *QBO) cdc(w http.ResponseWriter, params url.Values) {
 		q.fault(w, http.StatusBadRequest, "ValidationFault", "4000", "Invalid changedSince", "changedSince is more than 30 days in the past")
 		return
 	}
-	var list []any
-	add := func(rec map[string]any) {
+	updated := func(rec map[string]any) time.Time {
 		t, _ := time.Parse(time.RFC3339, rec["MetaData"].(map[string]any)["LastUpdatedTime"].(string))
-		if !t.Before(since) {
-			list = append(list, clone(rec))
+		return t
+	}
+	group := func(recs map[string]map[string]any) []any {
+		var g []map[string]any
+		for _, rec := range recs {
+			if !updated(rec).Before(since) {
+				g = append(g, rec)
+			}
 		}
+		sort.Slice(g, func(i, j int) bool {
+			a, b := updated(g[i]), updated(g[j])
+			if a.Equal(b) {
+				return g[i]["Id"].(string) < g[j]["Id"].(string)
+			}
+			return a.Before(b) != q.CDCNewestFirst
+		})
+		out := make([]any, len(g))
+		for i, rec := range g {
+			out[i] = clone(rec)
+		}
+		return out
 	}
-	for _, rec := range q.receipts {
-		add(rec)
+	// Active objects first, then deleted ones; what does not fit is left
+	// out without a word.
+	list := append(group(q.receipts), group(q.deleted)...)
+	max := q.CDCMax
+	if max <= 0 {
+		max = 1000
 	}
-	for _, rec := range q.deleted {
-		add(rec)
+	if len(list) > max {
+		list = list[:max]
 	}
 	qr := map[string]any{"startPosition": 1, "maxResults": len(list)}
 	if len(list) > 0 {
